@@ -8,13 +8,15 @@ import (
   "os"
   "runtime"
 
+  // restic - library
   "github.com/wplapper/restic/library/debug"
   "github.com/wplapper/restic/library/options"
   "github.com/wplapper/restic/library/restic"
+  "github.com/wplapper/restic/library/errors"
 
+  // aprgparse
   "github.com/spf13/cobra"
 
-  "github.com/wplapper/restic/library/errors"
 )
 
 // cmdRoot is the base command when no other command has been specified.
