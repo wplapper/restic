@@ -18,17 +18,9 @@ import (
 )
 
 type snapGroup struct {
-    host string
-    fsys string
+  host string
+  fsys string
 }
-
-// type BlobSet map[BlobHandle]struct{} . from blob_set.go
-/*
- type BlobHandle struct {
-  ID   ID
-  Type BlobType
- }
- */
 
 var cmdOverview = &cobra.Command{
   Use:   "overview [flags]",
@@ -59,7 +51,10 @@ func runOverview(gopts GlobalOptions) error {
   if err != nil {
     return err
   }
-  Printf("open repository %10.1f seconds.\n", time.Now().Sub(start).Seconds())
+  if gopts.verbosity > 0 {
+    Printf("%-30s in %10.1f seconds.\n", "open repository",
+      time.Now().Sub(start).Seconds())
+  }
 
   // step 2.1: manage Index Records
   start = time.Now()
@@ -67,13 +62,16 @@ func runOverview(gopts GlobalOptions) error {
   if err != nil {
     return err
   }
+
   // step 2.2 gather size info for each blob
   blobs_from_ix := make(map[restic.ID]uint)
   for blob := range repo.Index().Each(gopts.ctx) {
     blobs_from_ix[blob.ID] = blob.Length
   }
-  Printf("read all index records in %10.1f seconds\n",
+  if gopts.verbosity > 0 {
+    Printf("%-30s in %10.1f seconds\n", "read all index records",
       time.Now().Sub(start).Seconds())
+  }
 
   // step 3: gather all snapshots
   start = time.Now()
@@ -82,8 +80,10 @@ func runOverview(gopts GlobalOptions) error {
   if err != nil {
       return err
   }
-  Printf("read %d snapshot records in %10.1f seconds\n", len(snaps),
-    time.Now().Sub(start).Seconds())
+  if gopts.verbosity > 0 {
+    Printf("%-30s in %10.1f seconds\n", "read %d snapshot records",
+      time.Now().Sub(start).Seconds())
+  }
 
   // step 4: build snap groups by host and filesystem
   start = time.Now()
@@ -117,7 +117,8 @@ func runOverview(gopts GlobalOptions) error {
 
   // step 6: extract size information for these groups
   Printf("%-22s %-50s %-5s %-11s %-6s %10s\n",
-      "hostname", "filesystem_path", "snaps", "directories", "dblobs", "size[MiB]")
+      "hostname", "filesystem_path", "snaps", "directories", "dblobs",
+      "size[MiB]")
   Printf("%s\n", strings.Repeat("=", 109))
   for _, group := range groups_sorted {
     host  := group.host
@@ -126,7 +127,7 @@ func runOverview(gopts GlobalOptions) error {
     // step 7: build tree list for 'FindUsedBlobs'
     tree_list := make([]restic.ID, 0, len(groups[group]))
     for _, sn := range groups[group] {
-        tree_list = append(tree_list, *sn.Tree)
+      tree_list = append(tree_list, *sn.Tree)
     }
 
     // step 8: gather blobs for the constructed tree list
@@ -140,19 +141,49 @@ func runOverview(gopts GlobalOptions) error {
     count_data_blobs := 0
     count_meta_blobs := 0
     for blob := range usedBlobs {
-        if blob.Type == restic.DataBlob {
-            usage[group] += uint64(blobs_from_ix[blob.ID])
-            count_data_blobs++
-        } else if blob.Type == restic.TreeBlob {
-            count_meta_blobs++
-        }
+      if blob.Type == restic.DataBlob {
+        usage[group] += uint64(blobs_from_ix[blob.ID])
+        count_data_blobs++
+      } else if blob.Type == restic.TreeBlob {
+        count_meta_blobs++
+      }
     }
     Printf("%-22s %-50s %5d %11d %6d %10.1f\n",
       host, fsys,
       len(groups[group]), count_meta_blobs, count_data_blobs,
       float64(usage[group]) / 1024.0 / 1024.0)
   }
-  Printf("gather size data for groups in %10.1f seconds\n",
-    time.Now().Sub(start).Seconds())
+
+  // *** ALL ***
+  usedBlobs := restic.NewBlobSet()
+  tree_list := []restic.ID{}
+  for _, sn := range snaps {
+    tree_list = append(tree_list, *sn.Tree)
+  }
+  err = restic.FindUsedBlobs(gopts.ctx, repo, tree_list, usedBlobs, nil)
+  if err != nil {
+    return err
+  }
+  // step 9: access size information on used blobs
+  count_data_blobs := 0
+  count_meta_blobs := 0
+  size_repo        := uint64(0)
+  for blob := range usedBlobs {
+      if blob.Type == restic.DataBlob {
+          size_repo += uint64(blobs_from_ix[blob.ID])
+          count_data_blobs++
+      } else if blob.Type == restic.TreeBlob {
+          count_meta_blobs++
+      }
+  }
+  Printf("%s\n", strings.Repeat("=", 109))
+  Printf("%-22s %-50s %5d %11d %6d %10.1f\n", "summary", "",
+    len(snaps), count_meta_blobs, count_data_blobs,
+    float64(size_repo) / 1024.0 / 1024.0)
+
+  if gopts.verbosity > 0 {
+    Printf("%-30s in %10.1f seconds\n", "gather data for groups",
+      time.Now().Sub(start).Seconds())
+  }
   return nil
 }

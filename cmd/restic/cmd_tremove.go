@@ -7,15 +7,16 @@ package main
 import (
   // system
   "time"
-  //"sort"
-  //"strings"
+  "os"
+  "runtime"
+  "runtime/pprof"
 
   //argparse
   "github.com/spf13/cobra"
 
   // restic library
   "github.com/wplapper/restic/library/restic"
-  //"github.com/wplapper/restic/library/repository"
+  "github.com/wplapper/restic/library/debug"
 )
 
 type TRemoveOptions struct {
@@ -51,21 +52,40 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
   cmdRoot.AddCommand(cmdTRemove)
   flags := cmdTRemove.Flags()
-  flags.IntVarP(&tremoveOptions.cutoff, "cutoff", "C", 182, "cutoff snaps which are older than <cutoff> days")
-  //flags.StringArrayVar(&tremoveOptions.snaps, "snaps", nil, "consider these snapshots (can be specified multiple times)")
+  flags.IntVarP(&tremoveOptions.cutoff, "cutoff", "U", 182, "cutoff snaps which are older than <cutoff> days")
 }
 
 func runTRemove(gopts GlobalOptions, args []string) error {
   // analyse cutoff date
   cutoff := tremoveOptions.cutoff
+  //Print("GlobalOptions %v\n", gopts)
+  if globalOptions.cpuprofile != "" {
+    f, err := os.Create(globalOptions.cpuprofile)
+    if err != nil {
+        Printf("could not create CPU profile: %v\n", err)
+        return err
+    }
+    defer f.Close() // error handling omitted for example
+    if err := pprof.StartCPUProfile(f); err != nil {
+        Printf("could not start CPU profile: %v\n", err)
+        return err
+    }
+    Printf("CPU sampling started\n")
+    defer pprof.StopCPUProfile()
+  }
 
   // step 1: open repository
+  debug.Log("Start tremove")
   start := time.Now()
   repo, err := OpenRepository(gopts)
   if err != nil {
     return err
   }
-  Printf("open repository %10.1f seconds.\n", time.Now().Sub(start).Seconds())
+  if gopts.verbosity > 0 {
+    Printf("%-30s %10.1f seconds\n", "open repository",
+        time.Now().Sub(start).Seconds())
+  }
+  debug.Log("repo open")
 
   // step 2: gather all snapshots
   start = time.Now()
@@ -75,19 +95,19 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   if err != nil {
       return err
   }
+  debug.Log("read snapshots")
+
+  // make the master tree list
   master_tree_list := make([]restic.ID, 0, len(snaps))
   for _, sn := range snaps {
     master_tree_list = append(master_tree_list, *sn.Tree)
   }
 
-  master_snapID_set := make(map[string]struct{})
+  // make a master snap dictiopnary (a map)
+  master_snapID_set := make(map[string]struct{}, len(snaps))
   for _, snap_id := range args {
-    master_snapID_set[snap_id] =struct{}{}
+    master_snapID_set[snap_id] = struct{}{}
   }
-  Printf("tremoveOptions.snaps %v\n", tremoveOptions.snaps)
-  Printf("master_snapID_set %v\n", master_snapID_set)
-  //Printf("read %d snapshot records in %10.1f seconds\n", len(snaps),
-  //  time.Now().Sub(start).Seconds())
 
   // step 3: compare against cutoff date
   now := time.Now()
@@ -106,6 +126,10 @@ func runTRemove(gopts GlobalOptions, args []string) error {
       Printf("No snapshots selected. Terminating.\n")
       return nil
   }
+  if gopts.verbosity > 0 {
+    Printf("%-30s %10.1f seconds\n", "selected all snapshots",
+      time.Now().Sub(start).Seconds())
+  }
   Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
 
   // step 4.1: manage Index Records
@@ -114,12 +138,11 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   if err != nil {
     return err
   }
+  debug.Log("HandleIndexRecords done")
   type pack_and_size struct {
       size    uint
       packID  restic.ID
   }
-  //Printf("pure HandleIndexRecords in %10.1f seconds\n",
-  //    time.Now().Sub(start).Seconds())
 
   // step 4.2: gather size info for each blob
   blobs_from_ix    := make(map[restic.ID]Pack_and_size)
@@ -132,9 +155,10 @@ func runTRemove(gopts GlobalOptions, args []string) error {
     }
     blobs_per_packID[blob.PackID].Insert(blob.ID)
   }
-  Printf("read all index records in %10.1f seconds\n",
+  if gopts.verbosity > 0 {
+    Printf("%-30s %10.1f seconds\n", "read all index records",
       time.Now().Sub(start).Seconds())
-
+  }
 
   // loop over the snap_id's to be removed individually
   for _, sn := range snaps_to_be_deleted {
@@ -142,133 +166,37 @@ func runTRemove(gopts GlobalOptions, args []string) error {
       selected[0] = sn
       Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
           sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-      err = CalculatePruneSize(gopts, repo, selected, snaps, blobs_from_ix, blobs_per_packID)
+      err = CalculatePruneSize(gopts, repo, selected, snaps, blobs_from_ix,
+          blobs_per_packID)
       if err != nil {
           return err
       }
   }
 
+  // select all the snapshots for the summary record
   selected := make([]*restic.Snapshot, 0, len(snaps_to_be_deleted))
   // create total summary by 'removing' all of snaps_to_be_deleted
   for _, sn := range snaps_to_be_deleted {
     selected = append(selected, sn)
   }
   Printf("\n*** ALL ***\n")
-  err = CalculatePruneSize(gopts, repo, selected, snaps, blobs_from_ix, blobs_per_packID)
+  err = CalculatePruneSize(gopts, repo, selected, snaps, blobs_from_ix,
+      blobs_per_packID)
   if err != nil {
       return err
   }
+
+  if gopts.memprofile != "" {
+      f, err := os.Create(gopts.memprofile)
+      if err != nil {
+          Printf("could not create memory profile: %v\n", err)
+
+      }
+      defer f.Close() // error handling omitted for example
+      runtime.GC() // get up-to-date statistics
+      if err := pprof.WriteHeapProfile(f); err != nil {
+          Printf("could not write memory profile: %v\n", err)
+      }
+  }
   return nil
-}
-
-func CalculatePruneSize(gopts GlobalOptions, repo restic.Repository,
-  selected []*restic.Snapshot, snaps []*restic.Snapshot,
-  blobs_from_ix map[restic.ID]Pack_and_size,
-  blobs_per_packID map[restic.ID]restic.IDSet) error {
-
-    // step 5: find blobs for the selected snaps
-    //start := time.Now()
-    usedBlobs_delete := restic.NewBlobSet()
-    tree_list := make([]restic.ID, 0, len(selected))
-    for _, sn := range selected {
-      tree_list = append(tree_list, *sn.Tree)
-    }
-    err := restic.FindUsedBlobs(gopts.ctx, repo, tree_list, usedBlobs_delete, nil)
-    if err != nil {
-      return err
-    }
-
-    // step 6: buid the tree ist for the rest of the snapshots
-    rest_tree_list := make([]restic.ID, 0, len(snaps) - len(selected))
-    for _, sn := range snaps {
-      found := false
-      for _, sn2 := range selected {
-          if sn == sn2 {
-              found = true
-              break
-          }
-      }
-      if found {
-          continue
-      }
-      rest_tree_list = append(rest_tree_list, *sn.Tree)
-    }
-
-    usedBlobs_keep := restic.NewBlobSet()
-    err = restic.FindUsedBlobs(gopts.ctx, repo, rest_tree_list, usedBlobs_keep, nil)
-    if err != nil {
-      return err
-    }
-
-    // step 7: get the pack information
-    unique_blobs := usedBlobs_delete.Sub(usedBlobs_keep)
-
-    del_packs := make(map[restic.ID]restic.IDSet)
-    // map these blobs back to packs
-    for blob := range unique_blobs {
-      packID := blobs_from_ix[blob.ID].PackID
-      //initialize
-      if len(del_packs[packID]) == 0 {
-          del_packs[packID] = restic.NewIDSet()
-      }
-      del_packs[packID].Insert(blob.ID)
-    }
-
-    count_repack      := 0
-    count_delpack     := 0
-    count_repack_blobs := 0
-    count_del_blobs   := 0
-    count_prune_blobs := 0
-    size_delete       := uint64(0)
-    size_repack       := uint64(0)
-    size_prune        := uint64(0)
-    for PackID := range del_packs {
-        if len(del_packs[PackID]) == len(blobs_per_packID[PackID]) {
-            // straight delete!
-            count_delpack++
-            for blob := range del_packs[PackID] {
-                size_delete += uint64(blobs_from_ix[blob].Size)
-                count_del_blobs++
-            }
-        } else {
-            // needs repacking
-            count_repack++
-            for blob := range blobs_per_packID[PackID] {
-                size_repack += uint64(blobs_from_ix[blob].Size)
-                count_repack_blobs++
-            }
-            for blob := range del_packs[PackID] {
-                size_prune += uint64(blobs_from_ix[blob].Size)
-                count_prune_blobs++
-            }
-        }
-    }
-    affected_packs := len(del_packs) - count_delpack
-    Printf("straight delete %10d blobs %7d packs %10.3f Mib\n",
-      count_del_blobs, count_delpack, float64(size_delete) / ONE_MEG)
-    Printf("this removes    %10d blobs %7d packs %10.3f Mib\n",
-      count_prune_blobs, len(del_packs), float64(size_prune) /ONE_MEG)
-    Printf("repack          %10d blobs %7d packs %10.3f Mib\n",
-      count_repack_blobs, affected_packs, float64(size_repack) /ONE_MEG)
-
-    count_meta_blobs := 0
-    count_data_blobs := 0
-    size_meta_blobs  := uint64(0)
-    size_data_blobs  := uint64(0)
-    for blob := range unique_blobs {
-        if blob.Type == restic.DataBlob {
-            count_data_blobs++
-            size_data_blobs += uint64(blobs_from_ix[blob.ID].Size)
-        } else if blob.Type == restic.TreeBlob {
-            count_meta_blobs++
-            size_meta_blobs += uint64(blobs_from_ix[blob.ID].Size)
-        }
-    }
-    Printf("meta  %7d blobs %10.3f MiB\n", count_meta_blobs,
-        float64(size_meta_blobs) / ONE_MEG)
-    Printf("data  %7d blobs %10.3f MiB\n", count_data_blobs,
-        float64(size_data_blobs) / ONE_MEG)
-    Printf("total %7d blobs %10.3f MiB\n", count_meta_blobs + count_data_blobs,
-        float64(size_meta_blobs + size_data_blobs) / ONE_MEG)
-    return nil
 }
