@@ -76,7 +76,7 @@ func runOverview(gopts GlobalOptions) error {
   // step 3: gather all snapshots
   start = time.Now()
   snaps := make([]*restic.Snapshot, 0, 10)
-  snaps, err = GatherAllSnapshots(gopts, repo, snaps)
+  snaps, err = GatherAllSnapshots(gopts, repo)
   if err != nil {
       return err
   }

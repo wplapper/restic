@@ -29,6 +29,8 @@ type Pack_and_size struct {
     PackID  restic.ID
 }
 
+//type restic.intID restic.restic.intID
+
 var tremoveOptions TRemoveOptions
 const ONE_MEG = float64(1024.0 * 1024.0)
 
@@ -91,7 +93,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   start = time.Now()
   snaps := make([]*restic.Snapshot, 0, 10)
   // snaps is []*restic.Snapshot
-  snaps, err = GatherAllSnapshots(gopts, repo, snaps)
+  snaps, err = GatherAllSnapshots(gopts, repo)
   if err != nil {
       return err
   }

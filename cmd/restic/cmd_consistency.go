@@ -6,6 +6,7 @@ package main
 import (
   // system
   "time"
+  "strings"
 
   //argparse
   "github.com/spf13/cobra"
@@ -38,16 +39,21 @@ func init() {
 
 func runConsistency(gopts GlobalOptions) error {
 
+	gOptions = gopts
   // step 1: open repository
   start := time.Now()
   repo, err := OpenRepository(gopts)
   if err != nil {
     return err
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "open repository",
-      time.Now().Sub(start).Seconds())
+  timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
+
+  zeroes, err := restic.ParseID(strings.Repeat("deadbeaf", 8))
+  if err != nil {
+      Printf("Faied! Raised error %v\n", err)
+      return err
   }
+  Printf("zeroes %v\n", zeroes)
 
   // step 2: manage Index Records
   start = time.Now()
@@ -55,15 +61,12 @@ func runConsistency(gopts GlobalOptions) error {
   if err != nil {
     return err
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "read all index records",
-        time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "read all index records", time.Now().Sub(start).Seconds())
 
   // step 3: gather all snapshots
   start = time.Now()
   snaps := make([]*restic.Snapshot, 0, 10)
-  snaps, err = GatherAllSnapshots(gopts, repo, snaps)
+  snaps, err = GatherAllSnapshots(gopts, repo)
   if err != nil {
       return err
   }
