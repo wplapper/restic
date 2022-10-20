@@ -26,20 +26,22 @@ EXIT STATUS
 
 Exit status is 0 if the command was successful, and non-zero if there was any error.
 `,
-  DisableAutoGenTag: true,
+  DisableAutoGenTag: false,
   RunE: func(cmd *cobra.Command, args []string) error {
     return runConsistency(globalOptions)
   },
 }
 
 func init() {
-  //PrintMemUsage()
   cmdRoot.AddCommand(cmdConsistency)
 }
 
 func runConsistency(gopts GlobalOptions) error {
 
 	gOptions = gopts
+	repositoryData := init_repositoryData()
+	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
+
   // step 1: open repository
   start := time.Now()
   repo, err := OpenRepository(gopts)
@@ -53,11 +55,11 @@ func runConsistency(gopts GlobalOptions) error {
       Printf("Faied! Raised error %v\n", err)
       return err
   }
-  Printf("zeroes %v\n", zeroes)
+  Printf("home mase ID %v\n", zeroes)
 
   // step 2: manage Index Records
   start = time.Now()
-  err = HandleIndexRecords(gopts, repo)
+  err = HandleIndexRecords(gopts, repo, repositoryData)
   if err != nil {
     return err
   }
@@ -70,15 +72,12 @@ func runConsistency(gopts GlobalOptions) error {
   if err != nil {
       return err
   }
-  master_tree_list := make([]restic.ID, 0, len(snaps))
-  for _, sn := range snaps {
-    master_tree_list = append(master_tree_list, *sn.Tree)
+  master_tree_list := make([]restic.ID, len(snaps))
+  for pos, sn := range snaps {
+    master_tree_list[pos] = *sn.Tree
   }
 
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "read all snapshots",
-      time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "read all snapshots", time.Now().Sub(start).Seconds())
 
   // step 4: gather all IDs from Index
   start = time.Now()
@@ -87,10 +86,7 @@ func runConsistency(gopts GlobalOptions) error {
     blobs_from_ix.Insert(blob.ID)
   }
 
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "get all blobs from index",
-        time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "get all blobs from index", time.Now().Sub(start).Seconds())
 
   // step 5: get all used blobs from 'FindUsedBlobs'
   start = time.Now()
@@ -104,10 +100,7 @@ func runConsistency(gopts GlobalOptions) error {
   for blobs := range usedBlobs_keep {
     all_blobs_from_trees.Insert(blobs.ID)
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "get blobs from trees",
-        time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "get blobs from trees", time.Now().Sub(start).Seconds())
 
   // step 6: compare the sets
   if blobs_from_ix.Equals(all_blobs_from_trees) {

@@ -33,7 +33,7 @@ EXIT STATUS
 
 Exit status is 0 if the command was successful, and non-zero if there was any error.
 `,
-  DisableAutoGenTag: true,
+  DisableAutoGenTag: false,
   RunE: func(cmd *cobra.Command, args []string) error {
     return runOverview(globalOptions)
   },
@@ -46,6 +46,9 @@ func init() {
 func runOverview(gopts GlobalOptions) error {
 
   // step 1: open repository
+	repositoryData := init_repositoryData()
+	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
+
   start := time.Now()
   repo, err := OpenRepository(gopts)
   if err != nil {
@@ -58,8 +61,7 @@ func runOverview(gopts GlobalOptions) error {
 
   // step 2.1: manage Index Records
   start = time.Now()
-  err = HandleIndexRecords(gopts, repo)
-  if err != nil {
+  if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
     return err
   }
 
@@ -80,10 +82,7 @@ func runOverview(gopts GlobalOptions) error {
   if err != nil {
       return err
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s in %10.1f seconds\n", "read %d snapshot records",
-      time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s in %10.1f seconds\n", "read %d snapshot records", time.Now().Sub(start).Seconds())
 
   // step 4: build snap groups by host and filesystem
   start = time.Now()
@@ -101,9 +100,11 @@ func runOverview(gopts GlobalOptions) error {
   // step 5: sort the groups according to host and filesystem
   usage := make(map[snapGroup]uint64)
   // the group list wants to be sorted: host first, then filesystem
-  groups_sorted := make([]snapGroup, 0, len(groups))
+  groups_sorted := make([]snapGroup, len(groups))
+  index := 0
   for group := range groups {
-      groups_sorted = append(groups_sorted, group)
+      groups_sorted[index] = group
+      index++
   }
 
   sort.SliceStable(groups_sorted, func (i, j int) bool {
@@ -125,9 +126,9 @@ func runOverview(gopts GlobalOptions) error {
     fsys  := group.fsys
 
     // step 7: build tree list for 'FindUsedBlobs'
-    tree_list := make([]restic.ID, 0, len(groups[group]))
-    for _, sn := range groups[group] {
-      tree_list = append(tree_list, *sn.Tree)
+    tree_list := make([]restic.ID, len(groups[group]))
+    for pos, sn := range groups[group] {
+      tree_list[pos] = *sn.Tree
     }
 
     // step 8: gather blobs for the constructed tree list
@@ -156,9 +157,9 @@ func runOverview(gopts GlobalOptions) error {
 
   // *** ALL ***
   usedBlobs := restic.NewBlobSet()
-  tree_list := []restic.ID{}
-  for _, sn := range snaps {
-    tree_list = append(tree_list, *sn.Tree)
+  tree_list := make([]restic.ID, len(snaps))
+  for pos, sn := range snaps {
+    tree_list[pos] = *sn.Tree
   }
   err = restic.FindUsedBlobs(gopts.ctx, repo, tree_list, usedBlobs, nil)
   if err != nil {

@@ -1,24 +1,96 @@
 package main
 
 import (
+	// system
 	"sort"
 	"runtime"
 	"fmt"
 	"time"
-	"context"
-	"sync"
+	"math"
 	"golang.org/x/sync/errgroup"
+	"sync"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/repository"
-	"github.com/wplapper/restic/library/debug"
-	"github.com/wplapper/restic/library/walker"
+	//"github.com/wplapper/restic/library/debug"
+
+	//deque
+	"github.com/gammazero/deque"
 )
 
-func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository,
-snaps []*restic.Snapshot) ([]*restic.Snapshot, error) {
+type SortByPack struct {
+	pack_ID restic.ID
+	offset uint
+	blob_ID restic.ID
+}
+
+// static variable
+var gOptions GlobalOptions
+//var sort_by_pack []SortByPack
+//var old_pack_ID restic.ID
+
+type BlobFile2 struct {
+	// name, size, type_, mtime, content and subtree ID
+	size uint64
+	mtime time.Time
+	content restic.IntSet
+	subtree_ID restic.IntID
+	name string
+	Type string
+}
+
+type Index_Handle struct {
+		blob_index restic.IntID
+		pack_index restic.IntID
+		size uint
+		Type restic.BlobType
+}
+
+type RepositoryData struct {
+	// all snapshots
+	snaps         []*restic.Snapshot
+	// map contents of tree blob record via JSON to memory
+	directory_map map[restic.IntID][]BlobFile2
+	// map directory blob to a path
+	fullpath      map[restic.IntID]string
+	// all names, basename ony
+	names         map[restic.IntID]string
+	// all directory children of a directory
+	children      map[restic.IntID]restic.IntSet
+
+	// need to be (*)restic.ID
+	// all tree blobs of a snapshot
+	meta_dir_map  map[restic.ID]restic.IntSet
+	// all tree and data blobs from the index
+	index_handle	map[restic.ID]Index_Handle
+	// map blob to an IntID number
+	blob_to_index map[restic.ID]restic.IntID
+	// address this slice via an IntID index to get back to the ID
+	index_to_blob		[]restic.ID
+}
+
+var EMPTY_NODE_ID restic.ID
+var EMPTY_NODE_ID_TRANSLATED restic.IntID
+
+func init_repositoryData() *RepositoryData {
+	var repositoryData RepositoryData
+	repositoryData.snaps				 = []*restic.Snapshot{}
+	repositoryData.directory_map = make(map[restic.IntID][]BlobFile2)
+	repositoryData.fullpath      = make(map[restic.IntID]string)
+	repositoryData.names         = make(map[restic.IntID]string)
+	repositoryData.children			 = make(map[restic.IntID]restic.IntSet)
+
+	repositoryData.meta_dir_map  = make(map[restic.ID]restic.IntSet)
+	repositoryData.index_handle	 = make(map[restic.ID]Index_Handle)
+	repositoryData.blob_to_index = make(map[restic.ID]restic.IntID)
+	repositoryData.index_to_blob   = []restic.ID{}
+	return &repositoryData
+ }
+
+func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic.Snapshot, error) {
 	// collect all snap records
+  snaps := make([]*restic.Snapshot, 0, 10)
 	repo.List(gopts.ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(gopts.ctx, repo, id)
 		if err != nil {
@@ -37,14 +109,15 @@ snaps []*restic.Snapshot) ([]*restic.Snapshot, error) {
 	return snaps, nil
 }
 
-func HandleIndexRecords(gopts GlobalOptions,
-repo restic.Repository) error {
+func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
+repositoryData *RepositoryData) error {
 	// load index files and their contents
-	// we need to load the Index first
+	// 'LoadIndex' is in library/repository/repository.go
 	if err := repo.LoadIndex(gopts.ctx); err != nil {
 		return err
 	}
 
+	// 'ForAllIndexes' is in library/repository/index_parallel.go
 	repository.ForAllIndexes(gopts.ctx, repo, func(id restic.ID,
 	idx *repository.Index, oldFormat bool, err error) error {
 		if err != nil {
@@ -53,123 +126,275 @@ repo restic.Repository) error {
 		}
 		return nil
 	})
+
+	Convert_to_IntSet(gopts, repo, repositoryData)
 	return nil
 }
 
-func CalculatePruneSize(gopts GlobalOptions, repo restic.Repository,
-	selected []*restic.Snapshot, snaps []*restic.Snapshot,
-	blobs_from_ix map[restic.ID]Pack_and_size,
-	blobs_per_packID map[restic.ID]restic.IDSet) error {
-	start := time.Now()
-	//debug.Log("CalculatePruneSize start %v", selected)
-	// step 5: find blobs for the selected snaps
+// this function converts restic.ID to IntID, forth and back
+// It also correlates bobs and pack IDs
+func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
+repositoryData *RepositoryData) {
+	pos := restic.IntID(0)
+
 	//start := time.Now()
-	usedBlobs_delete := restic.NewBlobSet()
-	tree_list := make([]restic.ID, 0, len(selected))
-	for _, sn := range selected {
-		tree_list = append(tree_list, *sn.Tree)
+	for blob := range repo.Index().Each(gopts.ctx) {
+		repositoryData.blob_to_index[blob.ID] = pos
+		repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
+		pos++
+
+		// add packID to 'blob_to_index' and 'index_to_blob'
+		_, ok := repositoryData.blob_to_index[blob.PackID]
+		if !ok { // new PackID found
+			repositoryData.blob_to_index[blob.PackID] = pos
+			repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.PackID)
+			pos++
+		}
+
+		// build index_handle
+		repositoryData.index_handle[blob.ID] = Index_Handle{Type: blob.Type, size: blob.Length,
+			pack_index: repositoryData.blob_to_index[blob.PackID],
+			blob_index: repositoryData.blob_to_index[blob.ID]}
 	}
-	err := restic.FindUsedBlobs(gopts.ctx, repo, tree_list, usedBlobs_delete, nil)
+	//timeMessage("  %-30s %10.1f seconds\n", "building repositoryData.index_handle, blob_to_index, index_to_blob",
+	//	time.Now().Sub(start).Seconds())
+}
+
+// FindChildren steps through the directory_map and finds subdirectories
+// these get attached their (current) parent
+func FindChildren (repositoryData *RepositoryData) {
+	for parent, idd_file_list := range repositoryData.directory_map {
+		for _,node := range idd_file_list {
+			if node.Type == "dir" {
+				// initialize
+				repositoryData.names[node.subtree_ID] = node.name
+				if len(repositoryData.children[parent]) == 0 {
+					repositoryData.children[parent] = restic.NewIntSet()
+				}
+				// the children data will be used in topology step
+				repositoryData.children[parent].Insert(node.subtree_ID)
+			}
+		}
+	}
+}
+
+// build a topology structure for one snapshot
+// the function relies on 'children' being initialized properly
+func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
+	// for each snapshot, there are 2 fixed elements:
+	// the tree root and the empty directory
+
+	tree_root := repositoryData.blob_to_index[*sn.Tree]
+	seen := restic.NewIntSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
+	repositoryData.fullpath[tree_root] = "/"
+	// to_be_processed is the list of new meta_blobs, not yet handled
+	// use deque as a FIFO queue
+	to_be_processed := deque.New[restic.IntID](100, 100)
+
+	// prime the process loop
+	to_be_processed.PushBack(tree_root)
+	for to_be_processed.Len() > 0 {
+		//take out oldest one
+		meta_blob := to_be_processed.PopFront()
+		for child_dir := range repositoryData.children[meta_blob].Sub(seen) {
+			seen.Insert(child_dir)
+			to_be_processed.PushBack(child_dir)
+
+			// manage fullpath
+			if repositoryData.fullpath[meta_blob] != "/" {
+				repositoryData.fullpath[child_dir] = (repositoryData.fullpath[meta_blob] +
+					"/" + repositoryData.names[child_dir])
+			} else {
+				repositoryData.fullpath[child_dir] = "/" + repositoryData.names[child_dir]
+			}
+		}
+	}
+	// at the end of the loop, 'seen' contains all directories
+	// referenced in the snapshot
+	seen.Delete(EMPTY_NODE_ID_TRANSLATED)
+	repositoryData.meta_dir_map[*sn.ID()] = seen
+}
+
+func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
+repositoryData *RepositoryData) error {
+	// step 1: gather snapshots
+	start := time.Now()
+	snaps, err := GatherAllSnapshots(gopts, repo);
 	if err != nil {
+			return err
+	}
+	repositoryData.snaps = snaps
+	//timeMessage("  %-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
+
+	// time Each())
+	start = time.Now()
+	// build a sice of all meta_blob ID in the repo
+	meta_blobs := make([]restic.ID, 0)
+	for blob_ID, data := range repositoryData.index_handle {
+			if data.Type == restic.TreeBlob {
+				meta_blobs = append(meta_blobs, blob_ID)
+			}
+	}
+	//timeMessage("%-30s %10.1f seconds\n", "Index().Each()", time.Now().Sub(start).Seconds())
+
+	start = time.Now()
+	err = ForAllMyTrees(gopts, repo, repositoryData, meta_blobs)
+	if err != nil {
+		Printf("ForAllMyTrees returned %v\n", err)
 		return err
 	}
-	debug.Log("FindUsedBlobs - single done")
+	timeMessage("  %-28s %10.1f seconds\n", "ForAllMyTrees", time.Now().Sub(start).Seconds())
 
-	// step 6: build the tree list for the rest of the snapshots
-	rest_tree_list := make([]restic.ID, 0, len(snaps) - len(selected))
-	for _, sn := range snaps {
-		found := false
-		for _, sn2 := range selected {
-			if sn == sn2 {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		rest_tree_list = append(rest_tree_list, *sn.Tree)
+	// step 3: prepare children and parents from idd_file records
+	//start = time.Now()
+	FindChildren(repositoryData)
+	//timeMessage("%-30s %10.1f seconds\n", "find children", time.Now().Sub(start).Seconds())
+
+	// step 4: build topology for each snapshot in repository
+	//start = time.Now()
+	for _, sn := range repositoryData.snaps {
+		topology_structure(*sn, repositoryData)
 	}
+	//timeMessage("%-30s %10.1f seconds\n", "build topology", time.Now().Sub(start).Seconds())
+	return nil
+}
 
-	usedBlobs_keep := restic.NewBlobSet()
-	err = restic.FindUsedBlobs(gopts.ctx, repo, rest_tree_list, usedBlobs_keep, nil)
-	if err != nil {
-		return err
-	}
-	debug.Log("FindUsedBlobs -all other done")
-
-	// step 7: get the pack information
-	unique_blobs := usedBlobs_delete.Sub(usedBlobs_keep)
-	delete_packs := make(map[restic.ID]restic.IDSet, len(unique_blobs))
-	// map these blobs back to pack IDs
-	for blob := range unique_blobs {
-		packID := blobs_from_ix[blob.ID].PackID
-		//initialize
-		if len(delete_packs[packID]) == 0 {
-			delete_packs[packID] = restic.NewIDSet()
+// auxiliary function to deliver meta blobs from the index to ForAllMyTrees
+// for paralel processing
+func DeliverTreeBlobs(repositoryData *RepositoryData, meta_blobs []restic.ID, fn func(id restic.ID) error) error {
+	for _, blob_ID := range meta_blobs {
+		err := fn(blob_ID)
+		if err != nil {
+			Printf("fn returned %v\n", err)
 		}
-		delete_packs[packID].Insert(blob.ID)
-	}
-
-	// step 8: summarize
-	count_delete_packs  := 0
-	count_repack_blobs  := 0
-	count_delete_blobs  := 0
-	count_partial_blobs := 0
-	size_delete_blobs   := uint64(0)
-	size_repack_blobs   := uint64(0)
-	size_partial_blobs  := uint64(0)
-	for PackID := range delete_packs {
-		if len(delete_packs[PackID]) == len(blobs_per_packID[PackID]) {
-			// straight delete!
-			count_delete_packs++
-			for blob := range delete_packs[PackID] {
-				size_delete_blobs += uint64(blobs_from_ix[blob].Size)
-				count_delete_blobs++
-			}
-		} else {
-			// needs repacking
-			for blob := range blobs_per_packID[PackID] {
-				size_repack_blobs += uint64(blobs_from_ix[blob].Size)
-				count_repack_blobs++
-			}
-			for blob := range delete_packs[PackID] {
-				size_partial_blobs += uint64(blobs_from_ix[blob].Size)
-				count_partial_blobs++
-			}
-		}
-	}
-
-	Printf("straight delete %10d blobs %7d packs %10.3f Mib\n",
-		count_delete_blobs, count_delete_packs, float64(size_delete_blobs) / ONE_MEG)
-	Printf("this removes    %10d blobs %7s       %10.3f Mib\n",
-		count_partial_blobs, " ", float64(size_partial_blobs) /ONE_MEG)
-	Printf("repack          %10d blobs %7d packs %10.3f Mib\n",
-		count_repack_blobs, len(delete_packs) - count_delete_packs,
-		float64(size_repack_blobs) /ONE_MEG)
-	Printf("total prune     %10d blobs %7s       %10.3f Mib\n",
-		count_partial_blobs + count_delete_blobs, " ",
-		float64(size_partial_blobs + size_delete_blobs) /ONE_MEG)
-	debug.Log("CalculatePruneSize Done!")
-
-	if gopts.verbosity > 0 {
-		Printf("%-30s %10.1f seconds\n", "selected all blobs",
-			time.Now().Sub(start).Seconds())
-		PrintMemUsage()
 	}
 	return nil
+}
+
+func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository,
+repositoryData *RepositoryData, meta_blobs []restic.ID) error {
+
+	var m sync.Mutex
+	// track spawned goroutines using wg, create a new context which is
+	wg, ctx := errgroup.WithContext(gopts.ctx)
+	ch := make(chan restic.ID)
+	wg.Go(func() error {
+		defer close(ch)
+
+		// this callback function need to return an 'id'
+		return DeliverTreeBlobs(repositoryData, meta_blobs, func(id restic.ID) error {
+			select {
+			case <-ctx.Done():
+				return nil
+			case ch <- id:
+			}
+			return nil
+		})
+	})
+
+	// a worker receives an snapshot ID from ch, loads the snapshot
+	// and runs fn with id, the snapshot and the error
+	worker := func() error {
+		for id := range ch {
+			//debug.Log("calling LoadTree tree %s", id.String()[:12])
+			tree, err := restic.LoadTree(gopts.ctx, repo, id)
+			idd_file_list := make([]BlobFile2, len(tree.Nodes))
+
+			// do the work on trees
+			for offset_in_node_list, node := range tree.Nodes {
+				// setup these two place holders
+				content    := restic.NewIntSet()
+				subtree_ID := EMPTY_NODE_ID_TRANSLATED
+
+				ok := false
+				switch node.Type {
+				case "file":
+					for _,cont := range node.Content {
+						set_number, ok := repositoryData.blob_to_index[cont]
+						if !ok {
+							Printf("Fatal: %v not in blob_to_index\n", cont)
+							panic("error during content processing 1")
+						}
+						content.Insert(set_number)
+					}
+				case "dir":
+					subtree_ID, ok = repositoryData.blob_to_index[*node.Subtree]
+					if !ok {
+						Printf("Fatal: %v not in blob_to_index\n", *node.Subtree)
+						panic("error during content processing 2")
+					}
+				}
+				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
+						Type: node.Type, size: node.Size,
+						mtime: node.ModTime, content: content, subtree_ID: subtree_ID}
+			}
+			//debug.Log("done blob %s\n", id.String()[:12])
+
+			m.Lock()
+			// we need a permanent ID pointer
+			position, ok := repositoryData.blob_to_index[id]
+			if !ok {
+					Printf("requesting ID %v\n", id)
+					panic("error in GetAllNodes 2")
+			}
+			// insert directory_map
+			repositoryData.directory_map[position] = idd_file_list
+			m.Unlock()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// start these parallel workers
+	for i := 0; i < int(repo.Connections()); i++ {
+		wg.Go(worker)
+	}
+	// and wait for them all to finish
+	return wg.Wait()
 }
 
 // PrintMemUsage outputs the current, total and OS memory being used.
 // As well as the number of garbage collection cycles completed.
 func PrintMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
+
+	count := 0
+	var (
+			m = runtime.MemStats{}
+			prevInUse uint64
+			prevNumGC uint32
+	)
+
+  for {
+
+		runtime.ReadMemStats(&m)
+
+		// Considering heap stable if recent cycle collected less than 10KB.
+		if prevNumGC != 0 && m.NumGC > prevNumGC && math.Abs(float64(m.HeapInuse-prevInUse)) < 10*1024 {
+				break
+		}
+
+		prevInUse = m.HeapInuse
+		prevNumGC = m.NumGC
+
+		// Sleeping to allow GC to run a few times and collect all temporary data.
+		time.Sleep(50 * time.Millisecond)
+		runtime.GC()
+		count++
+		if count > 2 {
+			break
+		}
+	}
+
+	var m2 runtime.MemStats
+	runtime.ReadMemStats(&m2)
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc        = %v MiB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys        = %v MiB", bToMb(m.Sys))
-	fmt.Printf("\tNumGC      = %v\n", m.NumGC)
+	fmt.Printf("Alloc        = %4d MiB", bToMb(m2.Alloc))
+	fmt.Printf("\tTotalAlloc = %4d MiB", bToMb(m2.TotalAlloc))
+	fmt.Printf("\tSys        = %4d MiB", bToMb(m2.Sys))
+	fmt.Printf("\tHeap       = %4d MiB", bToMb(m2.HeapInuse))
+	fmt.Printf("\tNumGC      = %4d\n",   m2.NumGC)
 }
 
 func bToMb(b uint64) uint64 {
@@ -177,60 +402,8 @@ func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
 
-func BuildTopology(sn *restic.Snapshot, gopts GlobalOptions,
-repo restic.Repository) ([]restic.ID, error) {
-
-	Printf("snap_ID %s %s:%s at %s\n", sn.ID().Str(),
-		sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-	seen := restic.NewIDSet()
-	tree_blobs := make([]restic.ID, 0)
-	err := walker.Walk(gopts.ctx, repo, *sn.Tree, nil,
-			func(id restic.ID, nodepath string, node *restic.Node, err error) (bool, error) {
-		if err != nil {
-			return false, err
-		}
-		if node == nil {
-			return false, nil
-		}
-
-		if node.Type == "dir" && !seen.Has(id) {
-			tree_blobs = append(tree_blobs, id)
-			seen.Insert(id)
-		}
-		return false, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-	return tree_blobs, nil
+func timeMessage(format string, args ...interface{}) {
+  if gOptions.verbosity > 0 {
+    Printf(format, args...)
+  }
 }
-
-// FindUsedBlobs traverses the tree ID and adds all seen blobs (trees ony(!)
-// blobs) to the set blobs. Already seen tree blobs will not be visited again.
-func FindUsedMetaBlobs(ctx context.Context, repo restic.Loader, treeIDs restic.IDs, blobs restic.BlobSet) error {
-	var lock sync.Mutex
-
-	wg, ctx := errgroup.WithContext(ctx)
-	treeStream := restic.StreamTrees(ctx, wg, repo, treeIDs, func(treeID restic.ID) bool {
-		// locking is necessary
-		lock.Lock()
-		h := restic.BlobHandle{ID: treeID, Type: restic.TreeBlob}
-		blobReferenced := blobs.Has(h)
-		// noop if already referenced
-		blobs.Insert(h)
-		lock.Unlock()
-		return blobReferenced
-	}, nil)
-
-	wg.Go(func() error {
-		for tree := range treeStream {
-			if tree.Error != nil {
-				return tree.Error
-			}
-		}
-		return nil
-	})
-	return wg.Wait()
-}
-
