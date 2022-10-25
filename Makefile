@@ -9,5 +9,5 @@ clean:
 	rm -f restic
 
 test:
-	go test ./cmd/... ./internal/...
+	go test ./cmd/... ./library/...
 

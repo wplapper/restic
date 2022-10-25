@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"fmt"
 	"time"
-	"math"
+	_ "math"
 	"golang.org/x/sync/errgroup"
 	"sync"
 
@@ -32,12 +32,13 @@ var gOptions GlobalOptions
 
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
-	size uint64
-	mtime time.Time
-	content restic.IntSet
-	subtree_ID restic.IntID
-	name string
-	Type string
+	size 				uint64
+	inode      	uint64
+	content 		restic.IntSet
+	subtree_ID 	restic.IntID
+	name 				string
+	Type 				string
+	mtime 			time.Time
 }
 
 type Index_Handle struct {
@@ -52,21 +53,21 @@ type RepositoryData struct {
 	snaps         []*restic.Snapshot
 	// map contents of tree blob record via JSON to memory
 	directory_map map[restic.IntID][]BlobFile2
-	// map directory blob to a path
+	// map directory blob to a path name
 	fullpath      map[restic.IntID]string
-	// all names, basename ony
+	// all directory names, basename ony
 	names         map[restic.IntID]string
 	// all directory children of a directory
 	children      map[restic.IntID]restic.IntSet
 
-	// need to be (*)restic.ID
+	// need to be restic.ID
 	// all tree blobs of a snapshot
 	meta_dir_map  map[restic.ID]restic.IntSet
 	// all tree and data blobs from the index
 	index_handle	map[restic.ID]Index_Handle
 	// map blob to an IntID number
 	blob_to_index map[restic.ID]restic.IntID
-	// address this slice via an IntID index to get back to the ID
+	// address this slice via an IntID index to get back to the restic.ID
 	index_to_blob		[]restic.ID
 }
 
@@ -84,7 +85,7 @@ func init_repositoryData() *RepositoryData {
 	repositoryData.meta_dir_map  = make(map[restic.ID]restic.IntSet)
 	repositoryData.index_handle	 = make(map[restic.ID]Index_Handle)
 	repositoryData.blob_to_index = make(map[restic.ID]restic.IntID)
-	repositoryData.index_to_blob   = []restic.ID{}
+	repositoryData.index_to_blob = []restic.ID{}
 	return &repositoryData
  }
 
@@ -112,12 +113,14 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic
 func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
 	// load index files and their contents
-	// 'LoadIndex' is in library/repository/repository.go
+	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
 	if err := repo.LoadIndex(gopts.ctx); err != nil {
 		return err
 	}
 
 	// 'ForAllIndexes' is in library/repository/index_parallel.go
+	// ForAllIndexes loads a Index information and saves it efficiently
+	// can be accessed by repo.Index().Each(), is in library/repository/index.go
 	repository.ForAllIndexes(gopts.ctx, repo, func(id restic.ID,
 	idx *repository.Index, oldFormat bool, err error) error {
 		if err != nil {
@@ -138,6 +141,8 @@ repositoryData *RepositoryData) {
 	pos := restic.IntID(0)
 
 	//start := time.Now()
+	// blob is a 'restic.PackedBlob' which contains
+	// ID,  PackID, Type, Length and Offset
 	for blob := range repo.Index().Each(gopts.ctx) {
 		repositoryData.blob_to_index[blob.ID] = pos
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
@@ -181,26 +186,33 @@ func FindChildren (repositoryData *RepositoryData) {
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
 func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
-	// for each snapshot, there are 2 fixed elements:
+	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
 
 	tree_root := repositoryData.blob_to_index[*sn.Tree]
 	seen := restic.NewIntSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
 	repositoryData.fullpath[tree_root] = "/"
+
 	// to_be_processed is the list of new meta_blobs, not yet handled
 	// use deque as a FIFO queue
 	to_be_processed := deque.New[restic.IntID](100, 100)
-
 	// prime the process loop
 	to_be_processed.PushBack(tree_root)
+
 	for to_be_processed.Len() > 0 {
-		//take out oldest one
+		//take off the oldest one
 		meta_blob := to_be_processed.PopFront()
 		for child_dir := range repositoryData.children[meta_blob].Sub(seen) {
 			seen.Insert(child_dir)
 			to_be_processed.PushBack(child_dir)
 
 			// manage fullpath
+			_, ok := repositoryData.fullpath[child_dir]
+			if ok {
+				continue
+			}
+
+			// construct name of child directory
 			if repositoryData.fullpath[meta_blob] != "/" {
 				repositoryData.fullpath[child_dir] = (repositoryData.fullpath[meta_blob] +
 					"/" + repositoryData.names[child_dir])
@@ -209,12 +221,14 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 			}
 		}
 	}
+	// remove reference to the empty directory node
+	seen.Delete(EMPTY_NODE_ID_TRANSLATED)
 	// at the end of the loop, 'seen' contains all directories
 	// referenced in the snapshot
-	seen.Delete(EMPTY_NODE_ID_TRANSLATED)
 	repositoryData.meta_dir_map[*sn.ID()] = seen
 }
 
+// this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
 	// step 1: gather snapshots
@@ -226,18 +240,19 @@ repositoryData *RepositoryData) error {
 	repositoryData.snaps = snaps
 	//timeMessage("  %-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
 
-	// time Each())
 	start = time.Now()
 	// build a sice of all meta_blob ID in the repo
-	meta_blobs := make([]restic.ID, 0)
+	meta_blobs := make([]*restic.ID, 0)
 	for blob_ID, data := range repositoryData.index_handle {
 			if data.Type == restic.TreeBlob {
-				meta_blobs = append(meta_blobs, blob_ID)
+				ix := repositoryData.blob_to_index[blob_ID]
+				meta_blobs = append(meta_blobs, &repositoryData.index_to_blob[ix])
 			}
 	}
 	//timeMessage("%-30s %10.1f seconds\n", "Index().Each()", time.Now().Sub(start).Seconds())
 
 	start = time.Now()
+	// ForAllMyTrees issues a lot of requests in parallel for all 'meta_blobs'
 	err = ForAllMyTrees(gopts, repo, repositoryData, meta_blobs)
 	if err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
@@ -261,27 +276,27 @@ repositoryData *RepositoryData) error {
 
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for paralel processing
-func DeliverTreeBlobs(repositoryData *RepositoryData, meta_blobs []restic.ID, fn func(id restic.ID) error) error {
+func DeliverTreeBlobs(repositoryData *RepositoryData, meta_blobs []*restic.ID, fn func(id restic.ID) error) error {
 	for _, blob_ID := range meta_blobs {
-		err := fn(blob_ID)
-		if err != nil {
-			Printf("fn returned %v\n", err)
-		}
+		fn(*blob_ID)
 	}
 	return nil
 }
 
+// home built parallel call to restic.LoadTree. All trees are accessed by the
+// method 'DeliverTreeBlobs' which accesses 'meta_blobs'
+// which has been built beforehand
 func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository,
-repositoryData *RepositoryData, meta_blobs []restic.ID) error {
+repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
 
 	var m sync.Mutex
-	// track spawned goroutines using wg, create a new context which is
+	// track spawned goroutines using wg, create a new context
 	wg, ctx := errgroup.WithContext(gopts.ctx)
 	ch := make(chan restic.ID)
 	wg.Go(func() error {
 		defer close(ch)
 
-		// this callback function need to return an 'id'
+		// this callback function needs to return an 'id'
 		return DeliverTreeBlobs(repositoryData, meta_blobs, func(id restic.ID) error {
 			select {
 			case <-ctx.Done():
@@ -296,11 +311,14 @@ repositoryData *RepositoryData, meta_blobs []restic.ID) error {
 	// and runs fn with id, the snapshot and the error
 	worker := func() error {
 		for id := range ch {
-			//debug.Log("calling LoadTree tree %s", id.String()[:12])
 			tree, err := restic.LoadTree(gopts.ctx, repo, id)
+			if err != nil {
+				Printf("LoadTree returned %v\n", err)
+				return err
+			}
 			idd_file_list := make([]BlobFile2, len(tree.Nodes))
 
-			// do the work on trees
+			// do the work on the tree ust received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
 				content    := restic.NewIntSet()
@@ -309,46 +327,46 @@ repositoryData *RepositoryData, meta_blobs []restic.ID) error {
 				ok := false
 				switch node.Type {
 				case "file":
-					for _,cont := range node.Content {
-						set_number, ok := repositoryData.blob_to_index[cont]
+					for _, cont := range node.Content {
+						// get the index for our restic.ID storage
+						ix_data, ok := repositoryData.blob_to_index[cont]
 						if !ok {
 							Printf("Fatal: %v not in blob_to_index\n", cont)
-							panic("error during content processing 1")
+							panic("error during content processing")
 						}
-						content.Insert(set_number)
+						content.Insert(ix_data)
 					}
 				case "dir":
+					// get the index for our restic.ID storage
 					subtree_ID, ok = repositoryData.blob_to_index[*node.Subtree]
 					if !ok {
 						Printf("Fatal: %v not in blob_to_index\n", *node.Subtree)
-						panic("error during content processing 2")
+						panic("error during sub directory processing")
 					}
+					// if *node.Subtree is nil: this is harmless since the entry
+					// is replaced with EMPTY_NODE_ID_TRANSLATED
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
-						Type: node.Type, size: node.Size,
+						Type: node.Type, size: node.Size, inode: node.Inode,
 						mtime: node.ModTime, content: content, subtree_ID: subtree_ID}
 			}
-			//debug.Log("done blob %s\n", id.String()[:12])
 
-			m.Lock()
-			// we need a permanent ID pointer
+			// get the index for our restic.ID storage
 			position, ok := repositoryData.blob_to_index[id]
 			if !ok {
-					Printf("requesting ID %v\n", id)
-					panic("error in GetAllNodes 2")
+					Printf("request for missing ID %v\n", id)
+					panic("error in GetAllNodes - storing idd_file_list")
 			}
-			// insert directory_map
+			// insert directory_map, this is the critical region, so lock it
+			m.Lock()
 			repositoryData.directory_map[position] = idd_file_list
 			m.Unlock()
-			if err != nil {
-				return err
-			}
 		}
 		return nil
 	}
 
-	// start these parallel workers
-	for i := 0; i < int(repo.Connections()); i++ {
+	// start all these parallel workers
+	for i := 0; i < int(repo.Connections()) + runtime.GOMAXPROCS(0); i++ {
 		wg.Go(worker)
 	}
 	// and wait for them all to finish
@@ -359,6 +377,7 @@ repositoryData *RepositoryData, meta_blobs []restic.ID) error {
 // As well as the number of garbage collection cycles completed.
 func PrintMemUsage() {
 
+	/*
 	count := 0
 	var (
 			m = runtime.MemStats{}
@@ -386,8 +405,10 @@ func PrintMemUsage() {
 			break
 		}
 	}
+	*/
 
 	var m2 runtime.MemStats
+	runtime.GC()
 	runtime.ReadMemStats(&m2)
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
 	fmt.Printf("Alloc        = %4d MiB", bToMb(m2.Alloc))
@@ -402,7 +423,7 @@ func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
 
-func timeMessage(format string, args ...interface{}) {
+func timeMessage(format string, args... interface{}) {
   if gOptions.verbosity > 0 {
     Printf(format, args...)
   }

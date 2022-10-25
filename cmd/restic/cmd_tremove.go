@@ -7,9 +7,8 @@ package main
 import (
   // system
   "time"
-  "os"
-  //"runtime"
-  "runtime/pprof"
+  "sort"
+  //"fmt"
 
   //argparse
   "github.com/spf13/cobra"
@@ -17,11 +16,15 @@ import (
   // restic library
   "github.com/wplapper/restic/library/restic"
   "github.com/wplapper/restic/library/debug"
+
+  // mapset
+  "github.com/deckarep/golang-set"
 )
 
 type TRemoveOptions struct {
     cutoff int
     snaps []string
+    detail bool
 }
 
 type Pack_and_size struct {
@@ -55,30 +58,18 @@ func init() {
   cmdRoot.AddCommand(cmdTRemove)
   flags := cmdTRemove.Flags()
   flags.IntVarP(&tremoveOptions.cutoff, "cutoff", "U", 182, "cutoff snaps which are older than <cutoff> days")
+  flags.BoolVarP(&tremoveOptions.detail, "detail", "D", false, "print dir/file details")
 }
 
 func runTRemove(gopts GlobalOptions, args []string) error {
-  // analyse cutoff date
+  // setup global data
 	repositoryData := init_repositoryData()
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
   gOptions = gopts
 
+  // analyse cutoff date
   cutoff := tremoveOptions.cutoff
-  //Print("GlobalOptions %v\n", gopts)
-  if globalOptions.cpuprofile != "" {
-    f, err := os.Create(globalOptions.cpuprofile)
-    if err != nil {
-        Printf("could not create CPU profile: %v\n", err)
-        return err
-    }
-    defer f.Close() // error handling omitted for example
-    if err := pprof.StartCPUProfile(f); err != nil {
-        Printf("could not start CPU profile: %v\n", err)
-        return err
-    }
-    Printf("CPU sampling started\n")
-    defer pprof.StopCPUProfile()
-  }
+  detail := tremoveOptions.detail
 
   // step 1: open repository
   debug.Log("Start tremove")
@@ -87,10 +78,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   if err != nil {
     return err
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "open repository",
-        time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
   debug.Log("repo open")
 
   // step 2: gather all snapshots
@@ -101,7 +89,8 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   if err != nil {
       return err
   }
-  debug.Log("read snapshots")
+  repositoryData. snaps = snaps
+  //debug.Log("read snapshots")
   repositoryData.snaps = snaps
 
   // make the master tree list
@@ -133,10 +122,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
       Printf("No snapshots selected. Terminating.\n")
       return nil
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "selected all snapshots",
-      time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "selected all snapshots", time.Now().Sub(start).Seconds())
   Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
 
   // step 4.1: manage Index Records
@@ -164,33 +150,30 @@ func runTRemove(gopts GlobalOptions, args []string) error {
     }
     blobs_per_packID[data.pack_index].Insert(data.blob_index)
   }
-  if gopts.verbosity > 0 {
-    Printf("%-30s %10.1f seconds\n", "generate pack info",
-      time.Now().Sub(start).Seconds())
-  }
+  timeMessage("%-30s %10.1f seconds\n", "generate pack info", time.Now().Sub(start).Seconds())
 
   // loop over the snap_id's to be removed individually
+  selected := make([]*restic.Snapshot, 1, 1)
   for _, sn := range snaps_to_be_deleted {
-      selected := make([]*restic.Snapshot, 1, 1)
       selected[0] = sn
       Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
           sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
       err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
-          blobs_per_packID, repositoryData)
+          blobs_per_packID, repositoryData, detail)
       if err != nil {
           return err
       }
   }
 
   // select all the snapshots for the summary record
-  selected := make([]*restic.Snapshot, 0, len(snaps_to_be_deleted))
+  selected = make([]*restic.Snapshot, 0, len(snaps_to_be_deleted))
   // create total summary by 'removing' all of snaps_to_be_deleted
   for _, sn := range snaps_to_be_deleted {
     selected = append(selected, sn)
   }
   Printf("\n*** ALL ***\n")
   err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
-      blobs_per_packID, repositoryData)
+      blobs_per_packID, repositoryData, false)
   if err != nil {
       return err
   }
@@ -200,7 +183,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 func CalculatePruneSize(gopts GlobalOptions, repo restic.Repository,
 selected []*restic.Snapshot, blobs_from_ix map[restic.IntID]Pack_and_size,
 blobs_per_packID map[restic.IntID]restic.IntSet,
-repositoryData *RepositoryData) error {
+repositoryData *RepositoryData, detail bool) error {
 	//start := time.Now()
 
   // step 1: find all meta- and data-blobs in given 'selected' slice
@@ -308,6 +291,61 @@ repositoryData *RepositoryData) error {
 	Printf("total prune     %10d blobs %7s       %10.3f Mib\n",
 		count_partial_blobs + count_delete_blobs, " ",
 		float64(size_partial_blobs + size_delete_blobs) /ONE_MEG)
+
+  if detail {
+    // map data blobs back to meta_blob, position in directory_map
+    type comp_index struct {
+      meta_blob restic.IntID
+      position int
+    }
+
+    data_map := make(map[restic.IntID]comp_index)
+    for meta_blob, file_list := range repositoryData.directory_map {
+      for position, meta := range file_list {
+        // generate composite index
+        cmp_ix := comp_index{meta_blob: meta_blob, position: position}
+        if meta.Type == "file" {
+          for data_blob := range meta.content {
+            data_map[data_blob] = cmp_ix
+          }
+        }
+      }
+    }
+
+    // gather detail of deleted directories and files
+    deleted_files := mapset.NewSet()
+    for blob := range unique_blobs {
+      filename := ""
+      ih := repositoryData.index_handle[repositoryData.index_to_blob[blob]]
+      if ih.Type == restic.TreeBlob {
+        if repositoryData.fullpath[blob] == "/" {
+          filename = "/"
+        } else {
+          filename = repositoryData.fullpath[blob] + "/"
+        }
+      } else if ih.Type == restic.DataBlob {
+        cmp_ix := data_map[blob]
+        name := repositoryData.directory_map[cmp_ix.meta_blob][cmp_ix.position].name
+        filename = repositoryData.fullpath[cmp_ix.meta_blob] + "/" + name
+      }
+      deleted_files.Add(filename)
+    }
+
+    // convert deleted_files to Slice, so it can be sorted
+    deleted_files_to_sort := make([]string, 0, deleted_files.Cardinality())
+    for filename := range deleted_files.Iter() {
+    //for filename := range deleted_files {
+      deleted_files_to_sort = append(deleted_files_to_sort, filename.(string))
+    }
+
+    // sort
+    sort.Slice(deleted_files_to_sort, func(i, j int) bool {
+      return deleted_files_to_sort[i] < deleted_files_to_sort[j]
+    })
+    for _,filename := range deleted_files_to_sort {
+      Printf("%s\n", filename)
+    }
+  }
 
 	if gopts.verbosity > 0 {
 		//Printf("%-30s %10.1f seconds\n", "selected all blobs",

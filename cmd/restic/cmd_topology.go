@@ -94,10 +94,6 @@ func runTopology(gopts GlobalOptions, args []string) error {
 		Printf("len rest               %7d\n", len(rest))
 	}
 
-	/*for _, sbp := range sort_by_pack {
-		Printf("sbp %s %7d %s\n", sbp.pack_ID.String()[:12], sbp.offset, sbp.blob_ID.String()[:12])
-	}*/
-
 	// demo functions
 	//service1(repositoryData)
 	service2(repositoryData)

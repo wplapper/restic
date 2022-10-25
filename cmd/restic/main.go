@@ -1,134 +1,131 @@
 package main
 
 import (
-  "bufio"
-  "bytes"
-  "fmt"
-  "log"
-  "os"
-  "runtime"
+	"bufio"
+	"bytes"
+	"fmt"
+	"log"
+	"os"
+	"runtime"
 
-  // restic - library
-  "github.com/wplapper/restic/library/debug"
-  "github.com/wplapper/restic/library/options"
-  "github.com/wplapper/restic/library/restic"
-  "github.com/wplapper/restic/library/errors"
+	// restic - library
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/options"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/errors"
 
-  // aprgparse
-  "github.com/spf13/cobra"
-
+	// aprgparse
+	"github.com/spf13/cobra"
 )
 
 // cmdRoot is the base command when no other command has been specified.
 var cmdRoot = &cobra.Command{
-  Use:   "restic",
-  Short: "Backup and restore files",
-  Long: `
+	Use:   "restic",
+	Short: "Backup and restore files",
+	Long: `
 restic is a backup program which allows saving multiple revisions of files and
 directories in an encrypted repository stored on different backends.
 `,
-  SilenceErrors:     true,
-  SilenceUsage:      true,
-  DisableAutoGenTag: true,
+	SilenceErrors:     true,
+	SilenceUsage:      true,
+	DisableAutoGenTag: false,
 
-  PersistentPreRunE: func(c *cobra.Command, args []string) error {
-    // set verbosity, default is one
-    globalOptions.verbosity = 1
-    if globalOptions.Quiet && globalOptions.Verbose > 0 {
-      return errors.Fatal("--quiet and --verbose cannot be specified at the same time")
-    }
+	PersistentPreRunE: func(c *cobra.Command, args []string) error {
+		// set verbosity, default is one
+		globalOptions.verbosity = 1
+		if globalOptions.Quiet && globalOptions.Verbose > 0 {
+			return errors.Fatal("--quiet and --verbose cannot be specified at the same time")
+		}
 
-    switch {
-    case globalOptions.Verbose >= 2:
-      globalOptions.verbosity = 3
-    case globalOptions.Verbose > 0:
-      globalOptions.verbosity = 2
-    case globalOptions.Quiet:
-      globalOptions.verbosity = 0
-    }
+		switch {
+		case globalOptions.Verbose >= 2:
+			globalOptions.verbosity = 3
+		case globalOptions.Verbose > 0:
+			globalOptions.verbosity = 2
+		case globalOptions.Quiet:
+			globalOptions.verbosity = 0
+		}
 
-    // parse extended options
-    opts, err := options.Parse(globalOptions.Options)
-    if err != nil {
-      return err
-    }
-    globalOptions.extended = opts
-    if !needsPassword(c.Name()) {
-      return nil
-    }
-    //fmt.Printf("globalOptions %v\n", globalOptions)
+		// parse extended options
+		opts, err := options.Parse(globalOptions.Options)
+		if err != nil {
+			return err
+		}
+		globalOptions.extended = opts
+		if !needsPassword(c.Name()) {
+			return nil
+		}
 
+		pwd, err := resolvePassword(globalOptions, "RESTIC_PASSWORD")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Resolving password failed: %v\n", err)
+			Exit(1)
+		}
+		globalOptions.password = pwd
 
-    pwd, err := resolvePassword(globalOptions, "RESTIC_PASSWORD")
-    if err != nil {
-      fmt.Fprintf(os.Stderr, "Resolving password failed: %v\n", err)
-      Exit(1)
-    }
-    globalOptions.password = pwd
+		// run the debug functions for all subcommands (if build tag "debug" is
+		// enabled)
+		if err := runDebug(); err != nil {
+			return err
+		}
 
-    // run the debug functions for all subcommands (if build tag "debug" is
-    // enabled)
-    if err := runDebug(); err != nil {
-      return err
-    }
-
-    return nil
-  },
+		return nil
+	},
 }
 
 // Distinguish commands that need the password from those that work without,
 // so we don't run $RESTIC_PASSWORD_COMMAND for no reason (it might prompt the
 // user for authentication).
 func needsPassword(cmd string) bool {
-  switch cmd {
-  case "cache", "generate", "help", "options", "self-update", "version":
-    return false
-  default:
-    return true
-  }
+	switch cmd {
+	case "cache", "generate", "help", "options", "self-update", "version":
+		return false
+	default:
+		return true
+	}
 }
 
 var logBuffer = bytes.NewBuffer(nil)
 
 func init() {
-  // install custom global logger into a buffer, if an error occurs
-  // we can show the logs
-  log.SetOutput(logBuffer)
+	// install custom global logger into a buffer, if an error occurs
+	// we can show the logs
+	log.SetOutput(logBuffer)
 }
 
 func main() {
-  debug.Log("main %#v", os.Args)
-  debug.Log("restic %s compiled with %v on %v/%v",
-    version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
-  err := cmdRoot.Execute()
+	debug.Log("main %#v", os.Args)
+	debug.Log("restic %s compiled with %v on %v/%v",
+		version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	err := cmdRoot.Execute()
 
-  switch {
-  case restic.IsAlreadyLocked(err):
-    fmt.Fprintf(os.Stderr, "%v\nthe `unlock` command can be used to remove stale locks\n", err)
-  case err == ErrInvalidSourceData:
-    fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-  case errors.IsFatal(err):
-    fmt.Fprintf(os.Stderr, "%v\n", err)
-  case err != nil:
-    fmt.Fprintf(os.Stderr, "%+v\n", err)
+	switch {
+	case restic.IsAlreadyLocked(err):
+		fmt.Fprintf(os.Stderr, "%v\nthe `unlock` command can be used to remove stale locks\n", err)
+	case err == ErrInvalidSourceData:
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	case errors.IsFatal(err):
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "%+v\n", err)
 
-    if logBuffer.Len() > 0 {
-      fmt.Fprintf(os.Stderr, "also, the following messages were logged by a library:\n")
-      sc := bufio.NewScanner(logBuffer)
-      for sc.Scan() {
-        fmt.Fprintln(os.Stderr, sc.Text())
-      }
-    }
-  }
+		if logBuffer.Len() > 0 {
+			fmt.Fprintf(os.Stderr, "also, the following messages were logged by a library:\n")
+			sc := bufio.NewScanner(logBuffer)
+			for sc.Scan() {
+				fmt.Fprintln(os.Stderr, sc.Text())
+			}
+		}
+	}
 
-  var exitCode int
-  switch err {
-  case nil:
-    exitCode = 0
-  case ErrInvalidSourceData:
-    exitCode = 3
-  default:
-    exitCode = 1
-  }
-  Exit(exitCode)
+	var exitCode int
+	switch err {
+	case nil:
+		exitCode = 0
+	case ErrInvalidSourceData:
+		exitCode = 3
+	default:
+		exitCode = 1
+	}
+	Exit(exitCode)
 }

@@ -1,3 +1,6 @@
 /restic
 /.vagrant
 /.vscode
+go.mod
+go.sum
+*.gz
