@@ -12,8 +12,6 @@ import (
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
-	"github.com/wplapper/restic/library/repository"
-	//"github.com/wplapper/restic/library/debug"
 
 	//deque
 	"github.com/gammazero/deque"
@@ -93,6 +91,7 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic
 	// collect all snap records
   snaps := make([]*restic.Snapshot, 0, 10)
 	repo.List(gopts.ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
+		// could possibly be paralllized
 		sn, err := restic.LoadSnapshot(gopts.ctx, repo, id)
 		if err != nil {
 			Printf("Skip snap record %s!\n", id)
@@ -114,21 +113,13 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
+	//start := time.Now()
 	if err := repo.LoadIndex(gopts.ctx); err != nil {
 		return err
 	}
-
-	// 'ForAllIndexes' is in library/repository/index_parallel.go
-	// ForAllIndexes loads a Index information and saves it efficiently
-	// can be accessed by repo.Index().Each(), is in library/repository/index.go
-	repository.ForAllIndexes(gopts.ctx, repo, func(id restic.ID,
-	idx *repository.Index, oldFormat bool, err error) error {
-		if err != nil {
-			Printf("Ignoring error %v for ID %v\n", err, id)
-			return err
-		}
-		return nil
-	})
+	// about 0.9 seconds
+	//timeMessage("  %-30s %10.1f seconds\n", "LoadIndex",
+	//	time.Now().Sub(start).Seconds())
 
 	Convert_to_IntSet(gopts, repo, repositoryData)
 	return nil
@@ -161,6 +152,7 @@ repositoryData *RepositoryData) {
 			pack_index: repositoryData.blob_to_index[blob.PackID],
 			blob_index: repositoryData.blob_to_index[blob.ID]}
 	}
+	// about .5 seconds
 	//timeMessage("  %-30s %10.1f seconds\n", "building repositoryData.index_handle, blob_to_index, index_to_blob",
 	//	time.Now().Sub(start).Seconds())
 }
@@ -233,6 +225,7 @@ func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
 	// step 1: gather snapshots
 	start := time.Now()
+	_ = start
 	snaps, err := GatherAllSnapshots(gopts, repo);
 	if err != nil {
 			return err
@@ -240,45 +233,34 @@ repositoryData *RepositoryData) error {
 	repositoryData.snaps = snaps
 	//timeMessage("  %-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
 
+	// build a slice of all meta_blob IDs in the repo
 	start = time.Now()
-	// build a sice of all meta_blob ID in the repo
-	meta_blobs := make([]*restic.ID, 0)
-	for blob_ID, data := range repositoryData.index_handle {
-			if data.Type == restic.TreeBlob {
-				ix := repositoryData.blob_to_index[blob_ID]
-				meta_blobs = append(meta_blobs, &repositoryData.index_to_blob[ix])
-			}
-	}
-	//timeMessage("%-30s %10.1f seconds\n", "Index().Each()", time.Now().Sub(start).Seconds())
-
-	start = time.Now()
-	// ForAllMyTrees issues a lot of requests in parallel for all 'meta_blobs'
-	err = ForAllMyTrees(gopts, repo, repositoryData, meta_blobs)
+	err = ForAllMyTrees(gopts, repo, repositoryData)
 	if err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
 		return err
 	}
-	timeMessage("  %-28s %10.1f seconds\n", "ForAllMyTrees", time.Now().Sub(start).Seconds())
+	//timeMessage("  %-28s %10.1f seconds\n", "ForAllMyTrees", time.Now().Sub(start).Seconds())
 
 	// step 3: prepare children and parents from idd_file records
-	//start = time.Now()
 	FindChildren(repositoryData)
-	//timeMessage("%-30s %10.1f seconds\n", "find children", time.Now().Sub(start).Seconds())
 
 	// step 4: build topology for each snapshot in repository
 	//start = time.Now()
 	for _, sn := range repositoryData.snaps {
 		topology_structure(*sn, repositoryData)
 	}
-	//timeMessage("%-30s %10.1f seconds\n", "build topology", time.Now().Sub(start).Seconds())
+	//end := time.Now() ())) // about 65-70 msec later
 	return nil
 }
 
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for paralel processing
-func DeliverTreeBlobs(repositoryData *RepositoryData, meta_blobs []*restic.ID, fn func(id restic.ID) error) error {
-	for _, blob_ID := range meta_blobs {
-		fn(*blob_ID)
+func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) error) error {
+	for blob_ID, data := range repositoryData.index_handle {
+		if data.Type == restic.TreeBlob {
+			fn(blob_ID)
+		}
 	}
 	return nil
 }
@@ -286,18 +268,25 @@ func DeliverTreeBlobs(repositoryData *RepositoryData, meta_blobs []*restic.ID, f
 // home built parallel call to restic.LoadTree. All trees are accessed by the
 // method 'DeliverTreeBlobs' which accesses 'meta_blobs'
 // which has been built beforehand
-func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository,
-repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
+func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *RepositoryData) error {
 
 	var m sync.Mutex
-	// track spawned goroutines using wg, create a new context
+	type PerfRecord struct {
+		id restic.ID
+		count_file int
+		count_dirs int
+		time_diff time.Duration // int64 nanosecond count
+	}
+	//p_start := time.Now()
+	perf_records := make([]PerfRecord, 0)
 	wg, ctx := errgroup.WithContext(gopts.ctx)
 	ch := make(chan restic.ID)
+	//Printf("%-26s ForAllMyTrees start\n", time.Now().Format("2006-01-02 15:04:05.999999"))
 	wg.Go(func() error {
 		defer close(ch)
 
 		// this callback function needs to return an 'id'
-		return DeliverTreeBlobs(repositoryData, meta_blobs, func(id restic.ID) error {
+		return DeliverTreeBlobs(repositoryData, func(id restic.ID) error {
 			select {
 			case <-ctx.Done():
 				return nil
@@ -306,17 +295,24 @@ repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
 			return nil
 		})
 	})
+	//Printf("%-26s ForAllMyTrees filled chan\n", time.Now().Format("2006-01-02 15:04:05.999999"))
 
 	// a worker receives an snapshot ID from ch, loads the snapshot
 	// and runs fn with id, the snapshot and the error
 	worker := func() error {
+		count_file := 0
+		count_dirs := 0
 		for id := range ch {
+			start := time.Now()
+			//Printf("%-26s START %s\n", start.Format("2006-01-02 15:04:05.999999"), id.Str())
 			tree, err := restic.LoadTree(gopts.ctx, repo, id)
 			if err != nil {
 				Printf("LoadTree returned %v\n", err)
 				return err
 			}
 			idd_file_list := make([]BlobFile2, len(tree.Nodes))
+			count_file = 0
+			count_dirs = 0
 
 			// do the work on the tree ust received
 			for offset_in_node_list, node := range tree.Nodes {
@@ -335,6 +331,7 @@ repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
 							panic("error during content processing")
 						}
 						content.Insert(ix_data)
+						count_file++
 					}
 				case "dir":
 					// get the index for our restic.ID storage
@@ -345,6 +342,7 @@ repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
 					}
 					// if *node.Subtree is nil: this is harmless since the entry
 					// is replaced with EMPTY_NODE_ID_TRANSLATED
+					count_dirs++
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
 						Type: node.Type, size: node.Size, inode: node.Inode,
@@ -358,54 +356,63 @@ repositoryData *RepositoryData, meta_blobs []*restic.ID) error {
 					panic("error in GetAllNodes - storing idd_file_list")
 			}
 			// insert directory_map, this is the critical region, so lock it
+			ende := time.Now()
 			m.Lock()
 			repositoryData.directory_map[position] = idd_file_list
+			// perormance record
+			perf_records = append(perf_records, PerfRecord{id: id,
+				count_file: count_file, count_dirs: count_dirs, time_diff: ende.Sub(start)})
 			m.Unlock()
+			//Printf("%-26s FINIS %s\n", ende.Format("2006-01-02 15:04:05.999999"), id.Str())
 		}
 		return nil
 	}
 
 	// start all these parallel workers
-	for i := 0; i < int(repo.Connections()) + runtime.GOMAXPROCS(0); i++ {
+	max_parallel := int(repo.Connections()) + runtime.GOMAXPROCS(0)
+	//Printf("max_parallel = %2d\n", max_parallel)
+	for i := 0; i < max_parallel; i++ {
 		wg.Go(worker)
 	}
 	// and wait for them all to finish
-	return wg.Wait()
+	res := wg.Wait()
+	//Printf("%-26s Waited\n", time.Now().Format("2006-01-02 15:04:05.999999"))
+	//p_end := time.Now()
+
+	max_file := -1
+	max_dirs := -1
+	max_time := int64(-1)
+	sum_time := int64(0)
+	for _, perf_record := range perf_records {
+		time_diff := int64(perf_record.time_diff) / 1000
+		//Printf("pf %s %5d %5d %8d\n", perf_record.id.Str(),
+		//  perf_record.count_file, perf_record.count_dirs, time_diff)
+
+		if perf_record.count_file > max_file {
+			max_file = perf_record.count_file
+		}
+		if perf_record.count_dirs > max_dirs {
+			max_dirs = perf_record.count_dirs
+		}
+		if time_diff > max_time {
+			max_time = time_diff
+		}
+		sum_time += time_diff
+	}
+
+	/*
+	Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
+	Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
+		len(perf_records),
+		float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
+		float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
+	*/
+	return res
 }
 
 // PrintMemUsage outputs the current, total and OS memory being used.
 // As well as the number of garbage collection cycles completed.
 func PrintMemUsage() {
-
-	/*
-	count := 0
-	var (
-			m = runtime.MemStats{}
-			prevInUse uint64
-			prevNumGC uint32
-	)
-
-  for {
-
-		runtime.ReadMemStats(&m)
-
-		// Considering heap stable if recent cycle collected less than 10KB.
-		if prevNumGC != 0 && m.NumGC > prevNumGC && math.Abs(float64(m.HeapInuse-prevInUse)) < 10*1024 {
-				break
-		}
-
-		prevInUse = m.HeapInuse
-		prevNumGC = m.NumGC
-
-		// Sleeping to allow GC to run a few times and collect all temporary data.
-		time.Sleep(50 * time.Millisecond)
-		runtime.GC()
-		count++
-		if count > 2 {
-			break
-		}
-	}
-	*/
 
 	var m2 runtime.MemStats
 	runtime.GC()
@@ -428,3 +435,4 @@ func timeMessage(format string, args... interface{}) {
     Printf(format, args...)
   }
 }
+

@@ -42,6 +42,7 @@ import (
 )
 
 var version = "0.13.1-dev (compiled manually)"
+var ErrInvalidSourceData = errors.New("at least one source file could not be read")
 
 // TimeFormat is the format used for all timestamps printed by restic.
 const TimeFormat = "2006-01-02 15:04:05"

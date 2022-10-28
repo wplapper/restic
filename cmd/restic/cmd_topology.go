@@ -7,8 +7,6 @@ package main
 import (
 	// system
 	"time"
-	//"sort"
-	//"fmt"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -56,7 +54,7 @@ func runTopology(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//PrintMemUsage()
 
 	// step 4.1: manage Index Records
 	start = time.Now()
@@ -64,14 +62,14 @@ func runTopology(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	timeMessage("%-30s %10.1f seconds\n", "read index records", time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//PrintMemUsage()
 
 	// extract all information about indexes from a call to <master_index>.Each()
 	// setup index_handle, blob_to_index and index_to_blob
 	start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
 	timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData (sum)", time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//PrintMemUsage()
 
 	// convert the keys of 'directory_map' to a IntID set
 	idd_file_keys := restic.NewIntSet()
@@ -98,7 +96,7 @@ func runTopology(gopts GlobalOptions, args []string) error {
 	//service1(repositoryData)
 	service2(repositoryData)
 	//service3(repositoryData)
-	PrintMemUsage()
+	//PrintMemUsage()
 	service4(repositoryData)
 	return nil
 }

@@ -90,19 +90,11 @@ func runTRemove(gopts GlobalOptions, args []string) error {
       return err
   }
   repositoryData. snaps = snaps
-  //debug.Log("read snapshots")
-  repositoryData.snaps = snaps
 
-  // make the master tree list
-  master_tree_list := make([]restic.ID, 0, len(snaps))
-  for _, sn := range snaps {
-    master_tree_list = append(master_tree_list, *sn.Tree)
-  }
-
-  // make a master snap dictiopnary (a map)
-  master_snapID_set := make(map[string]struct{}, len(snaps))
+  // make a master snap dictionary (a map)
+  snaps_from_cli := make(map[string]struct{}, len(snaps))
   for _, snap_id := range args {
-    master_snapID_set[snap_id] = struct{}{}
+    snaps_from_cli[snap_id] = struct{}{}
   }
 
   // step 3: compare against cutoff date
@@ -111,7 +103,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   Printf("snapshots selected for deletion\n")
   for _, sn := range snaps {
       days := int(now.Sub(sn.Time).Seconds() / 86400)
-      _, ok := master_snapID_set[sn.ID().Str()]
+      _, ok := snaps_from_cli[sn.ID().Str()]
       if  days >= cutoff || ok {
           Printf("snap_ID %s %d days old %s:%s at %s\n", sn.ID().Str(),
             days, sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
@@ -125,12 +117,11 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   timeMessage("%-30s %10.1f seconds\n", "selected all snapshots", time.Now().Sub(start).Seconds())
   Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
 
-  // step 4.1: manage Index Records
+  // step 4: manage Index Records
   start = time.Now()
-  err = HandleIndexRecords(gopts, repo, repositoryData)
-  if err != nil {
-    return err
-  }
+	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
+		return err
+	}
   //debug.Log("HandleIndexRecords done")
   timeMessage("%-30s %10.1f seconds\n", "HandleIndexRecords", time.Now().Sub(start).Seconds())
 
@@ -138,7 +129,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   GatherAllRepoData(gopts, repo, repositoryData)
   timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData", time.Now().Sub(start).Seconds())
 
-  // step 4.2: gather size info for each blob
+  // step 5: gather size info for each blob
   start = time.Now()
   blobs_from_ix    := make(map[restic.IntID]Pack_and_size)
   blobs_per_packID := make(map[restic.IntID]restic.IntSet)
@@ -152,29 +143,27 @@ func runTRemove(gopts GlobalOptions, args []string) error {
   }
   timeMessage("%-30s %10.1f seconds\n", "generate pack info", time.Now().Sub(start).Seconds())
 
-  // loop over the snap_id's to be removed individually
+  // step 6.1: loop over the snap_id's to be removed individually
   selected := make([]*restic.Snapshot, 1, 1)
   for _, sn := range snaps_to_be_deleted {
       selected[0] = sn
       Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
           sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-      err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
-          blobs_per_packID, repositoryData, detail)
-      if err != nil {
+      if err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
+        blobs_per_packID, repositoryData, detail); err != nil {
           return err
       }
   }
 
   // select all the snapshots for the summary record
-  selected = make([]*restic.Snapshot, 0, len(snaps_to_be_deleted))
+  selected = make([]*restic.Snapshot, len(snaps_to_be_deleted))
   // create total summary by 'removing' all of snaps_to_be_deleted
-  for _, sn := range snaps_to_be_deleted {
-    selected = append(selected, sn)
+  for ix, sn := range snaps_to_be_deleted {
+    selected[ix] = sn
   }
   Printf("\n*** ALL ***\n")
-  err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
-      blobs_per_packID, repositoryData, false)
-  if err != nil {
+  if err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
+    blobs_per_packID, repositoryData, false); err != nil {
       return err
   }
   return nil
@@ -184,9 +173,7 @@ func CalculatePruneSize(gopts GlobalOptions, repo restic.Repository,
 selected []*restic.Snapshot, blobs_from_ix map[restic.IntID]Pack_and_size,
 blobs_per_packID map[restic.IntID]restic.IntSet,
 repositoryData *RepositoryData, detail bool) error {
-	//start := time.Now()
-
-  // step 1: find all meta- and data-blobs in given 'selected' slice
+  // step 1: find all meta- and data-blobs in given 'selected' snapshot
   used_blobs := restic.NewIntSet()
   for _, sn := range selected {
     // get the meta blobs
@@ -205,7 +192,7 @@ repositoryData *RepositoryData, detail bool) error {
     }
   }
 
-	// step 6: build the tree list for the rest of the snapshots
+	// step 6: build the tree list for al other snapshots
 	rest_tree_list := make([]*restic.Snapshot, 0, len(repositoryData.snaps))
 	for _, sn := range repositoryData.snaps {
 		found := false
@@ -236,7 +223,8 @@ repositoryData *RepositoryData, detail bool) error {
     }
   }
 
-	// step 7: get the pack information
+	// step 7: calcuate which IDs are unique to this snapshot,
+  // prepare calculation for bobs to be removed or moved to different packs
 	unique_blobs := used_blobs.Sub(all_other_blobs)
 	delete_packs := make(map[restic.IntID]restic.IntSet, len(unique_blobs))
 	// map these blobs back to pack IDs
@@ -262,13 +250,14 @@ repositoryData *RepositoryData, detail bool) error {
 		if len(delete_packs[pack_index]) == len(blobs_per_packID[pack_index]) {
 			// straight delete!
 			count_delete_packs++
+      // get sizes
 			for blob := range delete_packs[pack_index] {
         back_to_ID := repositoryData.index_to_blob[blob]
 				size_delete_blobs += uint64(repositoryData.index_handle[back_to_ID].size)
 				count_delete_blobs++
 			}
 		} else {
-			// needs repacking
+			// needs repacking, get sizes and counts
 			for blob := range blobs_per_packID[pack_index] {
 				size_repack_blobs += uint64(blobs_from_ix[blob].Size)
 				count_repack_blobs++
@@ -332,16 +321,14 @@ repositoryData *RepositoryData, detail bool) error {
     }
 
     // convert deleted_files to Slice, so it can be sorted
-    deleted_files_to_sort := make([]string, 0, deleted_files.Cardinality())
+    deleted_files_to_sort := make([]string, deleted_files.Cardinality())
+    index := 0
     for filename := range deleted_files.Iter() {
-    //for filename := range deleted_files {
-      deleted_files_to_sort = append(deleted_files_to_sort, filename.(string))
+      deleted_files_to_sort[index] = filename.(string)
+      index++
     }
 
-    // sort
-    sort.Slice(deleted_files_to_sort, func(i, j int) bool {
-      return deleted_files_to_sort[i] < deleted_files_to_sort[j]
-    })
+    sort.Strings(deleted_files_to_sort)
     for _,filename := range deleted_files_to_sort {
       Printf("%s\n", filename)
     }

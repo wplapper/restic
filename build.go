@@ -141,7 +141,8 @@ func build(cwd string, env map[string]string, args ...string) error {
     cmd.Env = append(cmd.Env, k+"="+v)
   }
   if !enableCGO {
-    cmd.Env = append(cmd.Env, "CGO_ENABLED=0")
+    // wpl changed fro 0 to 1
+    cmd.Env = append(cmd.Env, "CGO_ENABLED=1")
   }
 
   printEnv(cmd.Env)
@@ -165,7 +166,8 @@ func test(cwd string, env map[string]string, args ...string) error {
     cmd.Env = append(cmd.Env, k+"="+v)
   }
   if !enableCGO {
-    cmd.Env = append(cmd.Env, "CGO_ENABLED=0")
+    // wpl 0 -> 1
+    cmd.Env = append(cmd.Env, "CGO_ENABLED=1")
   }
   cmd.Dir = cwd
   cmd.Stdout = os.Stdout

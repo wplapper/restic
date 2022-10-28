@@ -44,6 +44,7 @@ func runOverview(gopts GlobalOptions) error {
 	// step 1: open repository
 	repositoryData := init_repositoryData()
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
+	gOptions = gopts
 
 	start := time.Now()
 	repo, err := OpenRepository(gopts)
@@ -72,15 +73,6 @@ func runOverview(gopts GlobalOptions) error {
 	}
 	timeMessage("%-30s in %10.1f seconds\n", "read all index records", time.Now().Sub(start).Seconds())
 
-	// step 3: gather all snapshots
-	start = time.Now()
-	snaps := make([]*restic.Snapshot, 0, 100)
-	snaps, err = GatherAllSnapshots(gopts, repo)
-	if err != nil {
-    return err
-	}
-	timeMessage("%-30s in %10.1f seconds\n", "read %d snapshot records", time.Now().Sub(start).Seconds())
-
 	// step 4: build snap groups by host and filesystem
 	type snapGroup struct {
 		host string
@@ -89,7 +81,7 @@ func runOverview(gopts GlobalOptions) error {
 
 	start = time.Now()
 	groups := make(map[snapGroup][]*restic.Snapshot)
-	for _, sn := range snaps {
+	for _, sn := range repositoryData.snaps {
 		host  := sn.Hostname
 		fsys  := sn.Paths[0]
 		group := snapGroup{host: host, fsys: fsys}
@@ -161,7 +153,7 @@ func runOverview(gopts GlobalOptions) error {
 	// *** ALL ***
 	usedIntBlobs    := restic.NewIntSet()
 	count_file_sets := mapset.NewSet()
-	for _, sn := range snaps {
+	for _, sn := range repositoryData.snaps {
 		// step trough the list of meta_blobs and collect data
 		usedIntBlobs.Merge(repositoryData.meta_dir_map[*sn.ID()])
 		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
@@ -174,7 +166,7 @@ func runOverview(gopts GlobalOptions) error {
 		}
 	}
 
-	// step 9: access size information on used blobs
+	// step 9: access size information on ALL blobs
 	count_data_blobs := 0
 	count_meta_blobs := 0
 	size_repo        := uint64(0)
@@ -189,7 +181,7 @@ func runOverview(gopts GlobalOptions) error {
 		}
 	}
 	Printf("%s\n", strings.Repeat("=", 118))
-	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n", "summary", "", len(snaps),
+	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n", "summary", "", len(repositoryData.snaps),
 		count_meta_blobs, count_file_sets.Cardinality(), count_data_blobs,
 		float64(size_repo) / 1024.0 / 1024.0)
 
