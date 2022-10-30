@@ -2,8 +2,6 @@ package sqlite
 
 import (
 	"fmt"
-  "database/sql"
-  "log"
   "os"
   "time"
   //"reflect"
@@ -12,7 +10,9 @@ import (
   "github.com/deckarep/golang-set"
 
   // sqlite3 interface
+  //"database/sql"
   _ "github.com/mattn/go-sqlite3"
+  "github.com/jmoiron/sqlx"
 )
 
 var SQLITE_TABLES = map[string]string {
@@ -70,14 +70,6 @@ var SQLITE_TABLES = map[string]string {
   name TEXT,                      -- all names collected from restic system
   -- name is UNIQUE INDEX
   name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
-  )`,
-
-"fullpath2": `CREATE TABLE fullpath2 (
-  id      INTEGER PRIMARY KEY,   -- the primary key
-  id_blob INTEGER NOT NULL,      -- ptr to index_repo, UNIQUE INDEX
-  id_name INTEGER NOT NULL,      -- ptr to names, INDEX
-  FOREIGN KEY(id_blob) REFERENCES index_repo(id),
-  FOREIGN KEY(id_name) REFERENCES names(id)
   )`,
 
 "timestamp": `CREATE TABLE timestamp (
@@ -155,7 +147,7 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
 
 type DBDescriptor struct {
-  DB_ptr          *sql.DB
+  DB_ptr          *sqlx.DB
   verbose         int
   echo            bool
   table_names     []string
@@ -171,39 +163,24 @@ func Printf(format string, args... interface{}) {
   }
 }
 
-func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*sql.DB, error) {
+func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*sqlx.DB, error) {
   Printf("opening %s\n", data_base_path)
-  db, err := sql.Open("sqlite3", data_base_path)
+  db, err := sqlx.Open("sqlite3", data_base_path)
   if err != nil {
+    Printf("sqlx.Open failed %v\n", err)
     return nil, err
   }
-  //Printf("sqlite.DB open\n")
 
   // allocate DBDescriptor
   db_descriptor = &DBDescriptor{DB_ptr: db, verbose: verbose, echo: echo}
-  // return open DB descriptor
-  //defer db.Close()
 
   sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table' ORDER BY tbl_name"
-  rows, err := db.Query(sql)
+  Table_names := make([]string, 0)
+  err = db.Select(&Table_names, sql)
   if err != nil {
-    Printf("Query error is %v\n", err)
+    Printf("Get failed err %v\n", err)
     return nil, err
   }
-
-  // gather the table names
-  Table_names := make([]string, 0)
-
-  for rows.Next() {
-      var tbl_name string
-      err = rows.Scan(&tbl_name)
-
-      if err != nil {
-          log.Fatal(err)
-      }
-      Table_names = append(Table_names, tbl_name)
-  }
-  rows.Close()
 
   table_names_map := make(map[string]struct{}, len(Table_names))
   for _, table_name := range Table_names {
@@ -214,15 +191,16 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
   //Printf("sqlite: calling init_tables\n")
   err = init_tables()
   if err != nil {
-      log.Fatal(err)
+    Printf("error in init_tables %v\n", err)
+    return nil, err
   }
   if index {
     err := build_index()
     if err != nil {
-        log.Fatal(err)
+      Printf("error in build_index %v\n", err)
+      return nil, err
     }
   }
-  //Printf("sqlite: returning to caller\n")
   return db, nil
 }
 
@@ -260,7 +238,7 @@ func init_tables() error {
 
     _, err := db_descriptor.DB_ptr.Exec(init_string)
     if err != nil {
-      log.Printf("%q: %s\n", err, init_string)
+      Printf("%q: %s\n", err, init_string)
       return err
     }
   }
@@ -275,29 +253,28 @@ type ListIndexMaps struct {
 
 func build_index() error {
   //Printf("sqlite:build_index\n")
+  type TableIndex struct {
+    Name string
+    Tbl_name string
+  }
+  result := make([]TableIndex, 0)
   sql := "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
-  rows, err := db_descriptor.DB_ptr.Query(sql)
+  err := db_descriptor.DB_ptr.Select(&result, sql)
   if err != nil {
-    log.Printf("%q: %s\n", err, sql)
+    Printf("Select error on %s %v\n", sql, err)
     return err
   }
-  defer rows.Close()
 
   // build a map of index_names which point back to the owning table
   index_names  := make(map[string]string)
   indices_have := mapset.NewSet()
   indices_want := mapset.NewSet()
-  for rows.Next() {
-    var index_name string
-    var table_name string
-    err = rows.Scan(&index_name, &table_name)
-    if err != nil {
-        log.Fatal(err)
-    }
+  for _, row := range result {
+    index_name := row.Name
+    table_name := row.Tbl_name
     index_names[index_name] = table_name
     indices_have.Add(index_name)
   }
-  rows.Close()
 
   // check the indices we want
   for _, action_list := range SQLITE_INDEX {
@@ -323,11 +300,11 @@ func build_index() error {
 
       _, err := db_descriptor.DB_ptr.Exec(sql)
       if err != nil {
-          log.Fatal(err)
+          Printf("failed to CREATE INDEX %v\n", err)
+          return err
       }
       indices_have.Add(entry.ixname)
     }
   }
-  //Printf("sqlite:build_index ended\n")
   return nil
 }

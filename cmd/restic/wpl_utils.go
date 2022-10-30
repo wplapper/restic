@@ -32,7 +32,7 @@ type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
 	size 				uint64
 	inode      	uint64
-	content 		restic.IntSet
+	content 		[]restic.IntID
 	subtree_ID 	restic.IntID
 	name 				string
 	Type 				string
@@ -317,7 +317,7 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 			// do the work on the tree ust received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
-				content    := restic.NewIntSet()
+				content    := make([]restic.IntID, 0)
 				subtree_ID := EMPTY_NODE_ID_TRANSLATED
 
 				ok := false
@@ -330,7 +330,7 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 							Printf("Fatal: %v not in blob_to_index\n", cont)
 							panic("error during content processing")
 						}
-						content.Insert(ix_data)
+						content = append(content, ix_data)
 						count_file++
 					}
 				case "dir":
@@ -436,3 +436,15 @@ func timeMessage(format string, args... interface{}) {
   }
 }
 
+// return the pointer to a given ID
+func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
+	ix, ok := repositoryData.blob_to_index[id]
+	if ok {
+		return &(repositoryData.index_to_blob[ix])
+	} else {
+		// allocate new slot
+		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
+		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
+		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob))])
+	}
+}

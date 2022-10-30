@@ -124,7 +124,9 @@ func runOverview(gopts GlobalOptions) error {
 			for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
 				for _, meta := range repositoryData.directory_map[meta_blob] {
 					if meta.Type == "file" {
-						usedIntBlobs.Merge(meta.content)
+						for _, cont := range meta.content {
+							usedIntBlobs.Insert(cont)
+						}
 						count_file_sets.Add(meta.inode)
 					}
 				}
@@ -159,7 +161,9 @@ func runOverview(gopts GlobalOptions) error {
 		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type == "file" {
-					usedIntBlobs.Merge(meta.content)
+					for _, cont := range meta.content {
+						usedIntBlobs.Insert(cont)
+					}
 					count_file_sets.Add(meta.inode)
 				}
 			}

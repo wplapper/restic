@@ -87,8 +87,8 @@ func service2 (repositoryData *RepositoryData) {
 	collect_blobs.Merge(repositoryData.meta_dir_map[*sn1.ID()])
 	for meta_blob := range repositoryData.meta_dir_map[*sn1.ID()] {
 		for _, meta := range repositoryData.directory_map[meta_blob] {
-			if meta.Type == "file" {
-				collect_blobs.Merge(meta.content)
+			for _, cont := range meta.content {
+				collect_blobs.Insert(cont)
 			}
 		}
 	}
@@ -109,7 +109,9 @@ func service2 (repositoryData *RepositoryData) {
 		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type == "file" {
-					all_other_blobs.Merge(meta.content)
+					for _, cont := range meta.content {
+						all_other_blobs.Insert(cont)
+					}
 				}
 			}
 		}
