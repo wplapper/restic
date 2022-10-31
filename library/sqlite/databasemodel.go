@@ -134,8 +134,7 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
   "snapshots":  {ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id",      unique: "UNIQUE"},},
 
-  "names":      {ListIndexMaps{ixname: "ux_names_name",         on: "name",         unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_names_type",         on: "name_type",    unique: ""},},
+  "names":      {ListIndexMaps{ixname: "ux_names_name",         on: "name",         unique: "UNIQUE"},},
 
   "contents":   {ListIndexMaps{ixname: "ux_cont_blob_pos_off",  on: "id_blob,position,offset", unique: "UNIQUE"},
                  ListIndexMaps{ixname: "ix_cont_fpath",         on: "id_fullpath",  unique: ""},

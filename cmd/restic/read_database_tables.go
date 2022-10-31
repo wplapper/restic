@@ -1,7 +1,7 @@
 package main
 
 import (
-	"time"
+	//"time"
 	"errors"
 	"strings"
 
@@ -62,13 +62,6 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			return err
 		}
 
-		// convert timestamp
-		date_time, err := time.Parse("2006-01-02 15:04:05", p.Snap_time)
-		if err != nil {
-			Printf("date Parse %v\n", err)
-			return err
-		}
-
 		// convert root to restic.ID
 		idd, err := restic.ParseID(p.Id_snap_root)
 		if err != nil {
@@ -77,8 +70,15 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		}
 
 		// insert database record into memory
-		db_snapshots[p.Snap_id] = SnapshotRecordMem{snap_time: date_time.String()[:19],
-			snap_host: p.Snap_host, snap_fsys: p.Snap_fsys, root: idd}
+		/*
+	Id        		int
+	Snap_id       string
+	Snap_time 		string
+	Snap_host 		string
+	Snap_fsys 		string
+	Id_snap_root 	string
+		*/
+		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p, root: idd}
 
 		// map snapshot PK to db_snapshots
 		PK_snapshots[p.Id] = p.Snap_id
@@ -121,8 +121,7 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			Printf("Parse failed for %s %v\n", p.Idd, err)
 			return err
 		}
-		db_index_repo[idd_as_ID] = IndexRepoRecordMem{idd: idd_as_ID,
-			idd_size: p.Idd_size, index_type: p.Index_type}
+		db_index_repo[idd_as_ID] = IndexRepoRecordMem{IndexRepoRecordDB: p, idd: idd_as_ID}
 
 		// need a mapping from p.Id to db_index_repo
 		PK_index_repo[p.Id] = idd_as_ID
@@ -139,7 +138,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	// store results in db_index_repo
 	ptr_snapshot := db_aggregate.pk_snapshots
 	ptr_meta_dir := db_aggregate.pk_index_repo
-	db_meta_dir  := make(map[CompMetaDir]struct{},
+	db_meta_dir  := make(map[CompMetaDir]MetaDirRecordDB,
 		(*db_aggregate.table_counts)["index_repo"])
 	rows, err := db_conn.Queryx("SELECT * FROM meta_dir")
 
@@ -159,7 +158,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		if meta_blob == EMPTY_NODE_ID {
 			continue
 		}
-		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = struct{}{}
+		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = p
 	}
 	rows.Close()
 	db_aggregate.table_meta_dir = &db_meta_dir
@@ -199,10 +198,9 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		// and a composite index
 		meta_blob := (*ptr_index_repo)[p.Id_blob]
 		name := (*ptr_name)[p.Id_name]
-		mtime := strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
+		p.Mtime = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
 		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = (
-			IddFileRecordMem{size: p.Size, inode: p.Inode, mtime: mtime,
-				Type: p.Type, name: name})
+			IddFileRecordMem{IddFileRecordDB: p, name: name})
 	}
 	rows.Close()
 	db_aggregate.table_idd_file = &db_idd_file
@@ -218,7 +216,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
   name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
 	 */
 
-	db_names := make(map[string]struct{}, (*db_aggregate.table_counts)[table_name])
+	db_names := make(map[string]NamesRecordDB, (*db_aggregate.table_counts)[table_name])
 	PK_names := make(map[int]string, (*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
@@ -231,7 +229,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 			return err
 		}
 
-		db_names[p.Name] = struct{}{}
+		db_names[p.Name] = p
 		// back pointer to name
 		PK_names[p.Id] = p.Name
 	}
@@ -249,7 +247,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
 	 */
 
-	db_packfiles := make(map[restic.ID]struct{}, (*db_aggregate.table_counts)[table_name])
+	db_packfiles := make(map[restic.ID]PackfilesRecordDB, (*db_aggregate.table_counts)[table_name])
 	PK_packfiles := make(map[int]restic.ID, (*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
@@ -269,7 +267,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 			return err
 		}
 
-		db_packfiles[id] = struct{}{}
+		db_packfiles[id] = p
 		// back pointer to name
 		PK_packfiles[p.Id] = id
 	}
@@ -291,7 +289,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		id_fullpath INTEGER NOT NULL,   -- reference to names.id
 	 */
 	ptr_index_repo := db_aggregate.pk_index_repo
-	db_contents := make(map[CompContents]restic.ID,
+	db_contents := make(map[CompContents]ContentsRecordMem,
 		(*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
@@ -318,11 +316,8 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		}
 
 		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
-		db_contents[ix] = data_blob
+		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, id_data_idd: data_blob}
 	}
 	db_aggregate.table_contents = &db_contents
 	return nil
 }
-
-
-

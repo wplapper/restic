@@ -10,13 +10,14 @@ import (
 	"sort"
 	//"math"
 	//"fmt"
-  //"database/sql"
 
 	//argparse
 	"github.com/spf13/cobra"
 
   // sets
   "github.com/deckarep/golang-set"
+
+	// sqlx for sqlite3
   "github.com/jmoiron/sqlx"
 
 	// restic library
@@ -41,10 +42,12 @@ type SnapshotRecordDB struct {
 }
 
 type SnapshotRecordMem struct {
-	snap_time string
-	snap_host string
-	snap_fsys string
-	root restic.ID
+	// raw part
+	SnapshotRecordDB
+	snap_time 		string
+	snap_host 		string
+	snap_fsys 		string
+	root 					restic.ID
 }
 
 type IndexRepoRecordDB struct {
@@ -56,9 +59,14 @@ type IndexRepoRecordDB struct {
 }
 
 type IndexRepoRecordMem struct {
+	// raw part
+	IndexRepoRecordDB
 	idd 				restic.ID
 	idd_size 		int
 	index_type 	string
+	id_pack_id	int
+	packfile 		restic.ID
+
 }
 
 type NamesRecordDB struct {
@@ -66,28 +74,6 @@ type NamesRecordDB struct {
 	Name 			string
 	Name_type string
 }
-
-
-type DBAggregate struct {
-	repositoryData   *RepositoryData
-	db_conn 				 *sqlx.DB
-	table_counts 		 *map[string]int
-	table_snapshots  *map[string]SnapshotRecordMem
-	table_index_repo *map[restic.ID]IndexRepoRecordMem
-	table_meta_dir   *map[CompMetaDir]struct{}
-	table_packfiles  *map[restic.ID]struct{}
-	table_idd_file   *map[CompIddFile]IddFileRecordMem
-	table_names      *map[string]struct{}
-	table_contents   *map[CompContents]restic.ID
-	table_fullpath   *map[string]struct{}
-
-	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots     *map[int]string    // meta_dir
-	pk_index_repo    *map[int]restic.ID // meta_dir, idd_file, contents, fullpath2
-	pk_names         *map[int]string		// idd_file, fullpath2
-	pk_packfiles		 *map[int]restic.ID // index_repo
-}
-
 
 // database record mapping for sqlx.StructScan
 type MetaDirRecordDB struct {
@@ -102,15 +88,13 @@ type ContentsRecordDB struct {
 	Id_blob 		int		// map back to index_repo
 	Position 		int
 	Offset 			int
-	Id_fullpath int		// map back to names
+	Id_fullpath int		// deadbeef
 }
 
 type ContentsRecordMem struct {
+	// raw part
+	ContentsRecordDB
 	id_data_idd restic.ID
-	//Id_blob 		restic.ID
-	//position 		int
-	//offset 			int
-	id_fullpath int
 }
 
 type IddFileRecordDB struct {
@@ -125,17 +109,34 @@ type IddFileRecordDB struct {
 }
 
 type IddFileRecordMem struct {
-	 id_name	int
-	 size			int
-	 inode		int64
-	 mtime		string
-	 Type			string
+		// raw part
+	 IddFileRecordDB
+
 	 name			string
 }
 
 type PackfilesRecordDB struct {
 	Id 					int
 	Packfile_id string
+}
+
+type DBAggregate struct {
+	repositoryData   *RepositoryData
+	db_conn 				 *sqlx.DB
+	table_counts 		 *map[string]int                   // count of all tables
+	table_snapshots  *map[string]SnapshotRecordMem
+	table_index_repo *map[restic.ID]IndexRepoRecordMem
+	table_meta_dir   *map[CompMetaDir]MetaDirRecordDB
+	table_packfiles  *map[restic.ID]PackfilesRecordDB
+	table_idd_file   *map[CompIddFile]IddFileRecordMem
+	table_names      *map[string]NamesRecordDB
+	table_contents   *map[CompContents]ContentsRecordMem
+
+	// other tables reference these tables via FOREIGN KEY
+	pk_snapshots     *map[int]string    // meta_dir
+	pk_index_repo    *map[int]restic.ID // meta_dir, idd_file, contents
+	pk_names         *map[int]string		// idd_file
+	pk_packfiles		 *map[int]restic.ID // index_repo
 }
 
 // Composite indices for maps
@@ -166,7 +167,8 @@ var DATABASE_NAMES = map[string]string {
 
 	// onedrive
 	"rclone:onedrive:restic_backups":
-		"/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
+		//"/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
+		"/home/wplapper/restic/db/restic-onedrive.db",
 
 	// most
 	"/media/mount-points/Backup-ext4-Mate/restic_most":
@@ -284,13 +286,13 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 	var table_name string
 	var actions = []ActionStruct {
-		{table_name: "snapshots", routine:	ReadSnapshotTable},
-		{table_name: "index_repo", routine: ReadIndexRepoTable},
-		{table_name: "meta_dir", 	routine: 	ReadMetaDirTable},
-		{table_name: "names", 		routine:	ReadNamesTable},
-		{table_name: "idd_file", 	routine:  ReadIddFileTable},
-		{table_name: "packfiles", routine:  ReadPackfilesTable},
-		{table_name: "contents",  routine:  ReadContentsTable},		}
+		{table_name: "snapshots", 	routine:	ReadSnapshotTable},
+		{table_name: "index_repo", 	routine:  ReadIndexRepoTable},
+		{table_name: "meta_dir", 		routine: 	ReadMetaDirTable},
+		{table_name: "names", 			routine:	ReadNamesTable},
+		{table_name: "idd_file", 		routine:  ReadIddFileTable},
+		{table_name: "packfiles", 	routine:  ReadPackfilesTable},
+		{table_name: "contents",  	routine:  ReadContentsTable},}
 
 	for _, action := range actions {
 		Printf("reading table %s\n", action.table_name)
@@ -302,64 +304,77 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 
 	// compare snapshots
-	equal := check_db_snapshots(*db_aggregate.table_snapshots, &db_aggregate, repositoryData)
 	table_name = "snapshots"
+	Printf("checking table %s\n", table_name)
+	equal := check_db_snapshots(*db_aggregate.table_snapshots, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
 	// compare index_repo
-	equal = check_db_index_repo(*db_aggregate.table_index_repo, &db_aggregate, repositoryData)
 	table_name = "index_repo"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_index_repo(*db_aggregate.table_index_repo, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
 	// compare packfiles
-	equal = check_db_packfiles(*db_aggregate.table_packfiles, &db_aggregate, repositoryData)
 	table_name = "packfiles"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_packfiles(*db_aggregate.table_packfiles, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
 	// compare contents
-	equal = check_db_contents(*db_aggregate.table_contents, &db_aggregate, repositoryData)
 	table_name = "contents"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_contents(*db_aggregate.table_contents, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
-	equal = check_db_meta_dir(*db_aggregate.table_meta_dir, &db_aggregate, repositoryData)
+	// compare meta_dir
 	table_name = "meta_dir"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_meta_dir(*db_aggregate.table_meta_dir, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
-	equal = check_db_names(*db_aggregate.table_names, &db_aggregate, repositoryData)
+	// compare names
 	table_name = "names"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_names(*db_aggregate.table_names, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
 
-	equal = check_db_idd_file(*db_aggregate.table_idd_file, &db_aggregate, repositoryData)
+	// compare idd_file
 	table_name = "idd_file"
+	Printf("checking table %s\n", table_name)
+	equal = check_db_idd_file(*db_aggregate.table_idd_file, &db_aggregate, repositoryData)
 	if equal {
-		Printf("database %s compares equal\n", table_name)
+		Printf("table %s compares equal\n", table_name)
 	} else {
-		Printf("database %s mismatch!\n", table_name)
+		Printf("table %s mismatch!\n", table_name)
 	}
+
+	// cehck foreiggn key relationship
+	equal = CheckForeignKeys(&db_aggregate, repositoryData)
 	return nil
 }
 
@@ -378,6 +393,38 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// compare snapshot keys
 	equal := CompareKeys("snapshots", db_snapshots, mem_snapshots)
 	if !equal {
+		set_db_keys  := mapset.NewSet()
+		set_mem_keys := mapset.NewSet()
+		for key := range db_snapshots {
+			set_db_keys.Add(key)
+		}
+		for key := range mem_snapshots {
+			set_mem_keys.Add(key)
+		}
+
+		len_db  := set_db_keys.Cardinality()
+		len_mem := set_mem_keys.Cardinality()
+
+		var diff mapset.Set
+		var which string
+		if len_db > len_mem {
+			diff = set_db_keys.Difference(set_mem_keys)
+			which = "mem"
+		} else {
+			diff = set_mem_keys.Difference(set_db_keys)
+			which = "db "
+		}
+
+		count := 0
+		for comp_ix := range diff.Iter() {
+			fixed := comp_ix.(string)
+			Printf("key %s %s\n", which, fixed)
+			count++
+			if count > 100 {
+				break
+			}
+		}
+
 		return equal
 	}
 
@@ -385,8 +432,8 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	compare_equals := true
 	for db_key, db_value := range db_snapshots {
 		mem_value := mem_snapshots[db_key]
-		if db_value != mem_value {
-			Printf("db  %s %s %s %s\n", db_value.snap_time, db_value.snap_host, db_value.snap_fsys, db_value.root)
+		if db_value.Snap_host != mem_value.snap_host || db_value.Snap_time != mem_value.snap_time {
+			Printf("db  %s %s %s %s\n", db_value.Snap_time, db_value.Snap_host, db_value.Snap_fsys, db_value.root)
 			Printf("mem %s %s %s %s\n", mem_value.snap_time, mem_value.snap_host, mem_value.snap_fsys, mem_value.root)
 			compare_equals = false
 		}
@@ -420,16 +467,16 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	compare_equals := true
 	for db_key, db_value := range db_index_repo {
 		mem_value := mem_repo_index_map[db_key]
-		if db_value.idd_size != mem_value.idd_size || db_value.index_type != mem_value.index_type {
-			Printf("db  %7d %s\n", db_value.idd_size, db_value.idd_size)
-			Printf("mem %7d %s\n", mem_value.idd_size, mem_value.idd_size)
+		if db_value.Idd_size != mem_value.idd_size || db_value.Index_type != mem_value.index_type {
+			Printf("v db  %7d %s\n", db_value.Idd_size, db_value.Idd_size)
+			Printf("v mem %7d %s\n", mem_value.idd_size, mem_value.idd_size)
 			compare_equals = false
 		}
 	}
 	return compare_equals
 }
 
-func check_db_names(db_names map[string]struct{},
+func check_db_names(db_names map[string]NamesRecordDB,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 
 	// build a memory map of the names, whic come from three(3) different sources
@@ -483,7 +530,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return equal
 }
 
-func check_db_packfiles(db_packfiles map[restic.ID]struct{},
+func check_db_packfiles(db_packfiles map[restic.ID]PackfilesRecordDB,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
@@ -503,7 +550,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 // check_db_contents
-func check_db_contents(table_contents map[CompContents]restic.ID,
+func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
@@ -550,10 +597,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// loop over data_blobs
 	equal = true
 	count := 0
-	//Printf("Check for contents data mismatch\n")
 	for db_key, db_value := range table_contents {
 		mem_value := mem_contents_map[db_key]
-		if db_value != mem_value {
+		if db_value.id_data_idd != mem_value {
 			equal = false
 			count++
 		}
@@ -561,12 +607,11 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	if count == 0 {
 		return equal
 	}
-	//Printf("found %d contents data mismatches\n", count)
 
 	count = 0
 	for db_key, db_value := range table_contents {
 		mem_value := mem_contents_map[db_key]
-		if db_value != mem_value {
+		if db_value.id_data_idd != mem_value {
 			Printf("key db  %s %3d %3d\n", db_key.meta_blob.String()[:12], db_key.position,
 				db_key.offset)
 			Printf("  db  %v\n", db_value)
@@ -577,11 +622,10 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 			}
 		}
 	}
-
 	return equal
 }
 
-func check_db_meta_dir(db_meta_dir map[CompMetaDir]struct{},
+func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordDB,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "meta_dir"
 	// build a memory map of the packfiles
@@ -670,13 +714,11 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 			case "file", "dir":
 				mtime := meta.mtime.String()[:19]
 				ix := CompIddFile{meta_blob: meta_blob, position: position}
-				mem_idd_file_map[ix] = IddFileRecordMem{size: int(meta.size),
-					inode: int64(meta.inode), mtime: mtime,
-					Type: meta.Type[0:1], name: meta.name}
+				mem_idd_file_map[ix] = IddFileRecordMem{IddFileRecordDB: IddFileRecordDB{Size: int(meta.size),
+					Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1]}, name: meta.name}
 			}
 		}
 	}
-
 
 	// compare keys
 	equal := CompareKeys(table_name, db_idd_file, mem_idd_file_map)
@@ -687,19 +729,133 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// check contents of idd_file
 	for db_key, db_value := range db_idd_file {
 		mem_value := mem_idd_file_map[db_key]
-		if mem_value.inode != db_value.inode || mem_value.size != db_value.size ||
-			 mem_value.mtime != db_value.mtime || mem_value.Type != db_value.Type {
+		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
+			 mem_value.Mtime != db_value.Mtime || mem_value.Type != db_value.Type {
 			equal = false
 			Printf("key %s.%3d\n", db_key.meta_blob.String()[:12], db_key.position)
-			Printf("  db   %8d %7d %s %-4s %s\n", db_value.inode, db_value.size,
-				db_value.mtime, db_value.Type, db_value.name)
-			Printf("  mem  %8d %7d %s %-4s %s\n", mem_value.inode, mem_value.size,
-				mem_value.mtime, mem_value.Type, mem_value.name)
+			Printf("  db   %8d %7d %s %-4s\n", db_value.Inode, db_value.Size,
+				db_value.Mtime, db_value.Type)
+			Printf("  mem  %8d %7d %s %-4s %s\n", mem_value.Inode, mem_value.Size,
+				mem_value.Mtime, mem_value.Type, mem_value.name)
 		}
 	}
 	return equal
 }
 
+func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	/*
+	xref_table = (
+			(index_repo.id_pack_id, packfiles.id),
+			(meta_dir.id_snap_id,   snapshots.id),
+
+			(meta_dir.id_idd,      index_repo.id),
+			(idd_file.id_blob,     index_repo.id),
+			(contents.id_data_idd, index_repo.id),
+			(contents.id_blob,     index_repo.id),
+
+			(idd_file.id_name,     names.id),
+	)
+
+  // relationship 1: index_repo.id_pack_id, packfiles.id
+  make a set of packfiles.id (already a sort of set)
+  table_packfiles  is a *map[restic.ID]PackfilesRecordDB
+  table_index_repo *map[restic.ID]IndexRepoRecordMem and
+  IndexRepoRecordMem is a 	idd restic.ID, idd_size int,  index_type 	string
+  set_packfiles_keys := mapset.NewSet()
+
+  */
+  Printf("\n Check Foreign Key reationship\n")
+	all_good := true
+  ref_table_keys := mapset.NewSet()
+  for _, value := range *db_aggregate.table_packfiles {
+		ref_table_keys.Add(value.Id)
+	}
+
+	for key, value := range *db_aggregate.table_index_repo {
+		if !ref_table_keys.Contains(value.Id_pack_id) {
+			all_good = false
+			Printf("index_repo[%v].id_pack_id not in packfiles\n", key)
+		}
+	}
+	Printf("(index_repo.id_pack_id, packfiles.id) %v\n", all_good)
+
+	//		(meta_dir.id_snap_id,   snapshots.id)
+	all_good = true
+	ref_table_keys = mapset.NewSet()
+  for _, value := range *db_aggregate.table_snapshots {
+		ref_table_keys.Add(value.Id)
+	}
+
+	for key, value := range *db_aggregate.table_meta_dir {
+		if !ref_table_keys.Contains(value.Id_snap_id) {
+			all_good = false
+			Printf("meta_dir[%v].Id_snap_id not in table_snapshots\n", key)
+		}
+	}
+	Printf("(meta_dir.id_snap_id,   snapshots.id) %v\n", all_good)
+
+	all_good = true
+	ref_table_keys = mapset.NewSet()
+	//		(meta_dir.id_idd,      index_repo.id),
+	ref_table_keys = mapset.NewSet()
+  for _, value := range *db_aggregate.table_index_repo {
+		ref_table_keys.Add(value.Id)
+	}
+
+	for key, value := range *db_aggregate.table_meta_dir {
+		if !ref_table_keys.Contains(value.Id_idd) {
+			all_good = false
+			Printf("meta_dir[%v].Id_idd not in index_repo\n", key)
+		}
+	}
+	Printf("(meta_dir.id_idd,      index_repo.id) %v\n", all_good)
+
+	// (idd_file.id_blob,     index_repo.id)
+	all_good = true
+	for key, value := range *db_aggregate.table_idd_file {
+		if !ref_table_keys.Contains(value.Id_blob) {
+			all_good = false
+			Printf("idd_file[%v].id_blob not in index_repo\n", key)
+		}
+	}
+	Printf("(idd_file.id_blob,     index_repo.id) %v\n", all_good)
+
+	// (contents.id_data_idd, index_repo.id)
+	all_good = true
+	for key, value := range *db_aggregate.table_contents {
+		if !ref_table_keys.Contains(value.Id_data_idd) {
+			all_good = false
+			Printf("idd_file[%v].Id_data_idd not in index_repo\n", key)
+		}
+	}
+	Printf("(contents.id_data_idd, index_repo.id) %v\n", all_good)
+
+	// (contents.id_blob, index_repo.id)
+	all_good = true
+	for key, value := range *db_aggregate.table_contents {
+		if !ref_table_keys.Contains(value.Id_data_idd) {
+			all_good = false
+			Printf("idd_file[%v].Id_blob not in index_repo\n", key)
+		}
+	}
+	Printf("(contents.id_blob,     index_repo.id) %v\n", all_good)
+
+	// (idd_file.id_name,     names.id)
+	ref_table_keys = mapset.NewSet()
+	ref_table_keys = mapset.NewSet()
+  for _, value := range *db_aggregate.table_names {
+		ref_table_keys.Add(value.Id)
+	}
+
+	for key, value := range *db_aggregate.table_idd_file {
+		if !ref_table_keys.Contains(value.Id_name) {
+			all_good = false
+			Printf("meta_dir[%v].id_name not in index_repo\n", key)
+		}
+	}
+	Printf("(idd_file.id_name,     names.id) %v\n", all_good)
+	return all_good
+}
 
 // utility function - compare_keys
 func CompareKeys[K1 comparable, V1 any,
