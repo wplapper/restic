@@ -44,10 +44,7 @@ type SnapshotRecordDB struct {
 type SnapshotRecordMem struct {
 	// raw part
 	SnapshotRecordDB
-	snap_time 		string
-	snap_host 		string
-	snap_fsys 		string
-	root 					restic.ID
+	root 					*restic.ID
 }
 
 type IndexRepoRecordDB struct {
@@ -61,11 +58,8 @@ type IndexRepoRecordDB struct {
 type IndexRepoRecordMem struct {
 	// raw part
 	IndexRepoRecordDB
-	idd 				restic.ID
-	idd_size 		int
-	index_type 	string
-	id_pack_id	int
-	packfile 		restic.ID
+	idd 				*restic.ID
+	packfile 		*restic.ID
 
 }
 
@@ -94,7 +88,7 @@ type ContentsRecordDB struct {
 type ContentsRecordMem struct {
 	// raw part
 	ContentsRecordDB
-	id_data_idd restic.ID
+	id_data_idd *restic.ID
 }
 
 type IddFileRecordDB struct {
@@ -111,7 +105,6 @@ type IddFileRecordDB struct {
 type IddFileRecordMem struct {
 		// raw part
 	 IddFileRecordDB
-
 	 name			string
 }
 
@@ -127,7 +120,7 @@ type DBAggregate struct {
 	table_snapshots  *map[string]SnapshotRecordMem
 	table_index_repo *map[restic.ID]IndexRepoRecordMem
 	table_meta_dir   *map[CompMetaDir]MetaDirRecordDB
-	table_packfiles  *map[restic.ID]PackfilesRecordDB
+	table_packfiles  *map[*restic.ID]PackfilesRecordDB
 	table_idd_file   *map[CompIddFile]IddFileRecordMem
 	table_names      *map[string]NamesRecordDB
 	table_contents   *map[CompContents]ContentsRecordMem
@@ -136,7 +129,7 @@ type DBAggregate struct {
 	pk_snapshots     *map[int]string    // meta_dir
 	pk_index_repo    *map[int]restic.ID // meta_dir, idd_file, contents
 	pk_names         *map[int]string		// idd_file
-	pk_packfiles		 *map[int]restic.ID // index_repo
+	pk_packfiles		 *map[int]*restic.ID // index_repo
 }
 
 // Composite indices for maps
@@ -386,8 +379,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	snaps := repositoryData.snaps
 	mem_snapshots := make(map[string]SnapshotRecordMem, len(snaps))
 	for _, sn := range snaps {
-		mem_snapshots[sn.ID().Str()] = SnapshotRecordMem{snap_time: sn.Time.String()[:19],
-			snap_host: sn.Hostname, snap_fsys: sn.Paths[0], root: *sn.Tree}
+		mem_snapshots[sn.ID().Str()] = SnapshotRecordMem{SnapshotRecordDB :
+			SnapshotRecordDB{Snap_time: sn.Time.String()[:19],
+			Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0]}, root: sn.Tree}
 	}
 
 	// compare snapshot keys
@@ -432,9 +426,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	compare_equals := true
 	for db_key, db_value := range db_snapshots {
 		mem_value := mem_snapshots[db_key]
-		if db_value.Snap_host != mem_value.snap_host || db_value.Snap_time != mem_value.snap_time {
+		if db_value.Snap_host != mem_value.Snap_host || db_value.Snap_time != mem_value.Snap_time {
 			Printf("db  %s %s %s %s\n", db_value.Snap_time, db_value.Snap_host, db_value.Snap_fsys, db_value.root)
-			Printf("mem %s %s %s %s\n", mem_value.snap_time, mem_value.snap_host, mem_value.snap_fsys, mem_value.root)
+			Printf("mem %s %s %s %s\n", mem_value.Snap_time, mem_value.Snap_host, mem_value.Snap_fsys, mem_value.root)
 			compare_equals = false
 		}
 	}
@@ -454,8 +448,10 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 		} else {
 			index_type = "data"
 		}
-		mem_repo_index_map[id] = IndexRepoRecordMem{idd: id, idd_size: int(data.size),
-			index_type: index_type}
+		id_ptr := Ptr2ID(id, repositoryData)
+		mem_repo_index_map[id] = IndexRepoRecordMem{IndexRepoRecordDB:
+			IndexRepoRecordDB{Idd_size: int(data.size),
+			Index_type: index_type}, idd: id_ptr}
 	}
 
 	equal := CompareKeys("index_repo", db_index_repo, mem_repo_index_map)
@@ -467,9 +463,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	compare_equals := true
 	for db_key, db_value := range db_index_repo {
 		mem_value := mem_repo_index_map[db_key]
-		if db_value.Idd_size != mem_value.idd_size || db_value.Index_type != mem_value.index_type {
-			Printf("v db  %7d %s\n", db_value.Idd_size, db_value.Idd_size)
-			Printf("v mem %7d %s\n", mem_value.idd_size, mem_value.idd_size)
+		if db_value.Idd_size != mem_value.Idd_size || db_value.Index_type != mem_value.Index_type {
+			Printf("v db  %7d\n", db_value.Idd_size)
+			Printf("v mem %7d\n", mem_value.Idd_size)
 			compare_equals = false
 		}
 	}
@@ -530,7 +526,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return equal
 }
 
-func check_db_packfiles(db_packfiles map[restic.ID]PackfilesRecordDB,
+func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordDB,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
@@ -540,9 +536,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	}
 
 	// convert the set to a set of mem_packfiles_map
-	mem_packfiles_map := make(map[restic.ID]struct{}, pack_intIDs.Cardinality())
+	mem_packfiles_map := make(map[*restic.ID]struct{}, pack_intIDs.Cardinality())
 	for pack_intID := range pack_intIDs.Iter() {
-		mem_packfiles_map[repositoryData.index_to_blob[pack_intID.(restic.IntID)]] = struct{}{}
+		mem_packfiles_map[&(repositoryData.index_to_blob[pack_intID.(restic.IntID)])] = struct{}{}
 	}
 
 	// compare keys
@@ -555,13 +551,13 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
 
-	mem_contents_map := make(map[CompContents]restic.ID)
+	mem_contents_map := make(map[CompContents]*restic.ID)
   for meta_blob_int, file_list := range repositoryData.directory_map {
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
 			for offset, data_blob := range meta.content {
 				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
-				mem_contents_map[ix] = repositoryData.index_to_blob[int(data_blob)]
+				mem_contents_map[ix] = &(repositoryData.index_to_blob[int(data_blob)])
 			}
 		}
 	}

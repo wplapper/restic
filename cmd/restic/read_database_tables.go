@@ -78,7 +78,8 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	Snap_fsys 		string
 	Id_snap_root 	string
 		*/
-		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p, root: idd}
+		root_ptr := Ptr2ID(idd, db_aggregate.repositoryData)
+		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p, root: root_ptr}
 
 		// map snapshot PK to db_snapshots
 		PK_snapshots[p.Id] = p.Snap_id
@@ -121,7 +122,8 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			Printf("Parse failed for %s %v\n", p.Idd, err)
 			return err
 		}
-		db_index_repo[idd_as_ID] = IndexRepoRecordMem{IndexRepoRecordDB: p, idd: idd_as_ID}
+		id_ptr := Ptr2ID(idd_as_ID, db_aggregate.repositoryData)
+		db_index_repo[idd_as_ID] = IndexRepoRecordMem{IndexRepoRecordDB: p, idd: id_ptr}
 
 		// need a mapping from p.Id to db_index_repo
 		PK_index_repo[p.Id] = idd_as_ID
@@ -247,8 +249,8 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
 	 */
 
-	db_packfiles := make(map[restic.ID]PackfilesRecordDB, (*db_aggregate.table_counts)[table_name])
-	PK_packfiles := make(map[int]restic.ID, (*db_aggregate.table_counts)[table_name])
+	db_packfiles := make(map[*restic.ID]PackfilesRecordDB, (*db_aggregate.table_counts)[table_name])
+	PK_packfiles := make(map[int]*restic.ID, (*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
 	// collect rows
@@ -267,9 +269,10 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 			return err
 		}
 
-		db_packfiles[id] = p
+		id_ptr := Ptr2ID(id, db_aggregate.repositoryData)
+		db_packfiles[id_ptr] = p
 		// back pointer to name
-		PK_packfiles[p.Id] = id
+		PK_packfiles[p.Id] = id_ptr
 	}
 	rows.Close()
 	db_aggregate.table_packfiles = &db_packfiles
@@ -305,7 +308,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		// convert P.id_blob to meta_blob via back pointer in index_repo
 		meta_blob, ok := (*ptr_index_repo)[p.Id_blob]
 		if !ok {
-			Printf("missing id_blob ponter in index_repo for %v\n", p.Id_blob)
+			Printf("missing id_blob pointer in index_repo for %v\n", p.Id_blob)
 			return errors.New("index_repo incomplete meta")
 		}
 
@@ -316,8 +319,10 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		}
 
 		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
-		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, id_data_idd: data_blob}
+		id_ptr := Ptr2ID(data_blob, db_aggregate.repositoryData)
+		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, id_data_idd: id_ptr}
 	}
 	db_aggregate.table_contents = &db_contents
 	return nil
 }
+
