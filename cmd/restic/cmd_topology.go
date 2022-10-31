@@ -56,6 +56,11 @@ func runTopology(gopts GlobalOptions, args []string) error {
 	timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
 	//PrintMemUsage()
 
+	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
+	if err != nil {
+			return err
+	}
+
 	// step 4.1: manage Index Records
 	start = time.Now()
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {

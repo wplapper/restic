@@ -56,6 +56,11 @@ func runOverview(gopts GlobalOptions) error {
 			time.Now().Sub(start).Seconds())
 	}
 
+	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
+	if err != nil {
+			return err
+	}
+
 	// step 2.1: manage Index Records
 	start = time.Now()
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
@@ -120,8 +125,9 @@ func runOverview(gopts GlobalOptions) error {
 		count_file_sets := mapset.NewSet()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
-			usedIntBlobs.Merge(repositoryData.meta_dir_map[*sn.ID()])
-			for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+			id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+			usedIntBlobs.Merge(repositoryData.meta_dir_map[id_ptr])
+			for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 				for _, meta := range repositoryData.directory_map[meta_blob] {
 					if meta.Type == "file" {
 						for _, cont := range meta.content {
@@ -157,8 +163,9 @@ func runOverview(gopts GlobalOptions) error {
 	count_file_sets := mapset.NewSet()
 	for _, sn := range repositoryData.snaps {
 		// step trough the list of meta_blobs and collect data
-		usedIntBlobs.Merge(repositoryData.meta_dir_map[*sn.ID()])
-		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+		usedIntBlobs.Merge(repositoryData.meta_dir_map[id_ptr])
+		for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type == "file" {
 					for _, cont := range meta.content {

@@ -176,8 +176,9 @@ repositoryData *RepositoryData, detail bool) error {
 	// step 1: find all meta- and data-blobs in given 'selected' snapshot
 	used_blobs := restic.NewIntSet()
 	for _, sn := range selected {
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
 		// get the meta blobs
-		data, ok := repositoryData.meta_dir_map[*sn.ID()]
+		data, ok := repositoryData.meta_dir_map[id_ptr]
 		if !ok {
 			Printf("not in repo %v\n", sn.ID())
 			return  nil
@@ -185,7 +186,7 @@ repositoryData *RepositoryData, detail bool) error {
 
 		used_blobs.Merge(data)
 		// get the data blobs
-		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+		for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				for _, cont := range meta.content {
 						used_blobs.Insert(cont)
@@ -212,10 +213,11 @@ repositoryData *RepositoryData, detail bool) error {
 
 	all_other_blobs := restic.NewIntSet()
 	for _, sn := range rest_tree_list {
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
 		// get the meta blobs
-		all_other_blobs.Merge(repositoryData.meta_dir_map[*sn.ID()])
+		all_other_blobs.Merge(repositoryData.meta_dir_map[id_ptr])
 		// get the data blobs
-		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+		for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type != "file" {
 					continue

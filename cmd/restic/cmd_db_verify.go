@@ -45,6 +45,7 @@ type SnapshotRecordMem struct {
 	// raw part
 	SnapshotRecordDB
 	root 					*restic.ID
+	status				string
 }
 
 type IndexRepoRecordDB struct {
@@ -60,7 +61,7 @@ type IndexRepoRecordMem struct {
 	IndexRepoRecordDB
 	idd 				*restic.ID
 	packfile 		*restic.ID
-
+	status			string
 }
 
 type NamesRecordDB struct {
@@ -69,11 +70,21 @@ type NamesRecordDB struct {
 	Name_type string
 }
 
+type NamesRecordMem struct {
+	NamesRecordDB
+	status string
+}
+
 // database record mapping for sqlx.StructScan
 type MetaDirRecordDB struct {
 	Id 				 	int
 	Id_snap_id 	int 	// map back to snapshots
 	Id_idd 		 	int		// map back to index_repo
+}
+
+type MetaDirRecordMem struct {
+	MetaDirRecordDB
+	status string
 }
 
 type ContentsRecordDB struct {
@@ -89,6 +100,7 @@ type ContentsRecordMem struct {
 	// raw part
 	ContentsRecordDB
 	id_data_idd *restic.ID
+	status			string
 }
 
 type IddFileRecordDB struct {
@@ -106,6 +118,7 @@ type IddFileRecordMem struct {
 		// raw part
 	 IddFileRecordDB
 	 name			string
+	 status		string
 }
 
 type PackfilesRecordDB struct {
@@ -113,39 +126,45 @@ type PackfilesRecordDB struct {
 	Packfile_id string
 }
 
+type PackfilesRecordMem struct {
+	PackfilesRecordDB
+	 status		string
+}
+
 type DBAggregate struct {
 	repositoryData   *RepositoryData
 	db_conn 				 *sqlx.DB
 	table_counts 		 *map[string]int                   // count of all tables
 	table_snapshots  *map[string]SnapshotRecordMem
-	table_index_repo *map[restic.ID]IndexRepoRecordMem
-	table_meta_dir   *map[CompMetaDir]MetaDirRecordDB
-	table_packfiles  *map[*restic.ID]PackfilesRecordDB
+	table_index_repo *map[*restic.ID]IndexRepoRecordMem
+	table_meta_dir   *map[CompMetaDir]MetaDirRecordMem
+	table_packfiles  *map[*restic.ID]PackfilesRecordMem
 	table_idd_file   *map[CompIddFile]IddFileRecordMem
-	table_names      *map[string]NamesRecordDB
+	table_names      *map[string]NamesRecordMem
 	table_contents   *map[CompContents]ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots     *map[int]string    // meta_dir
-	pk_index_repo    *map[int]restic.ID // meta_dir, idd_file, contents
-	pk_names         *map[int]string		// idd_file
-	pk_packfiles		 *map[int]*restic.ID // index_repo
+	pk_snapshots     *map[int]string    	// meta_dir
+	pk_index_repo    *map[int]*restic.ID 	// meta_dir, idd_file, contents
+	pk_names         *map[int]string			// idd_file
+	pk_packfiles		 *map[int]*restic.ID 	// index_repo
 }
+var db_aggregate DBAggregate
 
 // Composite indices for maps
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
 	snap_id   string    // consider pointers
-	meta_blob restic.ID
+	meta_blob *restic.ID
 }
 
 type CompIddFile struct {
-	meta_blob restic.ID
+	meta_blob *restic.ID
 	position  int
 }
 
 type CompContents struct {
-	meta_blob restic.ID
+	meta_blob *restic.ID
 	position  int
 	offset    int
 }
@@ -205,7 +224,6 @@ func init() {
 
 func runDBVerify(gopts GlobalOptions, args []string) error {
 
-	var db_aggregate DBAggregate
 	// step 0: setup global stuff
 	start := time.Now()
 	_ = start
@@ -221,6 +239,11 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 	Printf("Repository is %s\n", gopts.Repo)
 	//timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
+
+	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
+	if err != nil {
+			return err
+	}
 
 	// step 2: manage Index Records
 	start = time.Now()
@@ -375,14 +398,7 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// compare snapshots from repo with snapshots stored in the database
 	// step 1: build memory table to allow the comparison
-
-	snaps := repositoryData.snaps
-	mem_snapshots := make(map[string]SnapshotRecordMem, len(snaps))
-	for _, sn := range snaps {
-		mem_snapshots[sn.ID().Str()] = SnapshotRecordMem{SnapshotRecordDB :
-			SnapshotRecordDB{Snap_time: sn.Time.String()[:19],
-			Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0]}, root: sn.Tree}
-	}
+	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData)
 
 	// compare snapshot keys
 	equal := CompareKeys("snapshots", db_snapshots, mem_snapshots)
@@ -418,7 +434,6 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 				break
 			}
 		}
-
 		return equal
 	}
 
@@ -435,11 +450,12 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return compare_equals
 }
 
-func check_db_index_repo(db_index_repo map[restic.ID]IndexRepoRecordMem,
+func check_db_index_repo(db_index_repo map[*restic.ID]IndexRepoRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 
 	// build memory table for comparison
-	mem_repo_index_map := make(map[restic.ID]IndexRepoRecordMem,
+	/*
+	mem_repo_index_map := make(map[*restic.ID]IndexRepoRecordMem,
 		(*db_aggregate.table_counts)["index_repo"])
 	for id, data := range repositoryData.index_handle {
 		var index_type string
@@ -449,10 +465,11 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 			index_type = "data"
 		}
 		id_ptr := Ptr2ID(id, repositoryData)
-		mem_repo_index_map[id] = IndexRepoRecordMem{IndexRepoRecordDB:
+		mem_repo_index_map[id_ptr] = IndexRepoRecordMem{IndexRepoRecordDB:
 			IndexRepoRecordDB{Idd_size: int(data.size),
 			Index_type: index_type}, idd: id_ptr}
-	}
+	}*/
+	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData)
 
 	equal := CompareKeys("index_repo", db_index_repo, mem_repo_index_map)
 	if !equal {
@@ -472,21 +489,11 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return compare_equals
 }
 
-func check_db_names(db_names map[string]NamesRecordDB,
+func check_db_names(db_names map[string]NamesRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
-
 	// build a memory map of the names, whic come from three(3) different sources
-	mem_names_map := make(map[string]struct{})
 	table_name := "names"
-	// source 1: idd_file == directory_map
-  for _, file_list := range repositoryData.directory_map {
-		for _, meta := range file_list {
-			switch meta.Type {
-			case "file", "dir":
-				mem_names_map[meta.name] = struct{}{}
-			}
-		}
-	}
+	mem_names_map := CreateMemNames(db_aggregate, repositoryData)
 	equal := CompareKeys(table_name, db_names, mem_names_map)
 	if equal {
 		return equal
@@ -526,20 +533,11 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return equal
 }
 
-func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordDB,
+func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
-	pack_intIDs := mapset.NewSet()
-	for _, handle := range repositoryData.index_handle {
-		pack_intIDs.Add(handle.pack_index)
-	}
-
-	// convert the set to a set of mem_packfiles_map
-	mem_packfiles_map := make(map[*restic.ID]struct{}, pack_intIDs.Cardinality())
-	for pack_intID := range pack_intIDs.Iter() {
-		mem_packfiles_map[&(repositoryData.index_to_blob[pack_intID.(restic.IntID)])] = struct{}{}
-	}
+	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData)
 
 	// compare keys
 	return CompareKeys("packfiles", db_packfiles, mem_packfiles_map)
@@ -550,17 +548,7 @@ func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
-
-	mem_contents_map := make(map[CompContents]*restic.ID)
-  for meta_blob_int, file_list := range repositoryData.directory_map {
-		meta_blob := repositoryData.index_to_blob[meta_blob_int]
-		for position, meta := range file_list {
-			for offset, data_blob := range meta.content {
-				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
-				mem_contents_map[ix] = &(repositoryData.index_to_blob[int(data_blob)])
-			}
-		}
-	}
+	mem_contents_map := CreateMemContents(db_aggregate, repositoryData)
 
 	// compare keys
 	equal := CompareKeys("contents", table_contents, table_contents)
@@ -621,20 +609,9 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	return equal
 }
 
-func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordDB,
+func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
-	//table_name := "meta_dir"
-	// build a memory map of the packfiles
-
-	// convert the set to a set of mem_packfiles_map
-	mem_meta_dir_map := make(map[CompMetaDir]struct{})
-	for snap_id, blob_set := range repositoryData.meta_dir_map {
-		for meta_blob := range blob_set {
-			ix := CompMetaDir{snap_id: snap_id.Str(),
-				meta_blob: repositoryData.index_to_blob[meta_blob]}
-			mem_meta_dir_map[ix] = struct{}{}
-		}
-	}
+	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData)
 
 	// compare keys
 	equal := CompareKeys("meta_dir", db_meta_dir, mem_meta_dir_map)
@@ -665,7 +642,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 		count_empty_node := 0
 		for comp_ix := range diff.Iter() {
 			fixed := comp_ix.(CompMetaDir)
-			if fixed.meta_blob == EMPTY_NODE_ID {
+			if fixed.meta_blob == PTR_EMPTY_NODE_ID {
 				count_empty_node++
 				continue
 			}
@@ -690,31 +667,7 @@ func check_db_idd_file(db_idd_file map[CompIddFile]IddFileRecordMem,
 db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	table_name := "idd_file"
 	// build a memory map of the packfiles
-
-	// convert the set to a set of mem_packfiles_map
-	mem_idd_file_map := make(map[CompIddFile]IddFileRecordMem)
-	// directory_map is map[restic.IntID][]BlobFile2
-	// CompIddFile is meta_blob restic.ID, position  int
-	/*
-	type IddFileRecordMem struct {
-		 id_name	int
-		 size			int
-		 inode		int64
-		 mtime		string
-		 Type			string
-	}*/
-	for meta_blob_int, file_list := range repositoryData.directory_map {
-		meta_blob := repositoryData.index_to_blob[meta_blob_int]
-		for position, meta := range file_list {
-			switch meta.Type {
-			case "file", "dir":
-				mtime := meta.mtime.String()[:19]
-				ix := CompIddFile{meta_blob: meta_blob, position: position}
-				mem_idd_file_map[ix] = IddFileRecordMem{IddFileRecordDB: IddFileRecordDB{Size: int(meta.size),
-					Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1]}, name: meta.name}
-			}
-		}
-	}
+	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData)
 
 	// compare keys
 	equal := CompareKeys(table_name, db_idd_file, mem_idd_file_map)
@@ -755,7 +708,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
   // relationship 1: index_repo.id_pack_id, packfiles.id
   make a set of packfiles.id (already a sort of set)
   table_packfiles  is a *map[restic.ID]PackfilesRecordDB
-  table_index_repo *map[restic.ID]IndexRepoRecordMem and
+  table_index_repo *map[*restic.ID]IndexRepoRecordMem and
   IndexRepoRecordMem is a 	idd restic.ID, idd_size int,  index_type 	string
   set_packfiles_keys := mapset.NewSet()
 

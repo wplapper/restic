@@ -13,8 +13,9 @@ import (
 // example: list the directory names of the first snapshot
 func service1 (repositoryData *RepositoryData) {
 	sn := repositoryData.snaps[0]
+	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
 	directory_names := make([]string, 0, len(repositoryData.fullpath))
-	for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+	for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 		directory_names = append(directory_names, repositoryData.fullpath[meta_blob])
 	}
 
@@ -34,13 +35,14 @@ type dirname_and_blob struct {
 // example: list the directory names and the names of the files
 func service3 (repositoryData *RepositoryData) {
 	sn := repositoryData.snaps[0]
+	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
 	Printf("snap_ID %s = %s:%s at %s\n", sn.ID().Str(),
 		sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
 
 	directory_names := make([]dirname_and_blob, 0, len(repositoryData.fullpath))
 	Printf("fullpath has  %d entries\n", len(repositoryData.fullpath))
-	Printf("this snap has %d entries\n", len(repositoryData.meta_dir_map[*sn.ID()]))
-	for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+	Printf("this snap has %d entries\n", len(repositoryData.meta_dir_map[id_ptr]))
+	for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
 			continue
 		}
@@ -78,14 +80,15 @@ func service3 (repositoryData *RepositoryData) {
 func service2 (repositoryData *RepositoryData) {
 	Printf("\n*** service 2 ***\n")
 	sn1 := repositoryData.snaps[0]
+	id_ptr := Ptr2ID(*sn1.ID(), repositoryData)
 	Printf("snap_ID %s = %s:%s at %s\n", sn1.ID().Str(),
 		sn1.Hostname, sn1.Paths[0], sn1.Time.String()[:19])
 	start := time.Now()
 
 	// reference to all meta_blobs, we need a spanking new InstSet for merging!
 	collect_blobs := restic.NewIntSet()
-	collect_blobs.Merge(repositoryData.meta_dir_map[*sn1.ID()])
-	for meta_blob := range repositoryData.meta_dir_map[*sn1.ID()] {
+	collect_blobs.Merge(repositoryData.meta_dir_map[id_ptr])
+	for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 		for _, meta := range repositoryData.directory_map[meta_blob] {
 			for _, cont := range meta.content {
 				collect_blobs.Insert(cont)
@@ -105,8 +108,9 @@ func service2 (repositoryData *RepositoryData) {
 	// loop over all_other_snaps
 	all_other_blobs := restic.NewIntSet()
 	for _, sn := range all_other_snaps {
-		all_other_blobs.Merge(repositoryData.meta_dir_map[*sn.ID()])
-		for meta_blob := range repositoryData.meta_dir_map[*sn.ID()] {
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+		all_other_blobs.Merge(repositoryData.meta_dir_map[id_ptr])
+		for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type == "file" {
 					for _, cont := range meta.content {

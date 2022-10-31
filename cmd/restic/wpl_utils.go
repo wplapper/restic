@@ -17,16 +17,14 @@ import (
 	"github.com/gammazero/deque"
 )
 
-type SortByPack struct {
+/*type SortByPack struct {
 	pack_ID restic.ID
 	offset uint
 	blob_ID restic.ID
-}
+}*/
 
 // static variable
 var gOptions GlobalOptions
-//var sort_by_pack []SortByPack
-//var old_pack_ID restic.ID
 
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
@@ -60,7 +58,7 @@ type RepositoryData struct {
 
 	// need to be restic.ID
 	// all tree blobs of a snapshot
-	meta_dir_map  map[restic.ID]restic.IntSet
+	meta_dir_map  map[*restic.ID]restic.IntSet
 	// all tree and data blobs from the index
 	index_handle	map[restic.ID]Index_Handle
 	// map blob to an IntID number
@@ -70,6 +68,7 @@ type RepositoryData struct {
 }
 
 var EMPTY_NODE_ID restic.ID
+var PTR_EMPTY_NODE_ID *restic.ID
 var EMPTY_NODE_ID_TRANSLATED restic.IntID
 
 func init_repositoryData() *RepositoryData {
@@ -80,7 +79,7 @@ func init_repositoryData() *RepositoryData {
 	repositoryData.names         = make(map[restic.IntID]string)
 	repositoryData.children			 = make(map[restic.IntID]restic.IntSet)
 
-	repositoryData.meta_dir_map  = make(map[restic.ID]restic.IntSet)
+	repositoryData.meta_dir_map  = make(map[*restic.ID]restic.IntSet)
 	repositoryData.index_handle	 = make(map[restic.ID]Index_Handle)
 	repositoryData.blob_to_index = make(map[restic.ID]restic.IntID)
 	repositoryData.index_to_blob = []restic.ID{}
@@ -111,6 +110,7 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic
 
 func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
+	//Printf("HandleIndexRecords start\n")
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
 	//start := time.Now()
@@ -129,6 +129,7 @@ repositoryData *RepositoryData) error {
 // It also correlates bobs and pack IDs
 func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) {
+	//Printf("Convert_to_IntSet start\n")
 	pos := restic.IntID(0)
 
 	//start := time.Now()
@@ -139,7 +140,7 @@ repositoryData *RepositoryData) {
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
 		pos++
 
-		// add packID to 'blob_to_index' and 'index_to_blob'
+		// add packID from packflies to 'blob_to_index' and 'index_to_blob'
 		_, ok := repositoryData.blob_to_index[blob.PackID]
 		if !ok { // new PackID found
 			repositoryData.blob_to_index[blob.PackID] = pos
@@ -152,6 +153,27 @@ repositoryData *RepositoryData) {
 			pack_index: repositoryData.blob_to_index[blob.PackID],
 			blob_index: repositoryData.blob_to_index[blob.ID]}
 	}
+
+	// add the *restic.IDs from the snapshots to this list
+	for _, sn := range repositoryData.snaps {
+		snap := *sn.ID()
+		_, ok := repositoryData.blob_to_index[snap]
+		if !ok {
+			repositoryData.blob_to_index[snap] = pos
+			repositoryData.index_to_blob = append(repositoryData.index_to_blob, snap)
+			pos++
+		}
+	}
+
+	// we need to set PTR_EMPTY_NODE_ID and EMPTY_NODE_ID_TRANSLATED
+	ix, ok := repositoryData.blob_to_index[EMPTY_NODE_ID]
+	if !ok {
+		panic("No EMPTY_NODE_ID!")
+	}
+
+	PTR_EMPTY_NODE_ID = &(repositoryData.index_to_blob[ix])
+	EMPTY_NODE_ID_TRANSLATED = repositoryData.blob_to_index[EMPTY_NODE_ID]
+
 	// about .5 seconds
 	//timeMessage("  %-30s %10.1f seconds\n", "building repositoryData.index_handle, blob_to_index, index_to_blob",
 	//	time.Now().Sub(start).Seconds())
@@ -160,6 +182,7 @@ repositoryData *RepositoryData) {
 // FindChildren steps through the directory_map and finds subdirectories
 // these get attached their (current) parent
 func FindChildren (repositoryData *RepositoryData) {
+	//Printf("FindChildren start\n")
 	for parent, idd_file_list := range repositoryData.directory_map {
 		for _,node := range idd_file_list {
 			if node.Type == "dir" {
@@ -178,6 +201,7 @@ func FindChildren (repositoryData *RepositoryData) {
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
 func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
+	//Printf("topology_structure start\n")
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
 
@@ -217,20 +241,19 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 	seen.Delete(EMPTY_NODE_ID_TRANSLATED)
 	// at the end of the loop, 'seen' contains all directories
 	// referenced in the snapshot
-	repositoryData.meta_dir_map[*sn.ID()] = seen
+	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+	repositoryData.meta_dir_map[id_ptr] = seen
 }
 
 // this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 repositoryData *RepositoryData) error {
+	var err error
 	// step 1: gather snapshots
 	start := time.Now()
 	_ = start
-	snaps, err := GatherAllSnapshots(gopts, repo);
-	if err != nil {
-			return err
-	}
-	repositoryData.snaps = snaps
+
+	//repositoryData.snaps = snaps
 	//timeMessage("  %-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
 
 	// build a slice of all meta_blob IDs in the repo
@@ -443,8 +466,10 @@ func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
 		return &(repositoryData.index_to_blob[ix])
 	} else {
 		// allocate new slot
+		Printf("Ptr2ID.allocate new %s\n", id.String()[:12])
 		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
-		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob))])
+		// be aware: length just changed during last 'append'
+		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob) - 1)])
 	}
 }

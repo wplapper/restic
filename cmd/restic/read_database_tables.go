@@ -12,6 +12,7 @@ import (
 	"github.com/wplapper/restic/library/restic"
 )
 
+
 // do a SELECT count(*) on all tables
 func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts *map[string]int) error {
 	// get table names
@@ -36,6 +37,10 @@ func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts *map[string]int) erro
 	}
 	return nil
 }
+
+/* The reading of these SQLite tables could be done in overlapping mode,
+ * provided that the database driver does not get confused
+ */
 
 // load the database rows for table snapshots into memory
 func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
@@ -79,7 +84,8 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	Id_snap_root 	string
 		*/
 		root_ptr := Ptr2ID(idd, db_aggregate.repositoryData)
-		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p, root: root_ptr}
+		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p,
+			root: root_ptr, status: "db"}
 
 		// map snapshot PK to db_snapshots
 		PK_snapshots[p.Id] = p.Snap_id
@@ -94,9 +100,9 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	db_index_repo := make(map[restic.ID]IndexRepoRecordMem,
+	db_index_repo := make(map[*restic.ID]IndexRepoRecordMem,
 		(*db_aggregate.table_counts)["index_repo"])
-	PK_index_repo := make(map[int]restic.ID,
+	PK_index_repo := make(map[int]*restic.ID,
 		(*db_aggregate.table_counts)["index_repo"])
 	rows, err := db_conn.Queryx("SELECT * FROM index_repo")
 
@@ -123,10 +129,11 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			return err
 		}
 		id_ptr := Ptr2ID(idd_as_ID, db_aggregate.repositoryData)
-		db_index_repo[idd_as_ID] = IndexRepoRecordMem{IndexRepoRecordDB: p, idd: id_ptr}
+		db_index_repo[id_ptr] = IndexRepoRecordMem{IndexRepoRecordDB: p,
+			idd: id_ptr, status: "db"}
 
 		// need a mapping from p.Id to db_index_repo
-		PK_index_repo[p.Id] = idd_as_ID
+		PK_index_repo[p.Id] = id_ptr
 	}
 	rows.Close()
 	db_aggregate.table_index_repo = &db_index_repo
@@ -138,9 +145,9 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	ptr_snapshot := db_aggregate.pk_snapshots
-	ptr_meta_dir := db_aggregate.pk_index_repo
-	db_meta_dir  := make(map[CompMetaDir]MetaDirRecordDB,
+	ptr_snapshot 		:= db_aggregate.pk_snapshots
+	ptr_index_repo	:= db_aggregate.pk_index_repo
+	db_meta_dir  		:= make(map[CompMetaDir]MetaDirRecordMem,
 		(*db_aggregate.table_counts)["index_repo"])
 	rows, err := db_conn.Queryx("SELECT * FROM meta_dir")
 
@@ -156,11 +163,12 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
 		snap_id 	:= (*ptr_snapshot)[p.Id_snap_id]
-		meta_blob := (*ptr_meta_dir)[p.Id_idd]
-		if meta_blob == EMPTY_NODE_ID {
+		meta_blob := (*ptr_index_repo)[p.Id_idd]
+		if meta_blob == PTR_EMPTY_NODE_ID {
 			continue
 		}
-		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = p
+		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = MetaDirRecordMem{
+			MetaDirRecordDB: p, status: "db"}
 	}
 	rows.Close()
 	db_aggregate.table_meta_dir = &db_meta_dir
@@ -198,11 +206,12 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
+		// meta_blob is a *restic.ID
 		meta_blob := (*ptr_index_repo)[p.Id_blob]
 		name := (*ptr_name)[p.Id_name]
 		p.Mtime = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
 		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = (
-			IddFileRecordMem{IddFileRecordDB: p, name: name})
+			IddFileRecordMem{IddFileRecordDB: p, name: name, status: "db"})
 	}
 	rows.Close()
 	db_aggregate.table_idd_file = &db_idd_file
@@ -218,7 +227,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
   name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
 	 */
 
-	db_names := make(map[string]NamesRecordDB, (*db_aggregate.table_counts)[table_name])
+	db_names := make(map[string]NamesRecordMem, (*db_aggregate.table_counts)[table_name])
 	PK_names := make(map[int]string, (*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
@@ -231,7 +240,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 			return err
 		}
 
-		db_names[p.Name] = p
+		db_names[p.Name] = NamesRecordMem{NamesRecordDB: p, status: "db"}
 		// back pointer to name
 		PK_names[p.Id] = p.Name
 	}
@@ -249,7 +258,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
 	 */
 
-	db_packfiles := make(map[*restic.ID]PackfilesRecordDB, (*db_aggregate.table_counts)[table_name])
+	db_packfiles := make(map[*restic.ID]PackfilesRecordMem, (*db_aggregate.table_counts)[table_name])
 	PK_packfiles := make(map[int]*restic.ID, (*db_aggregate.table_counts)[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
@@ -270,7 +279,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		}
 
 		id_ptr := Ptr2ID(id, db_aggregate.repositoryData)
-		db_packfiles[id_ptr] = p
+		db_packfiles[id_ptr] = PackfilesRecordMem{PackfilesRecordDB: p, status: "db"}
 		// back pointer to name
 		PK_packfiles[p.Id] = id_ptr
 	}
@@ -319,8 +328,9 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		}
 
 		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
-		id_ptr := Ptr2ID(data_blob, db_aggregate.repositoryData)
-		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, id_data_idd: id_ptr}
+		//id_ptr := Ptr2ID(data_blob, db_aggregate.repositoryData)
+		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p,
+			id_data_idd: data_blob, status: "db"}
 	}
 	db_aggregate.table_contents = &db_contents
 	return nil
