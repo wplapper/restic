@@ -238,7 +238,7 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 		}
 	}
 	// remove reference to the empty directory node
-	seen.Delete(EMPTY_NODE_ID_TRANSLATED)
+	//seen.Delete(EMPTY_NODE_ID_TRANSLATED)
 	// at the end of the loop, 'seen' contains all directories
 	// referenced in the snapshot
 	id_ptr := Ptr2ID(*sn.ID(), repositoryData)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	// sqlx for SQLite3
+  "database/sql"
 	"github.com/jmoiron/sqlx"
 
 	// library
@@ -38,6 +39,52 @@ func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts *map[string]int) erro
 	return nil
 }
 
+type TableInfo struct {
+	// cid|name|type|notnull|dflt_value|pk
+	Cid int
+	Name string
+	Type string
+	Notnull int
+	Dflt_value sql.NullString
+	PK int
+}
+
+func GetColumnNames(db_conn *sqlx.DB) (*map[string][]string, error) {
+/*
+            cursor = self.connection.execute(f"SELECT * FROM {tbl_name}")
+            names  = [n[0] for n in cursor.description]
+ */
+	table_column_names := make(map[string][]string)
+  sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+  table_names := make([]string, 0)
+  err := db_conn.Select(&table_names, sql)
+  if err != nil {
+    Printf("Get failed err %v\n", err)
+    return nil, err
+  }
+
+	var result TableInfo
+  for _, tbl_name := range table_names {
+		column_names := make([]string, 0)
+		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('" + tbl_name + "')")
+		if err != nil {
+			Printf("PRAGMA error is %v\n", err)
+			return nil, err
+		}
+
+		for rows.Next() {
+			err = rows.StructScan(&result)
+			if err != nil {
+				Printf("db_verify: snapshots query failed %v\n", err)
+				return nil, err
+			}
+			//Printf("entry %2d %s\n", result.Cid, result.Name)
+			column_names = append(column_names, result.Name)
+		}
+		table_column_names[tbl_name] = column_names
+	}
+	return &table_column_names, nil
+}
 /* The reading of these SQLite tables could be done in overlapping mode,
  * provided that the database driver does not get confused
  */
@@ -164,9 +211,6 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		// and a composite index
 		snap_id 	:= (*ptr_snapshot)[p.Id_snap_id]
 		meta_blob := (*ptr_index_repo)[p.Id_idd]
-		if meta_blob == PTR_EMPTY_NODE_ID {
-			continue
-		}
 		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = MetaDirRecordMem{
 			MetaDirRecordDB: p, status: "db"}
 	}

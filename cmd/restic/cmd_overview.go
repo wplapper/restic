@@ -43,7 +43,6 @@ func runOverview(gopts GlobalOptions) error {
 
 	// step 1: open repository
 	repositoryData := init_repositoryData()
-	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	gOptions = gopts
 
 	start := time.Now()

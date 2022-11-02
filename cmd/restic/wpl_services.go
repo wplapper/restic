@@ -43,9 +43,9 @@ func service3 (repositoryData *RepositoryData) {
 	Printf("fullpath has  %d entries\n", len(repositoryData.fullpath))
 	Printf("this snap has %d entries\n", len(repositoryData.meta_dir_map[id_ptr]))
 	for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
-		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
-			continue
-		}
+		//if meta_blob == EMPTY_NODE_ID_TRANSLATED {
+		//	continue
+		//}
 		if repositoryData.fullpath[meta_blob] == "" {
 			continue
 		}

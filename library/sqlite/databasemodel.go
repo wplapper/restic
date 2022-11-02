@@ -10,7 +10,7 @@ import (
   "github.com/deckarep/golang-set"
 
   // sqlite3 interface
-  //"database/sql"
+  "database/sql"
   _ "github.com/mattn/go-sqlite3"
   "github.com/jmoiron/sqlx"
 )
@@ -174,18 +174,18 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
   db_descriptor = &DBDescriptor{DB_ptr: db, verbose: verbose, echo: echo}
 
   sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table' ORDER BY tbl_name"
-  Table_names := make([]string, 0)
-  err = db.Select(&Table_names, sql)
+  db_descriptor.table_names = make([]string, 0)
+  err = db.Select(&db_descriptor.table_names, sql)
   if err != nil {
     Printf("Get failed err %v\n", err)
     return nil, err
   }
 
-  table_names_map := make(map[string]struct{}, len(Table_names))
-  for _, table_name := range Table_names {
-    table_names_map[table_name] = struct{}{}
+  db_descriptor.table_names_map = make(map[string]struct{},
+    len(db_descriptor.table_names))
+  for _, table_name := range db_descriptor.table_names {
+    db_descriptor.table_names_map[table_name] = struct{}{}
   }
-  db_descriptor.table_names_map = table_names_map
 
   //Printf("sqlite: calling init_tables\n")
   err = init_tables()
@@ -307,3 +307,31 @@ func build_index() error {
   }
   return nil
 }
+
+var tables_high_id map[string]int
+func Get_all_high_ids() error {
+  var max sql.NullInt64
+  tables_high_id = make(map[string]int)
+  for _,tbl_name := range db_descriptor.table_names {
+    err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from " + tbl_name)
+		if err != nil {
+			Printf("Query error for Get max(id) is %v\n", err)
+			return err
+		}
+    if !max.Valid {
+      tables_high_id[tbl_name] = 1
+    } else {
+      tables_high_id[tbl_name] = int(max.Int64) + 1
+    }
+  }
+  return nil
+}
+
+func Get_high_id(tbl_name string) int {
+  value, ok := tables_high_id[tbl_name]
+  if !ok {
+    panic("Get_high_id invalid table_name!")
+  }
+  return value
+}
+

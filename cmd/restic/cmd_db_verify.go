@@ -44,6 +44,7 @@ type SnapshotRecordDB struct {
 type SnapshotRecordMem struct {
 	// raw part
 	SnapshotRecordDB
+	ID_mem        *restic.ID
 	root 					*restic.ID
 	status				string
 }
@@ -128,13 +129,15 @@ type PackfilesRecordDB struct {
 
 type PackfilesRecordMem struct {
 	PackfilesRecordDB
-	 status		string
+	status		string
 }
 
 type DBAggregate struct {
 	repositoryData   *RepositoryData
 	db_conn 				 *sqlx.DB
 	table_counts 		 *map[string]int                   // count of all tables
+
+	// the database tables - memory representation
 	table_snapshots  *map[string]SnapshotRecordMem
 	table_index_repo *map[*restic.ID]IndexRepoRecordMem
 	table_meta_dir   *map[CompMetaDir]MetaDirRecordMem
@@ -551,7 +554,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	mem_contents_map := CreateMemContents(db_aggregate, repositoryData)
 
 	// compare keys
-	equal := CompareKeys("contents", table_contents, table_contents)
+	equal := CompareKeys("contents", table_contents, mem_contents_map)
 	if !equal {
 		Printf("**** Key mismatch for contents ***\n")
 		set_db_keys  := mapset.NewSet()
@@ -583,7 +586,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	count := 0
 	for db_key, db_value := range table_contents {
 		mem_value := mem_contents_map[db_key]
-		if db_value.id_data_idd != mem_value {
+		if db_value.id_data_idd != mem_value.id_data_idd {
 			equal = false
 			count++
 		}
@@ -595,7 +598,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	count = 0
 	for db_key, db_value := range table_contents {
 		mem_value := mem_contents_map[db_key]
-		if db_value.id_data_idd != mem_value {
+		if db_value.id_data_idd != mem_value.id_data_idd {
 			Printf("key db  %s %3d %3d\n", db_key.meta_blob.String()[:12], db_key.position,
 				db_key.offset)
 			Printf("  db  %v\n", db_value)
@@ -819,4 +822,18 @@ K2 comparable, V2 any] (table_name string, db map[K1]V1, mem map[K2]V2) bool {
 		set_mem_keys.Add(key)
 	}
 	return set_mem_keys.Equal(set_db_keys)
+}
+
+func NewMemoryKeys[K1 comparable, V1 any,
+K2 comparable, V2 any] (db map[K1]V1, mem map[K2]V2) mapset.Set {
+	// define sets for the keys
+	set_db_keys  := mapset.NewSet()
+	set_mem_keys := mapset.NewSet()
+	for key := range db {
+		set_db_keys.Add(key)
+	}
+	for key := range mem {
+		set_mem_keys.Add(key)
+	}
+	return set_mem_keys.Difference(set_db_keys)
 }
