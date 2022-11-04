@@ -2,13 +2,13 @@ package main
 
 import (
 	// system
-	"sort"
-	"runtime"
 	"fmt"
-	"time"
-	_ "math"
 	"golang.org/x/sync/errgroup"
+	_ "math"
+	"runtime"
+	"sort"
 	"sync"
+	"time"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -28,43 +28,43 @@ var gOptions GlobalOptions
 
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
-	size 				uint64
-	inode      	uint64
-	content 		[]restic.IntID
-	subtree_ID 	restic.IntID
-	name 				string
-	Type 				string
-	mtime 			time.Time
+	size       uint64
+	inode      uint64
+	content    []restic.IntID
+	subtree_ID restic.IntID
+	name       string
+	Type       string
+	mtime      time.Time
 }
 
 type Index_Handle struct {
-		blob_index restic.IntID
-		pack_index restic.IntID
-		size uint
-		Type restic.BlobType
+	blob_index restic.IntID
+	pack_index restic.IntID
+	size       uint
+	Type       restic.BlobType
 }
 
 type RepositoryData struct {
 	// all snapshots
-	snaps         []*restic.Snapshot
+	snaps []*restic.Snapshot
 	// map contents of tree blob record via JSON to memory
 	directory_map map[restic.IntID][]BlobFile2
 	// map directory blob to a path name
-	fullpath      map[restic.IntID]string
+	fullpath map[restic.IntID]string
 	// all directory names, basename ony
-	names         map[restic.IntID]string
+	names map[restic.IntID]string
 	// all directory children of a directory
-	children      map[restic.IntID]restic.IntSet
+	children map[restic.IntID]restic.IntSet
 
 	// need to be restic.ID
 	// all tree blobs of a snapshot
-	meta_dir_map  map[*restic.ID]restic.IntSet
+	meta_dir_map map[*restic.ID]restic.IntSet
 	// all tree and data blobs from the index
-	index_handle	map[restic.ID]Index_Handle
+	index_handle map[restic.ID]Index_Handle
 	// map blob to an IntID number
 	blob_to_index map[restic.ID]restic.IntID
 	// address this slice via an IntID index to get back to the restic.ID
-	index_to_blob		[]restic.ID
+	index_to_blob []restic.ID
 }
 
 var EMPTY_NODE_ID restic.ID
@@ -73,22 +73,22 @@ var EMPTY_NODE_ID_TRANSLATED restic.IntID
 
 func init_repositoryData() *RepositoryData {
 	var repositoryData RepositoryData
-	repositoryData.snaps				 = []*restic.Snapshot{}
+	repositoryData.snaps = []*restic.Snapshot{}
 	repositoryData.directory_map = make(map[restic.IntID][]BlobFile2)
-	repositoryData.fullpath      = make(map[restic.IntID]string)
-	repositoryData.names         = make(map[restic.IntID]string)
-	repositoryData.children			 = make(map[restic.IntID]restic.IntSet)
+	repositoryData.fullpath = make(map[restic.IntID]string)
+	repositoryData.names = make(map[restic.IntID]string)
+	repositoryData.children = make(map[restic.IntID]restic.IntSet)
 
-	repositoryData.meta_dir_map  = make(map[*restic.ID]restic.IntSet)
-	repositoryData.index_handle	 = make(map[restic.ID]Index_Handle)
+	repositoryData.meta_dir_map = make(map[*restic.ID]restic.IntSet)
+	repositoryData.index_handle = make(map[restic.ID]Index_Handle)
 	repositoryData.blob_to_index = make(map[restic.ID]restic.IntID)
 	repositoryData.index_to_blob = []restic.ID{}
 	return &repositoryData
- }
+}
 
-func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic.Snapshot, error) {
+func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository) ([]*restic.Snapshot, error) {
 	// collect all snap records
-  snaps := make([]*restic.Snapshot, 0, 10)
+	snaps := make([]*restic.Snapshot, 0, 10)
 	repo.List(gopts.ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		// could possibly be paralllized
 		sn, err := restic.LoadSnapshot(gopts.ctx, repo, id)
@@ -102,14 +102,14 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository)  ([]*restic
 
 	// now we can sort 'snaps': sort by sn.Time
 	// sort is in-place!
-	sort.SliceStable(snaps, func (i, j int) bool {
+	sort.SliceStable(snaps, func(i, j int) bool {
 		return snaps[i].Time.Before(snaps[j].Time)
 	})
 	return snaps, nil
 }
 
 func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
-repositoryData *RepositoryData) error {
+	repositoryData *RepositoryData) error {
 	//Printf("HandleIndexRecords start\n")
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
@@ -128,7 +128,7 @@ repositoryData *RepositoryData) error {
 // this function converts restic.ID to IntID, forth and back
 // It also correlates bobs and pack IDs
 func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
-repositoryData *RepositoryData) {
+	repositoryData *RepositoryData) {
 	//Printf("Convert_to_IntSet start\n")
 	pos := restic.IntID(0)
 
@@ -181,10 +181,10 @@ repositoryData *RepositoryData) {
 
 // FindChildren steps through the directory_map and finds subdirectories
 // these get attached their (current) parent
-func FindChildren (repositoryData *RepositoryData) {
+func FindChildren(repositoryData *RepositoryData) {
 	//Printf("FindChildren start\n")
 	for parent, idd_file_list := range repositoryData.directory_map {
-		for _,node := range idd_file_list {
+		for _, node := range idd_file_list {
 			if node.Type == "dir" {
 				// initialize
 				repositoryData.names[node.subtree_ID] = node.name
@@ -247,7 +247,7 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 
 // this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
-repositoryData *RepositoryData) error {
+	repositoryData *RepositoryData) error {
 	var err error
 	// step 1: gather snapshots
 	start := time.Now()
@@ -295,10 +295,10 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 
 	var m sync.Mutex
 	type PerfRecord struct {
-		id restic.ID
+		id         restic.ID
 		count_file int
 		count_dirs int
-		time_diff time.Duration // int64 nanosecond count
+		time_diff  time.Duration // int64 nanosecond count
 	}
 	//p_start := time.Now()
 	perf_records := make([]PerfRecord, 0)
@@ -340,7 +340,7 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 			// do the work on the tree ust received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
-				content    := make([]restic.IntID, 0)
+				content := make([]restic.IntID, 0)
 				subtree_ID := EMPTY_NODE_ID_TRANSLATED
 
 				ok := false
@@ -368,15 +368,15 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 					count_dirs++
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
-						Type: node.Type, size: node.Size, inode: node.Inode,
-						mtime: node.ModTime, content: content, subtree_ID: subtree_ID}
+					Type: node.Type, size: node.Size, inode: node.Inode,
+					mtime: node.ModTime, content: content, subtree_ID: subtree_ID}
 			}
 
 			// get the index for our restic.ID storage
 			position, ok := repositoryData.blob_to_index[id]
 			if !ok {
-					Printf("request for missing ID %v\n", id)
-					panic("error in GetAllNodes - storing idd_file_list")
+				Printf("request for missing ID %v\n", id)
+				panic("error in GetAllNodes - storing idd_file_list")
 			}
 			// insert directory_map, this is the critical region, so lock it
 			ende := time.Now()
@@ -424,11 +424,11 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 	}
 
 	/*
-	Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
-	Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
-		len(perf_records),
-		float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
-		float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
+		Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
+		Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
+			len(perf_records),
+			float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
+			float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
 	*/
 	return res
 }
@@ -445,7 +445,7 @@ func PrintMemUsage() {
 	fmt.Printf("\tTotalAlloc = %4d MiB", bToMb(m2.TotalAlloc))
 	fmt.Printf("\tSys        = %4d MiB", bToMb(m2.Sys))
 	fmt.Printf("\tHeap       = %4d MiB", bToMb(m2.HeapInuse))
-	fmt.Printf("\tNumGC      = %4d\n",   m2.NumGC)
+	fmt.Printf("\tNumGC      = %4d\n", m2.NumGC)
 }
 
 func bToMb(b uint64) uint64 {
@@ -453,10 +453,10 @@ func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
 
-func timeMessage(format string, args... interface{}) {
-  if gOptions.verbosity > 0 {
-    Printf(format, args...)
-  }
+func timeMessage(format string, args ...interface{}) {
+	if gOptions.verbosity > 0 {
+		Printf(format, args...)
+	}
 }
 
 // return the pointer to a given ID
@@ -470,6 +470,6 @@ func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
 		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
 		// be aware: length just changed during last 'append'
-		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob) - 1)])
+		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob)-1)])
 	}
 }

@@ -1,4 +1,5 @@
 package main
+
 // compile with "go run build.go -tags debug""
 // run with DEBUG_LOG=/home/wplapper/restic/debug.log fully-qualified-name/restic -r <repo> overview
 
@@ -6,19 +7,19 @@ package main
 
 import (
 	// system
-	"time"
 	"sort"
+	"time"
 	//"math"
 	//"fmt"
 
 	//argparse
 	"github.com/spf13/cobra"
 
-  // sets
-  "github.com/deckarep/golang-set"
+	// sets
+	"github.com/deckarep/golang-set"
 
 	// sqlx for sqlite3
-  "github.com/jmoiron/sqlx"
+	"github.com/jmoiron/sqlx"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -26,48 +27,50 @@ import (
 )
 
 type DBOptions struct {
-	echo bool
+	echo               bool
 	print_count_tables bool
-	altDB string
+	altDB              string
+	rollback           bool
 }
+
 var dbOptions DBOptions
 
 type SnapshotRecordDB struct {
-	Id        		int
-	Snap_id       string
-	Snap_time 		string
-	Snap_host 		string
-	Snap_fsys 		string
-	Id_snap_root 	string
+	Id           int
+	Snap_id      string
+	Snap_time    string
+	Snap_host    string
+	Snap_fsys    string
+	Id_snap_root string
 }
 
 type SnapshotRecordMem struct {
 	// raw part
 	SnapshotRecordDB
-	ID_mem        *restic.ID
-	root 					*restic.ID
-	status				string
+	ID_mem *restic.ID
+	root   *restic.ID
+	status string
 }
 
 type IndexRepoRecordDB struct {
-	Id          int
-	Idd 				string
-	Idd_size 		int
-	Index_type 	string
-	Id_pack_id	int // unused
+	Id         int
+	Idd        string
+	Idd_size   int
+	Index_type string
+	Id_pack_id int // unused
 }
 
 type IndexRepoRecordMem struct {
 	// raw part
 	IndexRepoRecordDB
-	idd 				*restic.ID
-	packfile 		*restic.ID
-	status			string
+	idd      *restic.ID
+	packfile *restic.ID
+	status   string
 }
 
 type NamesRecordDB struct {
 	Id        int
-	Name 			string
+	Name      string
 	Name_type string
 }
 
@@ -78,9 +81,9 @@ type NamesRecordMem struct {
 
 // database record mapping for sqlx.StructScan
 type MetaDirRecordDB struct {
-	Id 				 	int
-	Id_snap_id 	int 	// map back to snapshots
-	Id_idd 		 	int		// map back to index_repo
+	Id         int
+	Id_snap_id int // map back to snapshots
+	Id_idd     int // map back to index_repo
 }
 
 type MetaDirRecordMem struct {
@@ -89,53 +92,53 @@ type MetaDirRecordMem struct {
 }
 
 type ContentsRecordDB struct {
-	Id 					int
-	Id_data_idd int		// map back to index_repo
-	Id_blob 		int		// map back to index_repo
-	Position 		int
-	Offset 			int
-	Id_fullpath int		// deadbeef
+	Id          int
+	Id_data_idd int // map back to index_repo
+	Id_blob     int // map back to index_repo
+	Position    int
+	Offset      int
+	Id_fullpath int // deadbeef
 }
 
 type ContentsRecordMem struct {
 	// raw part
 	ContentsRecordDB
 	id_data_idd *restic.ID
-	status			string
+	status      string
 }
 
 type IddFileRecordDB struct {
-	 Id 			int
-	 Id_blob 	int			// map back to index_repo
-	 Position int
-	 Id_name	int
-	 Size			int
-	 Inode		int64
-	 Mtime		string
-	 Type			string
+	Id       int
+	Id_blob  int // map back to index_repo
+	Position int
+	Id_name  int
+	Size     int
+	Inode    int64
+	Mtime    string
+	Type     string
 }
 
 type IddFileRecordMem struct {
-		// raw part
-	 IddFileRecordDB
-	 name			string
-	 status		string
+	// raw part
+	IddFileRecordDB
+	name   string
+	status string
 }
 
 type PackfilesRecordDB struct {
-	Id 					int
+	Id          int
 	Packfile_id string
 }
 
 type PackfilesRecordMem struct {
 	PackfilesRecordDB
-	status		string
+	status string
 }
 
 type DBAggregate struct {
-	repositoryData   *RepositoryData
-	db_conn 				 *sqlx.DB
-	table_counts 		 *map[string]int                   // count of all tables
+	repositoryData *RepositoryData
+	db_conn        *sqlx.DB
+	table_counts   *map[string]int // count of all tables
 
 	// the database tables - memory representation
 	table_snapshots  *map[string]SnapshotRecordMem
@@ -147,17 +150,18 @@ type DBAggregate struct {
 	table_contents   *map[CompContents]ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots     *map[int]string    	// meta_dir
-	pk_index_repo    *map[int]*restic.ID 	// meta_dir, idd_file, contents
-	pk_names         *map[int]string			// idd_file
-	pk_packfiles		 *map[int]*restic.ID 	// index_repo
+	pk_snapshots  *map[int]string     // meta_dir
+	pk_index_repo *map[int]*restic.ID // meta_dir, idd_file, contents
+	pk_names      *map[int]string     // idd_file
+	pk_packfiles  *map[int]*restic.ID // index_repo
 }
+
 var db_aggregate DBAggregate
 
 // Composite indices for maps
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
-	snap_id   string    // consider pointers
+	snap_id   string // consider pointers
 	meta_blob *restic.ID
 }
 
@@ -173,35 +177,27 @@ type CompContents struct {
 }
 
 // map repo to database
-var DATABASE_NAMES = map[string]string {
+var DATABASE_NAMES = map[string]string{
 	// master
-	"/media/mount-points/Backup-ext4-Mate/restic_master":
-		"/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
-	"/media/mount-points/Backup-ext4-Mate/restic_master/":
-		"/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
+	"/media/mount-points/Backup-ext4-Mate/restic_master":  "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
+	"/media/mount-points/Backup-ext4-Mate/restic_master/": "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
 
 	// onedrive
 	"rclone:onedrive:restic_backups":
-		//"/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
-		"/home/wplapper/restic/db/restic-onedrive.db",
+	//"/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
+	"/home/wplapper/restic/db/restic-onedrive.db",
 
 	// most
-	"/media/mount-points/Backup-ext4-Mate/restic_most":
-		"/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
-	"/media/mount-points/Backup-ext4-Mate/restic_most/":
-		"/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
+	"/media/mount-points/Backup-ext4-Mate/restic_most":  "/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
+	"/media/mount-points/Backup-ext4-Mate/restic_most/": "/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
 
 	// data
-	"/media/wplapper/internal-fast/restic_Data":
-		"/home/wplapper/restic/db/XPS-restic-data_nfs.db",
-	"/media/wplapper/internal-fast/restic_Data/":
-		"/home/wplapper/restic/db/XPS-restic-data_nfs.db",
+	"/media/wplapper/internal-fast/restic_Data":  "/home/wplapper/restic/db/XPS-restic-data_nfs.db",
+	"/media/wplapper/internal-fast/restic_Data/": "/home/wplapper/restic/db/XPS-restic-data_nfs.db",
 
 	// test
-	"/media/wplapper/internal-fast/restic_test":
-		"/home/wplapper/restic/db/XPS-restic-test.db",
-	"/media/wplapper/internal-fast/restic_test/":
-		"/home/wplapper/restic/db/XPS-restic-test.db",}
+	"/media/wplapper/internal-fast/restic_test":  "/home/wplapper/restic/db/XPS-restic-test.db",
+	"/media/wplapper/internal-fast/restic_test/": "/home/wplapper/restic/db/XPS-restic-test.db"}
 
 var cmdDBVerify = &cobra.Command{
 	Use:   "db_verify [flags]",
@@ -245,7 +241,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
-			return err
+		return err
 	}
 
 	// step 2: manage Index Records
@@ -301,17 +297,17 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	type action_function func(*sqlx.DB, *DBAggregate) error
 	type ActionStruct struct {
 		table_name string
-		routine action_function
+		routine    action_function
 	}
 	var table_name string
-	var actions = []ActionStruct {
-		{table_name: "snapshots", 	routine:	ReadSnapshotTable},
-		{table_name: "index_repo", 	routine:  ReadIndexRepoTable},
-		{table_name: "meta_dir", 		routine: 	ReadMetaDirTable},
-		{table_name: "names", 			routine:	ReadNamesTable},
-		{table_name: "idd_file", 		routine:  ReadIddFileTable},
-		{table_name: "packfiles", 	routine:  ReadPackfilesTable},
-		{table_name: "contents",  	routine:  ReadContentsTable},}
+	var actions = []ActionStruct{
+		{table_name: "snapshots", routine: ReadSnapshotTable},
+		{table_name: "index_repo", routine: ReadIndexRepoTable},
+		{table_name: "meta_dir", routine: ReadMetaDirTable},
+		{table_name: "names", routine: ReadNamesTable},
+		{table_name: "idd_file", routine: ReadIddFileTable},
+		{table_name: "packfiles", routine: ReadPackfilesTable},
+		{table_name: "contents", routine: ReadContentsTable}}
 
 	for _, action := range actions {
 		Printf("reading table %s\n", action.table_name)
@@ -398,7 +394,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 }
 
 func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// compare snapshots from repo with snapshots stored in the database
 	// step 1: build memory table to allow the comparison
 	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData)
@@ -406,7 +402,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// compare snapshot keys
 	equal := CompareKeys("snapshots", db_snapshots, mem_snapshots)
 	if !equal {
-		set_db_keys  := mapset.NewSet()
+		set_db_keys := mapset.NewSet()
 		set_mem_keys := mapset.NewSet()
 		for key := range db_snapshots {
 			set_db_keys.Add(key)
@@ -415,7 +411,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 			set_mem_keys.Add(key)
 		}
 
-		len_db  := set_db_keys.Cardinality()
+		len_db := set_db_keys.Cardinality()
 		len_mem := set_mem_keys.Cardinality()
 
 		var diff mapset.Set
@@ -454,24 +450,24 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 func check_db_index_repo(db_index_repo map[*restic.ID]IndexRepoRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 
 	// build memory table for comparison
 	/*
-	mem_repo_index_map := make(map[*restic.ID]IndexRepoRecordMem,
-		(*db_aggregate.table_counts)["index_repo"])
-	for id, data := range repositoryData.index_handle {
-		var index_type string
-		if data.Type == restic.TreeBlob {
-			index_type = "tree"
-		} else {
-			index_type = "data"
-		}
-		id_ptr := Ptr2ID(id, repositoryData)
-		mem_repo_index_map[id_ptr] = IndexRepoRecordMem{IndexRepoRecordDB:
-			IndexRepoRecordDB{Idd_size: int(data.size),
-			Index_type: index_type}, idd: id_ptr}
-	}*/
+		mem_repo_index_map := make(map[*restic.ID]IndexRepoRecordMem,
+			(*db_aggregate.table_counts)["index_repo"])
+		for id, data := range repositoryData.index_handle {
+			var index_type string
+			if data.Type == restic.TreeBlob {
+				index_type = "tree"
+			} else {
+				index_type = "data"
+			}
+			id_ptr := Ptr2ID(id, repositoryData)
+			mem_repo_index_map[id_ptr] = IndexRepoRecordMem{IndexRepoRecordDB:
+				IndexRepoRecordDB{Idd_size: int(data.size),
+				Index_type: index_type}, idd: id_ptr}
+		}*/
 	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData)
 
 	equal := CompareKeys("index_repo", db_index_repo, mem_repo_index_map)
@@ -493,7 +489,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 func check_db_names(db_names map[string]NamesRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	// build a memory map of the names, whic come from three(3) different sources
 	table_name := "names"
 	mem_names_map := CreateMemNames(db_aggregate, repositoryData)
@@ -502,7 +498,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 		return equal
 	}
 
-	set_db_keys  := mapset.NewSet()
+	set_db_keys := mapset.NewSet()
 	set_mem_keys := mapset.NewSet()
 	for key := range db_names {
 		set_db_keys.Add(key)
@@ -511,7 +507,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 		set_mem_keys.Add(key)
 	}
 
-	len_db  := set_db_keys.Cardinality()
+	len_db := set_db_keys.Cardinality()
 	len_mem := set_mem_keys.Cardinality()
 
 	var diff mapset.Set
@@ -537,7 +533,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
 	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData)
@@ -548,7 +544,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 
 // check_db_contents
 func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
 	mem_contents_map := CreateMemContents(db_aggregate, repositoryData)
@@ -557,7 +553,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	equal := CompareKeys("contents", table_contents, mem_contents_map)
 	if !equal {
 		Printf("**** Key mismatch for contents ***\n")
-		set_db_keys  := mapset.NewSet()
+		set_db_keys := mapset.NewSet()
 		set_mem_keys := mapset.NewSet()
 		for key := range table_contents {
 			set_db_keys.Add(key)
@@ -613,13 +609,13 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData)
 
 	// compare keys
 	equal := CompareKeys("meta_dir", db_meta_dir, mem_meta_dir_map)
 	if !equal {
-		set_db_keys  := mapset.NewSet()
+		set_db_keys := mapset.NewSet()
 		set_mem_keys := mapset.NewSet()
 		for key := range db_meta_dir {
 			set_db_keys.Add(key)
@@ -628,7 +624,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 			set_mem_keys.Add(key)
 		}
 
-		len_db  := set_db_keys.Cardinality()
+		len_db := set_db_keys.Cardinality()
 		len_mem := set_mem_keys.Cardinality()
 
 		var diff mapset.Set
@@ -667,7 +663,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 }
 
 func check_db_idd_file(db_idd_file map[CompIddFile]IddFileRecordMem,
-db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	table_name := "idd_file"
 	// build a memory map of the packfiles
 	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData)
@@ -682,7 +678,7 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	for db_key, db_value := range db_idd_file {
 		mem_value := mem_idd_file_map[db_key]
 		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
-			 mem_value.Mtime != db_value.Mtime || mem_value.Type != db_value.Type {
+			mem_value.Mtime != db_value.Mtime || mem_value.Type != db_value.Type {
 			equal = false
 			Printf("key %s.%3d\n", db_key.meta_blob.String()[:12], db_key.position)
 			Printf("  db   %8d %7d %s %-4s\n", db_value.Inode, db_value.Size,
@@ -696,30 +692,30 @@ db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 
 func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	/*
-	xref_table = (
-			(index_repo.id_pack_id, packfiles.id),
-			(meta_dir.id_snap_id,   snapshots.id),
+		xref_table = (
+				(index_repo.id_pack_id, packfiles.id),
+				(meta_dir.id_snap_id,   snapshots.id),
 
-			(meta_dir.id_idd,      index_repo.id),
-			(idd_file.id_blob,     index_repo.id),
-			(contents.id_data_idd, index_repo.id),
-			(contents.id_blob,     index_repo.id),
+				(meta_dir.id_idd,      index_repo.id),
+				(idd_file.id_blob,     index_repo.id),
+				(contents.id_data_idd, index_repo.id),
+				(contents.id_blob,     index_repo.id),
 
-			(idd_file.id_name,     names.id),
-	)
+				(idd_file.id_name,     names.id),
+		)
 
-  // relationship 1: index_repo.id_pack_id, packfiles.id
-  make a set of packfiles.id (already a sort of set)
-  table_packfiles  is a *map[restic.ID]PackfilesRecordDB
-  table_index_repo *map[*restic.ID]IndexRepoRecordMem and
-  IndexRepoRecordMem is a 	idd restic.ID, idd_size int,  index_type 	string
-  set_packfiles_keys := mapset.NewSet()
+	  // relationship 1: index_repo.id_pack_id, packfiles.id
+	  make a set of packfiles.id (already a sort of set)
+	  table_packfiles  is a *map[restic.ID]PackfilesRecordDB
+	  table_index_repo *map[*restic.ID]IndexRepoRecordMem and
+	  IndexRepoRecordMem is a 	idd restic.ID, idd_size int,  index_type 	string
+	  set_packfiles_keys := mapset.NewSet()
 
-  */
-  Printf("\n Check Foreign Key reationship\n")
+	*/
+	Printf("\n Check Foreign Key reationship\n")
 	all_good := true
-  ref_table_keys := mapset.NewSet()
-  for _, value := range *db_aggregate.table_packfiles {
+	ref_table_keys := mapset.NewSet()
+	for _, value := range *db_aggregate.table_packfiles {
 		ref_table_keys.Add(value.Id)
 	}
 
@@ -734,7 +730,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	//		(meta_dir.id_snap_id,   snapshots.id)
 	all_good = true
 	ref_table_keys = mapset.NewSet()
-  for _, value := range *db_aggregate.table_snapshots {
+	for _, value := range *db_aggregate.table_snapshots {
 		ref_table_keys.Add(value.Id)
 	}
 
@@ -750,7 +746,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	ref_table_keys = mapset.NewSet()
 	//		(meta_dir.id_idd,      index_repo.id),
 	ref_table_keys = mapset.NewSet()
-  for _, value := range *db_aggregate.table_index_repo {
+	for _, value := range *db_aggregate.table_index_repo {
 		ref_table_keys.Add(value.Id)
 	}
 
@@ -795,7 +791,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	// (idd_file.id_name,     names.id)
 	ref_table_keys = mapset.NewSet()
 	ref_table_keys = mapset.NewSet()
-  for _, value := range *db_aggregate.table_names {
+	for _, value := range *db_aggregate.table_names {
 		ref_table_keys.Add(value.Id)
 	}
 
@@ -811,9 +807,9 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 
 // utility function - compare_keys
 func CompareKeys[K1 comparable, V1 any,
-K2 comparable, V2 any] (table_name string, db map[K1]V1, mem map[K2]V2) bool {
+	K2 comparable, V2 any](table_name string, db map[K1]V1, mem map[K2]V2) bool {
 	// define sets for the keys
-	set_db_keys  := mapset.NewSet()
+	set_db_keys := mapset.NewSet()
 	set_mem_keys := mapset.NewSet()
 	for key := range db {
 		set_db_keys.Add(key)
@@ -825,9 +821,9 @@ K2 comparable, V2 any] (table_name string, db map[K1]V1, mem map[K2]V2) bool {
 }
 
 func NewMemoryKeys[K1 comparable, V1 any,
-K2 comparable, V2 any] (db map[K1]V1, mem map[K2]V2) mapset.Set {
+	K2 comparable, V2 any](db map[K1]V1, mem map[K2]V2) mapset.Set {
 	// define sets for the keys
-	set_db_keys  := mapset.NewSet()
+	set_db_keys := mapset.NewSet()
 	set_mem_keys := mapset.NewSet()
 	for key := range db {
 		set_db_keys.Add(key)

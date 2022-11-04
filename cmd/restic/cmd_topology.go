@@ -1,4 +1,5 @@
 package main
+
 // compile with "go run build.go -tags debug""
 // run with DEBUG_LOG=/home/wplapper/restic/debug.log fully-qualified-name/restic -r <repo> overview
 
@@ -16,8 +17,8 @@ import (
 )
 
 type TopologyOptions struct {
-		cutoff int
-		snap string
+	cutoff int
+	snap   string
 }
 
 var cmdTopology = &cobra.Command{
@@ -58,7 +59,7 @@ func runTopology(gopts GlobalOptions, args []string) error {
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
-			return err
+		return err
 	}
 
 	// step 4.1: manage Index Records
@@ -79,7 +80,7 @@ func runTopology(gopts GlobalOptions, args []string) error {
 	// convert the keys of 'directory_map' to a IntID set
 	idd_file_keys := restic.NewIntSet()
 	for key := range repositoryData.directory_map {
-			idd_file_keys.Insert(key)
+		idd_file_keys.Insert(key)
 	}
 
 	blobs_from_ix := restic.NewIntSet()
@@ -90,7 +91,7 @@ func runTopology(gopts GlobalOptions, args []string) error {
 	}
 
 	//compare the sets
-	if !idd_file_keys.Equals(blobs_from_ix)  {
+	if !idd_file_keys.Equals(blobs_from_ix) {
 		rest := blobs_from_ix.Sub(idd_file_keys)
 		Printf("len blobs_from_ix      %7d\n", len(blobs_from_ix))
 		Printf("len keys directory_map %7d\n", len(idd_file_keys))

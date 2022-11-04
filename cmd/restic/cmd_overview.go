@@ -1,4 +1,5 @@
 package main
+
 // compile with "go run build.go -tags debug""
 // run with DEBUG_LOG=/home/wplapper/restic/debug.log fully-qualified-name/restic -r <repo> overview
 
@@ -6,16 +7,16 @@ package main
 
 import (
 	// system
-	"time"
 	"sort"
 	"strings"
+	"time"
 
 	//argparse
 	"github.com/spf13/cobra"
 
 	// restic library
-	"github.com/wplapper/restic/library/restic"
 	"github.com/deckarep/golang-set"
+	"github.com/wplapper/restic/library/restic"
 )
 
 var cmdOverview = &cobra.Command{
@@ -43,6 +44,7 @@ func runOverview(gopts GlobalOptions) error {
 
 	// step 1: open repository
 	repositoryData := init_repositoryData()
+	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	gOptions = gopts
 
 	start := time.Now()
@@ -57,7 +59,7 @@ func runOverview(gopts GlobalOptions) error {
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
-			return err
+		return err
 	}
 
 	// step 2.1: manage Index Records
@@ -86,8 +88,8 @@ func runOverview(gopts GlobalOptions) error {
 	start = time.Now()
 	groups := make(map[snapGroup][]*restic.Snapshot)
 	for _, sn := range repositoryData.snaps {
-		host  := sn.Hostname
-		fsys  := sn.Paths[0]
+		host := sn.Hostname
+		fsys := sn.Paths[0]
 		group := snapGroup{host: host, fsys: fsys}
 		groups[group] = append(groups[group], sn)
 	}
@@ -96,31 +98,31 @@ func runOverview(gopts GlobalOptions) error {
 	groups_sorted := make([]snapGroup, len(groups))
 	index := 0
 	for group := range groups {
-			groups_sorted[index] = group
-			index++
+		groups_sorted[index] = group
+		index++
 	}
 
-	sort.Slice(groups_sorted, func (i, j int) bool {
-    if groups_sorted[i].host < groups_sorted[j].host {
-      return true
-    } else if groups_sorted[i].host > groups_sorted[j].host {
-      return false
-    }
-    return groups_sorted[i].fsys < groups_sorted[j].fsys
+	sort.Slice(groups_sorted, func(i, j int) bool {
+		if groups_sorted[i].host < groups_sorted[j].host {
+			return true
+		} else if groups_sorted[i].host > groups_sorted[j].host {
+			return false
+		}
+		return groups_sorted[i].fsys < groups_sorted[j].fsys
 	})
 
 	// step 6: extract size information for these groups
 	Printf("%-22s %-50s %-5s %11s %7s %7s %10s\n",
-    "hostname", "filesystem_path", "snaps", "directories", "files", "dblobs",
-    "size[MiB]")
+		"hostname", "filesystem_path", "snaps", "directories", "files", "dblobs",
+		"size[MiB]")
 	Printf("%s\n", strings.Repeat("=", 118))
 	for _, group := range groups_sorted {
-		host  := group.host
-		fsys  := group.fsys
+		host := group.host
+		fsys := group.fsys
 
 		// step 8: gather blobs for the constructed tree lists
 		// get the data from our repository_data structures
-		usedIntBlobs    := restic.NewIntSet()
+		usedIntBlobs := restic.NewIntSet()
 		count_file_sets := mapset.NewSet()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
@@ -141,7 +143,7 @@ func runOverview(gopts GlobalOptions) error {
 		// step 9: access size information on used blobs
 		count_data_blobs := 0
 		count_meta_blobs := 0
-    group_size       := uint64(0)
+		group_size := uint64(0)
 		for int_blob := range usedIntBlobs {
 			blobID := repositoryData.index_to_blob[int_blob]
 			ih := repositoryData.index_handle[blobID]
@@ -154,11 +156,11 @@ func runOverview(gopts GlobalOptions) error {
 		}
 		Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n",
 			host, fsys, len(groups[group]), count_meta_blobs, count_file_sets.Cardinality(),
-			count_data_blobs, float64(group_size) / 1024.0 / 1024.0)
+			count_data_blobs, float64(group_size)/1024.0/1024.0)
 	}
 
 	// *** ALL ***
-	usedIntBlobs    := restic.NewIntSet()
+	usedIntBlobs := restic.NewIntSet()
 	count_file_sets := mapset.NewSet()
 	for _, sn := range repositoryData.snaps {
 		// step trough the list of meta_blobs and collect data
@@ -179,7 +181,7 @@ func runOverview(gopts GlobalOptions) error {
 	// step 9: access size information on ALL blobs
 	count_data_blobs := 0
 	count_meta_blobs := 0
-	size_repo        := uint64(0)
+	size_repo := uint64(0)
 	for int_blob := range usedIntBlobs {
 		blobID := repositoryData.index_to_blob[int_blob]
 		ih := repositoryData.index_handle[blobID]
@@ -193,7 +195,7 @@ func runOverview(gopts GlobalOptions) error {
 	Printf("%s\n", strings.Repeat("=", 118))
 	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n", "summary", "", len(repositoryData.snaps),
 		count_meta_blobs, count_file_sets.Cardinality(), count_data_blobs,
-		float64(size_repo) / 1024.0 / 1024.0)
+		float64(size_repo)/1024.0/1024.0)
 
 	timeMessage("%-30s in %10.1f seconds\n", "gather data for groups", time.Now().Sub(start).Seconds())
 	return nil

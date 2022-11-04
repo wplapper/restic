@@ -6,28 +6,27 @@ import (
 	"strings"
 
 	// sqlx for SQLite3
-  "database/sql"
+	"database/sql"
 	"github.com/jmoiron/sqlx"
 
 	// library
 	"github.com/wplapper/restic/library/restic"
 )
 
-
 // do a SELECT count(*) on all tables
 func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts *map[string]int) error {
 	// get table names
-  sql 			:= "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
-  tbl_names := make([]string, 0)
-  err 			:= db_conn.Select(&tbl_names, sql)
+	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+	tbl_names := make([]string, 0)
+	err := db_conn.Select(&tbl_names, sql)
 	if err != nil {
-		Printf("Error in Select %s %v\n", sql, err)
+		Printf("readAllTablesAndCounts.Error in Select %v\n", err)
 		return err
 	}
 
-  // get counts per table
+	// get counts per table
 	var count int
-  for _, tbl_name := range tbl_names {
+	for _, tbl_name := range tbl_names {
 		sql := "SELECT count(*) FROM " + tbl_name
 		err := db_conn.Get(&count, sql)
 		if err != nil {
@@ -40,51 +39,49 @@ func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts *map[string]int) erro
 }
 
 type TableInfo struct {
+	// from sqlite3 header ouputs
 	// cid|name|type|notnull|dflt_value|pk
-	Cid int
-	Name string
-	Type string
-	Notnull int
+	Cid        int
+	Name       string
+	Type       string
+	Notnull    int
 	Dflt_value sql.NullString
-	PK int
+	PK         int
 }
 
 func GetColumnNames(db_conn *sqlx.DB) (*map[string][]string, error) {
-/*
-            cursor = self.connection.execute(f"SELECT * FROM {tbl_name}")
-            names  = [n[0] for n in cursor.description]
- */
+	// utilize the pseudo table pragma_table_info to seect the column names
 	table_column_names := make(map[string][]string)
-  sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
-  table_names := make([]string, 0)
-  err := db_conn.Select(&table_names, sql)
-  if err != nil {
-    Printf("Get failed err %v\n", err)
-    return nil, err
-  }
+	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+	table_names := make([]string, 0)
+	err := db_conn.Select(&table_names, sql)
+	if err != nil {
+		Printf("SELECT tbl_name FROM sqlite_master failed err %v\n", err)
+		return nil, err
+	}
 
 	var result TableInfo
-  for _, tbl_name := range table_names {
+	for _, tbl_name := range table_names {
 		column_names := make([]string, 0)
 		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('" + tbl_name + "')")
 		if err != nil {
-			Printf("PRAGMA error is %v\n", err)
+			Printf("SELECT * FROM pragma_table_info error is %v\n", err)
 			return nil, err
 		}
 
 		for rows.Next() {
 			err = rows.StructScan(&result)
 			if err != nil {
-				Printf("db_verify: snapshots query failed %v\n", err)
+				Printf("GetColumnNames.StructScan failed %v\n", err)
 				return nil, err
 			}
-			//Printf("entry %2d %s\n", result.Cid, result.Name)
 			column_names = append(column_names, result.Name)
 		}
 		table_column_names[tbl_name] = column_names
 	}
 	return &table_column_names, nil
 }
+
 /* The reading of these SQLite tables could be done in overlapping mode,
  * provided that the database driver does not get confused
  */
@@ -110,25 +107,25 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		var p SnapshotRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: snapshots query failed %v\n", err)
+			Printf("ReadSnapshotTable.StructScan failed %v\n", err)
 			return err
 		}
 
 		// convert root to restic.ID
 		idd, err := restic.ParseID(p.Id_snap_root)
 		if err != nil {
-			Printf("Parse failed %v\n", err)
+			Printf("ReadSnapshotTable.ParseID failed %v\n", err)
 			return err
 		}
 
 		// insert database record into memory
 		/*
-	Id        		int
-	Snap_id       string
-	Snap_time 		string
-	Snap_host 		string
-	Snap_fsys 		string
-	Id_snap_root 	string
+			Id        		int
+			Snap_id       string
+			Snap_time 		string
+			Snap_host 		string
+			Snap_fsys 		string
+			Id_snap_root 	string
 		*/
 		root_ptr := Ptr2ID(idd, db_aggregate.repositoryData)
 		db_snapshots[p.Snap_id] = SnapshotRecordMem{SnapshotRecordDB: p,
@@ -139,7 +136,7 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	}
 	rows.Close()
 	db_aggregate.table_snapshots = &db_snapshots
-	db_aggregate.pk_snapshots    = &PK_snapshots
+	db_aggregate.pk_snapshots = &PK_snapshots
 	return nil
 }
 
@@ -156,16 +153,16 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	// collect rows
 	for rows.Next() {
 		/* columns are:
-			id INTEGER PRIMARY KEY,           -- the primary key
-			idd VARCHAR(64) NOT NULL,         -- the idd, UNIQUE INDEX
-			idd_size INTEGER NOT NULL,        -- idd size
-			index_type VARCHAR(4) NOT NULL,   -- type tree / data (might need INDEX)
-			id_pack_id INTEGER NOT NULL,      -- pack_id (needs INDEX)
+		id INTEGER PRIMARY KEY,           -- the primary key
+		idd VARCHAR(64) NOT NULL,         -- the idd, UNIQUE INDEX
+		idd_size INTEGER NOT NULL,        -- idd size
+		index_type VARCHAR(4) NOT NULL,   -- type tree / data (might need INDEX)
+		id_pack_id INTEGER NOT NULL,      -- pack_id (needs INDEX)
 		*/
 		var p IndexRepoRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify:index_repo query failed %v\n", err)
+			Printf("ReadIndexRepoTable:StructScan failed %v\n", err)
 			return err
 		}
 
@@ -192,9 +189,9 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	ptr_snapshot 		:= db_aggregate.pk_snapshots
-	ptr_index_repo	:= db_aggregate.pk_index_repo
-	db_meta_dir  		:= make(map[CompMetaDir]MetaDirRecordMem,
+	ptr_snapshot := db_aggregate.pk_snapshots
+	ptr_index_repo := db_aggregate.pk_index_repo
+	db_meta_dir := make(map[CompMetaDir]MetaDirRecordMem,
 		(*db_aggregate.table_counts)["index_repo"])
 	rows, err := db_conn.Queryx("SELECT * FROM meta_dir")
 
@@ -203,13 +200,13 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		var p MetaDirRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: meta_dir query failed %v\n", err)
+			Printf("ReadMetaDirTable.StructScan failed %v\n", err)
 			return err
 		}
 
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
-		snap_id 	:= (*ptr_snapshot)[p.Id_snap_id]
+		snap_id := (*ptr_snapshot)[p.Id_snap_id]
 		meta_blob := (*ptr_index_repo)[p.Id_idd]
 		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = MetaDirRecordMem{
 			MetaDirRecordDB: p, status: "db"}
@@ -233,7 +230,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	 }*/
 
 	ptr_index_repo := db_aggregate.pk_index_repo
-	ptr_name       := db_aggregate.pk_names
+	ptr_name := db_aggregate.pk_names
 	// store results in db_idd_file
 	db_idd_file := make(map[CompIddFile]IddFileRecordMem,
 		(*db_aggregate.table_counts)["idd_file"])
@@ -244,7 +241,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		var p IddFileRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: idd_file query failed %v\n", err)
+			Printf("ReadIddFileTable.StructScan failed %v\n", err)
 			return err
 		}
 
@@ -254,8 +251,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		meta_blob := (*ptr_index_repo)[p.Id_blob]
 		name := (*ptr_name)[p.Id_name]
 		p.Mtime = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
-		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = (
-			IddFileRecordMem{IddFileRecordDB: p, name: name, status: "db"})
+		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = (IddFileRecordMem{IddFileRecordDB: p, name: name, status: "db"})
 	}
 	rows.Close()
 	db_aggregate.table_idd_file = &db_idd_file
@@ -263,13 +259,13 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 }
 
 // load the database rows for table names into memory
-func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
+func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "names"
 	/*
-  id INTEGER PRIMARY KEY,         -- the primary key
-  name TEXT,                      -- all names collected from restic system
-  name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
-	 */
+	  id INTEGER PRIMARY KEY,         -- the primary key
+	  name TEXT,                      -- all names collected from restic system
+	  name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
+	*/
 
 	db_names := make(map[string]NamesRecordMem, (*db_aggregate.table_counts)[table_name])
 	PK_names := make(map[int]string, (*db_aggregate.table_counts)[table_name])
@@ -280,7 +276,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		var p NamesRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: %s query failed %v\n", table_name, err)
+			Printf("ReadNamesTable.StructScan failed %v\n", err)
 			return err
 		}
 
@@ -295,12 +291,12 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 }
 
 // load the database rows for table packfiles into memory
-func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
+func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "packfiles"
 	/*
 		id INTEGER PRIMARY KEY,         -- the primary key
 		packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
-	 */
+	*/
 
 	db_packfiles := make(map[*restic.ID]PackfilesRecordMem, (*db_aggregate.table_counts)[table_name])
 	PK_packfiles := make(map[int]*restic.ID, (*db_aggregate.table_counts)[table_name])
@@ -311,14 +307,14 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		var p PackfilesRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: %s query failed %v\n", table_name, err)
+			Printf("ReadPackfilesTable.StructScan %v\n", err)
 			return err
 		}
 
 		// convert packfile_id to restic.ID
 		id, err := restic.ParseID(p.Packfile_id)
 		if err != nil {
-			Printf("Parse failed for %s %v\n", p.Packfile_id, err)
+			Printf("ReadPackfilesTableParse failed for %s %v\n", p.Packfile_id, err)
 			return err
 		}
 
@@ -334,7 +330,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 }
 
 // load the database rows for table packfiles into memory
-func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
+func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "contents"
 	/*
 		id INTEGER PRIMARY KEY,         -- the primary key
@@ -343,7 +339,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		position INTEGER NOT NULL,      -- position in idd_file
 		offset   INTEGER NOT NULL,      -- the offset of the contents list
 		id_fullpath INTEGER NOT NULL,   -- reference to names.id
-	 */
+	*/
 	ptr_index_repo := db_aggregate.pk_index_repo
 	db_contents := make(map[CompContents]ContentsRecordMem,
 		(*db_aggregate.table_counts)[table_name])
@@ -354,7 +350,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		var p ContentsRecordDB
 		err = rows.StructScan(&p)
 		if err != nil {
-			Printf("db_verify: %s query failed %v\n", table_name, err)
+			Printf("ReadContentsTable.StructScan failed %v\n", err)
 			return err
 		}
 
@@ -362,13 +358,13 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 		meta_blob, ok := (*ptr_index_repo)[p.Id_blob]
 		if !ok {
 			Printf("missing id_blob pointer in index_repo for %v\n", p.Id_blob)
-			return errors.New("index_repo incomplete meta")
+			return errors.New("ReadContentsTable.index_repo incomplete meta")
 		}
 
 		data_blob, ok := (*ptr_index_repo)[p.Id_data_idd]
 		if !ok {
 			Printf("missing id_bob ponter in index_repo for %v\n", p.Id_data_idd)
-			return errors.New("index_repo incomplete data")
+			return errors.New("ReadContentsTable.index_repo incomplete data")
 		}
 
 		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
@@ -379,4 +375,3 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate)  error {
 	db_aggregate.table_contents = &db_contents
 	return nil
 }
-

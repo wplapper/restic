@@ -2,21 +2,21 @@ package sqlite
 
 import (
 	"fmt"
-  "os"
-  "time"
-  //"reflect"
+	"os"
+	"time"
+	//"reflect"
 
-  // sets
-  "github.com/deckarep/golang-set"
+	// sets
+	"github.com/deckarep/golang-set"
 
-  // sqlite3 interface
-  "database/sql"
-  _ "github.com/mattn/go-sqlite3"
-  "github.com/jmoiron/sqlx"
+	// sqlite3 interface
+	"database/sql"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-var SQLITE_TABLES = map[string]string {
-"snapshots": `CREATE TABLE snapshots (
+var SQLITE_TABLES = map[string]string{
+	"snapshots": `CREATE TABLE snapshots (
   id INTEGER PRIMARY KEY,             -- ID of table row
   snap_id VARCHAR(8) NOT NULL,        -- snap ID, UNIQUE INDEX
   snap_time VARCHAR(19) NOT NULL,     -- time of snap
@@ -25,7 +25,7 @@ var SQLITE_TABLES = map[string]string {
   id_snap_root INTEGER NOT NULL       --  the root of the snap
   )`,
 
-"index_repo": `CREATE TABLE index_repo (
+	"index_repo": `CREATE TABLE index_repo (
   -- maintains the contents of the index/ * files
   id INTEGER PRIMARY KEY,           -- the primary key
   idd VARCHAR(64) NOT NULL,         -- the idd, UNIQUE INDEX
@@ -35,13 +35,13 @@ var SQLITE_TABLES = map[string]string {
   FOREIGN KEY(id_pack_id)   REFERENCES packfiles(id)
   )`,
 
-"packfiles": `CREATE TABLE packfiles (
+	"packfiles": `CREATE TABLE packfiles (
   -- needed for the relationship between packfiles and blobs
   id INTEGER PRIMARY KEY,         -- the primary key
   packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
   )`,
 
-"meta_dir": `CREATE TABLE meta_dir (
+	"meta_dir": `CREATE TABLE meta_dir (
   -- many to many relationship table between snaps and directory idds
   id INTEGER PRIMARY KEY,           -- the primary key
   id_snap_id INTEGER NOT NULL,      -- the snap_id , INDEX
@@ -51,7 +51,7 @@ var SQLITE_TABLES = map[string]string {
   FOREIGN KEY(id_idd)       REFERENCES index_repo(id)
   )`,
 
-"idd_file": `CREATE TABLE idd_file (
+	"idd_file": `CREATE TABLE idd_file (
   id INTEGER PRIMARY KEY,         -- the primary key
   id_blob INTEGER NOT NULL,       -- ptr to blob table
   position INTEGER NOT NULL,      -- offset in idd_file
@@ -65,21 +65,21 @@ var SQLITE_TABLES = map[string]string {
   FOREIGN KEY(id_name) REFERENCES names(id)
   )`,
 
-"names": `CREATE TABLE names (
+	"names": `CREATE TABLE names (
   id INTEGER PRIMARY KEY,         -- the primary key
   name TEXT,                      -- all names collected from restic system
   -- name is UNIQUE INDEX
   name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
   )`,
 
-"timestamp": `CREATE TABLE timestamp (
+	"timestamp": `CREATE TABLE timestamp (
   id INTEGER PRIMARY KEY,                 -- the primary key
   restic_updated   TIMESTAMP NOT NULL,    --changes when restic gets updated
   database_updated TIMESTAMP NOT NULL,    --last update of database
   ts_created       TIMESTAMP NOT NULL     --creation date of database
   )`,
 
-"contents": `CREATE TABLE contents (
+	"contents": `CREATE TABLE contents (
   id INTEGER PRIMARY KEY,         -- the primary key
   id_data_idd INTEGER NOT NULL,   -- ptr to data_idd, INDEX
   id_blob  INTEGER NOT NULL,      -- ptr to idd_file, needs INDEX
@@ -92,8 +92,8 @@ var SQLITE_TABLES = map[string]string {
   FOREIGN KEY(id_fullpath) REFERENCES names(id)
   )`,
 
-// history section
-"snapshots_history": `CREATE TABLE snapshots_history (
+	// history section
+	"snapshots_history": `CREATE TABLE snapshots_history (
   id INTEGER PRIMARY KEY,         -- ID of table row
   timestamp  TIMESTAMP NOT NULL,
   action     TEXT NULL,           -- action type (INSERT, UPDATE, DELETE)
@@ -105,7 +105,7 @@ var SQLITE_TABLES = map[string]string {
   id_snap_root INTEGER NOT NULL   -- ref to the root of the snap
   )`,
 
-"timestamp_history": `CREATE TABLE timestamp_history (
+	"timestamp_history": `CREATE TABLE timestamp_history (
   id INTEGER PRIMARY KEY,           -- ID of table row
   timestamp TIMESTAMP NOT NULL,
   action    TEXT NOT NULL,          -- action type (INSERT, UPDATE, DELETE)
@@ -116,222 +116,220 @@ var SQLITE_TABLES = map[string]string {
   )`}
 
 var SQLITE_INDEX = map[string][]ListIndexMaps{
-  "fullpath2":  {ListIndexMaps{ixname: "ux_fp2_blob",           on: "id_blob",      unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_fp2_name",           on: "id_name",      unique: ""},},
+	"fullpath2": {ListIndexMaps{ixname: "ux_fp2_blob", on: "id_blob", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_fp2_name", on: "id_name", unique: ""}},
 
-  "index_repo": {ListIndexMaps{ixname: "ux_ix_repo_idd",        on: "idd",          unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_ix_repo_pack_id",    on: "id_blob",      unique: ""},
-                 ListIndexMaps{ixname: "ix_ix_type",            on: "index_type",   unique: ""},},
+	"index_repo": {ListIndexMaps{ixname: "ux_ix_repo_idd", on: "idd", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_blob", unique: ""},
+		ListIndexMaps{ixname: "ix_ix_type", on: "index_type", unique: ""}},
 
-  "packfiles":  {ListIndexMaps{ixname: "ux_packf_idd",          on: "idd",          unique: "UNIQUE"},},
+	"packfiles": {ListIndexMaps{ixname: "ux_packf_idd", on: "idd", unique: "UNIQUE"}},
 
-  "meta_dir":   {ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_meta_dir_idd",       on: "id_idd",       unique: ""},},
+	"meta_dir": {ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_meta_dir_idd", on: "id_idd", unique: ""}},
 
-  "idd_file":   {ListIndexMaps{ixname: "ux_idd_file_blob_pos",  on: "id_blob,position", unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_idd_file_name",      on: "id_name",     unique: ""},},
+	"idd_file": {ListIndexMaps{ixname: "ux_idd_file_blob_pos", on: "id_blob,position", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_idd_file_name", on: "id_name", unique: ""}},
 
+	"snapshots": {ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id", unique: "UNIQUE"}},
 
-  "snapshots":  {ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id",      unique: "UNIQUE"},},
+	"names": {ListIndexMaps{ixname: "ux_names_name", on: "name", unique: "UNIQUE"}},
 
-  "names":      {ListIndexMaps{ixname: "ux_names_name",         on: "name",         unique: "UNIQUE"},},
+	"contents": {ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_cont_fpath", on: "id_fullpath", unique: ""},
+		ListIndexMaps{ixname: "ix_cont_data_idd", on: "id_data_idd", unique: ""}},
 
-  "contents":   {ListIndexMaps{ixname: "ux_cont_blob_pos_off",  on: "id_blob,position,offset", unique: "UNIQUE"},
-                 ListIndexMaps{ixname: "ix_cont_fpath",         on: "id_fullpath",  unique: ""},
-                 ListIndexMaps{ixname: "ix_cont_data_idd",      on: "id_data_idd",  unique: ""},},
-
-  "snapshots_history":
-                {ListIndexMaps{ixname: "ix_snaphist_snap_id",   on: "snap_id",      unique: ""},
-                 ListIndexMaps{ixname: "ix_snaphist_action",    on: "action",       unique: ""},},}
-
+	"snapshots_history": {ListIndexMaps{ixname: "ix_snaphist_snap_id", on: "snap_id", unique: ""},
+		ListIndexMaps{ixname: "ix_snaphist_action", on: "action", unique: ""}}}
 
 type DBDescriptor struct {
-  DB_ptr          *sqlx.DB
-  verbose         int
-  echo            bool
-  table_names     []string
-  table_names_map map[string]struct{}
+	DB_ptr          *sqlx.DB
+	verbose         int
+	echo            bool
+	table_names     []string
+	table_names_map map[string]struct{}
 }
+
 var db_descriptor *DBDescriptor
 
 // Printf writes the message to the configured stdout stream.
-func Printf(format string, args... interface{}) {
-  _, err := fmt.Fprintf(os.Stdout, format, args...)
-  if err != nil {
-    fmt.Fprintf(os.Stderr, "unable to write to stdout: %v\n", err)
-  }
+func Printf(format string, args ...interface{}) {
+	_, err := fmt.Fprintf(os.Stdout, format, args...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to write to stdout: %v\n", err)
+	}
 }
 
 func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*sqlx.DB, error) {
-  Printf("opening %s\n", data_base_path)
-  db, err := sqlx.Open("sqlite3", data_base_path)
-  if err != nil {
-    Printf("sqlx.Open failed %v\n", err)
-    return nil, err
-  }
+	Printf("opening %s\n", data_base_path)
+	db, err := sqlx.Open("sqlite3", data_base_path)
+	if err != nil {
+		Printf("sqlx.Open failed %v\n", err)
+		return nil, err
+	}
 
-  // allocate DBDescriptor
-  db_descriptor = &DBDescriptor{DB_ptr: db, verbose: verbose, echo: echo}
+	// allocate DBDescriptor
+	db_descriptor = &DBDescriptor{DB_ptr: db, verbose: verbose, echo: echo}
 
-  sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table' ORDER BY tbl_name"
-  db_descriptor.table_names = make([]string, 0)
-  err = db.Select(&db_descriptor.table_names, sql)
-  if err != nil {
-    Printf("Get failed err %v\n", err)
-    return nil, err
-  }
+	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table' ORDER BY tbl_name"
+	db_descriptor.table_names = make([]string, 0)
+	err = db.Select(&db_descriptor.table_names, sql)
+	if err != nil {
+		Printf("Get failed err %v\n", err)
+		return nil, err
+	}
 
-  db_descriptor.table_names_map = make(map[string]struct{},
-    len(db_descriptor.table_names))
-  for _, table_name := range db_descriptor.table_names {
-    db_descriptor.table_names_map[table_name] = struct{}{}
-  }
+	db_descriptor.table_names_map = make(map[string]struct{},
+		len(db_descriptor.table_names))
+	for _, table_name := range db_descriptor.table_names {
+		db_descriptor.table_names_map[table_name] = struct{}{}
+	}
 
-  //Printf("sqlite: calling init_tables\n")
-  err = init_tables()
-  if err != nil {
-    Printf("error in init_tables %v\n", err)
-    return nil, err
-  }
-  if index {
-    err := build_index()
-    if err != nil {
-      Printf("error in build_index %v\n", err)
-      return nil, err
-    }
-  }
-  return db, nil
+	//Printf("sqlite: calling init_tables\n")
+	err = init_tables()
+	if err != nil {
+		Printf("error in init_tables %v\n", err)
+		return nil, err
+	}
+	if index {
+		err := build_index()
+		if err != nil {
+			Printf("error in build_index %v\n", err)
+			return nil, err
+		}
+	}
+	return db, nil
 }
 
 func init_tables() error {
-  /*
-  Create and manage the following tables:
-  snapshots       - o2o straight from the snapshots json data
-  index_repo      - o2o idd, size, type, packid back pointer
-                  - o2m for pack_id -> blob
-  packfile        - o2o between idd and pack_ID
-  meta_dir        - m2m between snap_id and idd
-  file_idd        - o2o idd, offset, ptr to name, ptr to contents, size
-                  - o2m for blob ptr
-  names           - o2o id, name, name_type
-  fullpath2       - o2o between names and directory blobs
-  contents        - o2o between contents composite ptr and contents elem
-  timestamp       - o2o info about changes to the real restic files and
-                        info about last balance check
-  snapshots_history - 02m history when snap was added to the system or
-                          removed
-  timestamp_history - o2o all changes to the database are recorded here
-                          with a timestamp
-  */
-//SQLite tables and INDEX definitions
-  for table_name, init_string := range SQLITE_TABLES {
-    _, ok := db_descriptor.table_names_map[table_name]
-    if ok {
-      continue
-    }
+	/*
+	  Create and manage the following tables:
+	  snapshots       - o2o straight from the snapshots json data
+	  index_repo      - o2o idd, size, type, packid back pointer
+	                  - o2m for pack_id -> blob
+	  packfile        - o2o between idd and pack_ID
+	  meta_dir        - m2m between snap_id and idd
+	  file_idd        - o2o idd, offset, ptr to name, ptr to contents, size
+	                  - o2m for blob ptr
+	  names           - o2o id, name, name_type
+	  fullpath2       - o2o between names and directory blobs
+	  contents        - o2o between contents composite ptr and contents elem
+	  timestamp       - o2o info about changes to the real restic files and
+	                        info about last balance check
+	  snapshots_history - 02m history when snap was added to the system or
+	                          removed
+	  timestamp_history - o2o all changes to the database are recorded here
+	                          with a timestamp
+	*/
+	//SQLite tables and INDEX definitions
+	for table_name, init_string := range SQLITE_TABLES {
+		_, ok := db_descriptor.table_names_map[table_name]
+		if ok {
+			continue
+		}
 
-    // create the table
-    if db_descriptor.verbose > 0 {
-      Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), init_string)
-    }
+		// create the table
+		if db_descriptor.verbose > 0 {
+			Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), init_string)
+		}
 
-    _, err := db_descriptor.DB_ptr.Exec(init_string)
-    if err != nil {
-      Printf("%q: %s\n", err, init_string)
-      return err
-    }
-  }
-  return nil
+		_, err := db_descriptor.DB_ptr.Exec(init_string)
+		if err != nil {
+			Printf("%q: %s\n", err, init_string)
+			return err
+		}
+	}
+	return nil
 }
 
 type ListIndexMaps struct {
-  ixname string
-  on     string
-  unique string
+	ixname string
+	on     string
+	unique string
 }
 
 func build_index() error {
-  //Printf("sqlite:build_index\n")
-  type TableIndex struct {
-    Name string
-    Tbl_name string
-  }
-  result := make([]TableIndex, 0)
-  sql := "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
-  err := db_descriptor.DB_ptr.Select(&result, sql)
-  if err != nil {
-    Printf("Select error on %s %v\n", sql, err)
-    return err
-  }
+	//Printf("sqlite:build_index\n")
+	type TableIndex struct {
+		Name     string
+		Tbl_name string
+	}
+	result := make([]TableIndex, 0)
+	sql := "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
+	err := db_descriptor.DB_ptr.Select(&result, sql)
+	if err != nil {
+		Printf("Select error on %s %v\n", sql, err)
+		return err
+	}
 
-  // build a map of index_names which point back to the owning table
-  index_names  := make(map[string]string)
-  indices_have := mapset.NewSet()
-  indices_want := mapset.NewSet()
-  for _, row := range result {
-    index_name := row.Name
-    table_name := row.Tbl_name
-    index_names[index_name] = table_name
-    indices_have.Add(index_name)
-  }
+	// build a map of index_names which point back to the owning table
+	index_names := make(map[string]string)
+	indices_have := mapset.NewSet()
+	indices_want := mapset.NewSet()
+	for _, row := range result {
+		index_name := row.Name
+		table_name := row.Tbl_name
+		index_names[index_name] = table_name
+		indices_have.Add(index_name)
+	}
 
-  // check the indices we want
-  for _, action_list := range SQLITE_INDEX {
-    for _, action := range action_list {
-      indices_want.Add(action.ixname)
-    }
-  }
+	// check the indices we want
+	for _, action_list := range SQLITE_INDEX {
+		for _, action := range action_list {
+			indices_want.Add(action.ixname)
+		}
+	}
 
-  // which indices do we still need?
-  for ixname := range indices_want.Difference(indices_have).Iter() {
-    ixname_conf := ixname.(string)
-    table_name  := index_names[ixname_conf]
-    for _,entry := range SQLITE_INDEX[table_name] {
-      if indices_have.Contains(entry.ixname) {
-        continue
-      }
+	// which indices do we still need?
+	for ixname := range indices_want.Difference(indices_have).Iter() {
+		ixname_conf := ixname.(string)
+		table_name := index_names[ixname_conf]
+		for _, entry := range SQLITE_INDEX[table_name] {
+			if indices_have.Contains(entry.ixname) {
+				continue
+			}
 
-      // need to build sql string
-      sql = fmt.Sprintf("CREATE %-6s INDEX %s ON %s", entry.unique, entry.ixname, table_name)
-      if db_descriptor.verbose > 0 {
-        Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), sql)
-      }
+			// need to build sql string
+			sql = fmt.Sprintf("CREATE %-6s INDEX %s ON %s", entry.unique, entry.ixname, table_name)
+			if db_descriptor.verbose > 0 {
+				Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), sql)
+			}
 
-      _, err := db_descriptor.DB_ptr.Exec(sql)
-      if err != nil {
-          Printf("failed to CREATE INDEX %v\n", err)
-          return err
-      }
-      indices_have.Add(entry.ixname)
-    }
-  }
-  return nil
+			_, err := db_descriptor.DB_ptr.Exec(sql)
+			if err != nil {
+				Printf("failed to CREATE INDEX %v\n", err)
+				return err
+			}
+			indices_have.Add(entry.ixname)
+		}
+	}
+	return nil
 }
 
 var tables_high_id map[string]int
+
 func Get_all_high_ids() error {
-  var max sql.NullInt64
-  tables_high_id = make(map[string]int)
-  for _,tbl_name := range db_descriptor.table_names {
-    err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from " + tbl_name)
+	var max sql.NullInt64
+	tables_high_id = make(map[string]int)
+	for _, tbl_name := range db_descriptor.table_names {
+		err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from "+tbl_name)
 		if err != nil {
 			Printf("Query error for Get max(id) is %v\n", err)
 			return err
 		}
-    if !max.Valid {
-      tables_high_id[tbl_name] = 1
-    } else {
-      tables_high_id[tbl_name] = int(max.Int64) + 1
-    }
-  }
-  return nil
+		if !max.Valid {
+			tables_high_id[tbl_name] = 1
+		} else {
+			tables_high_id[tbl_name] = int(max.Int64) + 1
+		}
+	}
+	return nil
 }
 
 func Get_high_id(tbl_name string) int {
-  value, ok := tables_high_id[tbl_name]
-  if !ok {
-    panic("Get_high_id invalid table_name!")
-  }
-  return value
+	value, ok := tables_high_id[tbl_name]
+	if !ok {
+		panic("Get_high_id invalid table_name!")
+	}
+	return value
 }
-
