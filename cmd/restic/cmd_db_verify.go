@@ -16,7 +16,8 @@ import (
 	"github.com/spf13/cobra"
 
 	// sets
-	"github.com/deckarep/golang-set"
+	//"github.com/deckarep/golang-set"
+	"github.com/wplapper/restic/library/mapset"
 
 	// sqlx for sqlite3
 	"github.com/jmoiron/sqlx"
@@ -402,8 +403,8 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 	// compare snapshot keys
 	equal := CompareKeys("snapshots", db_snapshots, mem_snapshots)
 	if !equal {
-		set_db_keys := mapset.NewSet()
-		set_mem_keys := mapset.NewSet()
+		set_db_keys  := mapset.NewSet[string]()
+		set_mem_keys := mapset.NewSet[string]()
 		for key := range db_snapshots {
 			set_db_keys.Add(key)
 		}
@@ -411,10 +412,10 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 			set_mem_keys.Add(key)
 		}
 
-		len_db := set_db_keys.Cardinality()
+		len_db  := set_db_keys.Cardinality()
 		len_mem := set_mem_keys.Cardinality()
 
-		var diff mapset.Set
+		var diff mapset.Set[string]
 		var which string
 		if len_db > len_mem {
 			diff = set_db_keys.Difference(set_mem_keys)
@@ -426,8 +427,8 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 
 		count := 0
 		for comp_ix := range diff.Iter() {
-			fixed := comp_ix.(string)
-			Printf("key %s %s\n", which, fixed)
+			//fixed := comp_ix //.(string)
+			Printf("key %s %s\n", which, comp_ix)
 			count++
 			if count > 100 {
 				break
@@ -498,8 +499,8 @@ func check_db_names(db_names map[string]NamesRecordMem,
 		return equal
 	}
 
-	set_db_keys := mapset.NewSet()
-	set_mem_keys := mapset.NewSet()
+	set_db_keys  := mapset.NewSet[string]()
+	set_mem_keys := mapset.NewSet[string]()
 	for key := range db_names {
 		set_db_keys.Add(key)
 	}
@@ -507,10 +508,10 @@ func check_db_names(db_names map[string]NamesRecordMem,
 		set_mem_keys.Add(key)
 	}
 
-	len_db := set_db_keys.Cardinality()
+	len_db  := set_db_keys.Cardinality()
 	len_mem := set_mem_keys.Cardinality()
 
-	var diff mapset.Set
+	var diff mapset.Set[string]
 	var which string
 	if len_db > len_mem {
 		diff = set_db_keys.Difference(set_mem_keys)
@@ -522,8 +523,7 @@ func check_db_names(db_names map[string]NamesRecordMem,
 
 	count := 0
 	for comp_ix := range diff.Iter() {
-		fixed := comp_ix.(string)
-		Printf("%s %s\n", which, fixed)
+		Printf("%s %s\n", which, comp_ix)
 		count++
 		if count > 100 {
 			break
@@ -553,8 +553,8 @@ func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
 	equal := CompareKeys("contents", table_contents, mem_contents_map)
 	if !equal {
 		Printf("**** Key mismatch for contents ***\n")
-		set_db_keys := mapset.NewSet()
-		set_mem_keys := mapset.NewSet()
+		set_db_keys  := mapset.NewSet[CompContents]()
+		set_mem_keys := mapset.NewSet[CompContents]()
 		for key := range table_contents {
 			set_db_keys.Add(key)
 		}
@@ -565,10 +565,9 @@ func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
 		Printf("missing from memory %d keys\n", diff.Cardinality())
 		count := 0
 		for comp_ix := range diff.Iter() {
-			checked := comp_ix.(CompContents)
-			meta_blob := checked.meta_blob
-			Printf("missing %s %3d %3d\n", meta_blob.String()[:12], checked.position,
-				checked.offset)
+			meta_blob := comp_ix.meta_blob
+			Printf("missing %s %3d %3d\n", meta_blob.String()[:12], comp_ix.position,
+				comp_ix.offset)
 			count++
 			if count > 100 {
 				break
@@ -615,8 +614,8 @@ func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 	// compare keys
 	equal := CompareKeys("meta_dir", db_meta_dir, mem_meta_dir_map)
 	if !equal {
-		set_db_keys := mapset.NewSet()
-		set_mem_keys := mapset.NewSet()
+		set_db_keys  := mapset.NewSet[CompMetaDir]()
+		set_mem_keys := mapset.NewSet[CompMetaDir]()
 		for key := range db_meta_dir {
 			set_db_keys.Add(key)
 		}
@@ -624,10 +623,10 @@ func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 			set_mem_keys.Add(key)
 		}
 
-		len_db := set_db_keys.Cardinality()
+		len_db  := set_db_keys.Cardinality()
 		len_mem := set_mem_keys.Cardinality()
 
-		var diff mapset.Set
+		var diff mapset.Set[CompMetaDir]
 		var which string
 		if len_db > len_mem {
 			diff = set_db_keys.Difference(set_mem_keys)
@@ -640,12 +639,11 @@ func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 		count := 0
 		count_empty_node := 0
 		for comp_ix := range diff.Iter() {
-			fixed := comp_ix.(CompMetaDir)
-			if fixed.meta_blob == PTR_EMPTY_NODE_ID {
+			if comp_ix.meta_blob == PTR_EMPTY_NODE_ID {
 				count_empty_node++
 				continue
 			}
-			Printf("%s %s %s\n", which, fixed.snap_id, fixed.meta_blob)
+			Printf("%s %s %s\n", which, comp_ix.snap_id, comp_ix.meta_blob)
 			count++
 			if count > 100 {
 				break
@@ -714,7 +712,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	*/
 	Printf("\n Check Foreign Key reationship\n")
 	all_good := true
-	ref_table_keys := mapset.NewSet()
+	ref_table_keys := mapset.NewSet[int]()
 	for _, value := range *db_aggregate.table_packfiles {
 		ref_table_keys.Add(value.Id)
 	}
@@ -729,7 +727,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 
 	//		(meta_dir.id_snap_id,   snapshots.id)
 	all_good = true
-	ref_table_keys = mapset.NewSet()
+	ref_table_keys = mapset.NewSet[int]()
 	for _, value := range *db_aggregate.table_snapshots {
 		ref_table_keys.Add(value.Id)
 	}
@@ -743,9 +741,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	Printf("(meta_dir.id_snap_id,   snapshots.id) %v\n", all_good)
 
 	all_good = true
-	ref_table_keys = mapset.NewSet()
-	//		(meta_dir.id_idd,      index_repo.id),
-	ref_table_keys = mapset.NewSet()
+	ref_table_keys = mapset.NewSet[int]()
 	for _, value := range *db_aggregate.table_index_repo {
 		ref_table_keys.Add(value.Id)
 	}
@@ -789,8 +785,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	Printf("(contents.id_blob,     index_repo.id) %v\n", all_good)
 
 	// (idd_file.id_name,     names.id)
-	ref_table_keys = mapset.NewSet()
-	ref_table_keys = mapset.NewSet()
+	ref_table_keys = mapset.NewSet[int]()
 	for _, value := range *db_aggregate.table_names {
 		ref_table_keys.Add(value.Id)
 	}
@@ -806,11 +801,10 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 }
 
 // utility function - compare_keys
-func CompareKeys[K1 comparable, V1 any,
-	K2 comparable, V2 any](table_name string, db map[K1]V1, mem map[K2]V2) bool {
+func CompareKeys[K comparable, V1 any, V2 any](table_name string, db map[K]V1, mem map[K]V2) bool {
 	// define sets for the keys
-	set_db_keys := mapset.NewSet()
-	set_mem_keys := mapset.NewSet()
+	set_db_keys  := mapset.NewSet[K]()
+	set_mem_keys := mapset.NewSet[K]()
 	for key := range db {
 		set_db_keys.Add(key)
 	}
@@ -820,11 +814,10 @@ func CompareKeys[K1 comparable, V1 any,
 	return set_mem_keys.Equal(set_db_keys)
 }
 
-func NewMemoryKeys[K1 comparable, V1 any,
-	K2 comparable, V2 any](db map[K1]V1, mem map[K2]V2) mapset.Set {
+func NewMemoryKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
 	// define sets for the keys
-	set_db_keys := mapset.NewSet()
-	set_mem_keys := mapset.NewSet()
+	set_db_keys  := mapset.NewSet[K]()
+	set_mem_keys := mapset.NewSet[K]()
 	for key := range db {
 		set_db_keys.Add(key)
 	}

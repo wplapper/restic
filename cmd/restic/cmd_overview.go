@@ -15,7 +15,8 @@ import (
 	"github.com/spf13/cobra"
 
 	// restic library
-	"github.com/deckarep/golang-set"
+	//"github.com/deckarep/golang-set"
+	"github.com/wplapper/restic/library/mapset"
 	"github.com/wplapper/restic/library/restic"
 )
 
@@ -123,7 +124,7 @@ func runOverview(gopts GlobalOptions) error {
 		// step 8: gather blobs for the constructed tree lists
 		// get the data from our repository_data structures
 		usedIntBlobs := restic.NewIntSet()
-		count_file_sets := mapset.NewSet()
+		count_file_sets := mapset.NewSet[uint64]()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
 			id_ptr := Ptr2ID(*sn.ID(), repositoryData)
@@ -161,7 +162,7 @@ func runOverview(gopts GlobalOptions) error {
 
 	// *** ALL ***
 	usedIntBlobs := restic.NewIntSet()
-	count_file_sets := mapset.NewSet()
+	count_file_sets := mapset.NewSet[uint64]()
 	for _, sn := range repositoryData.snaps {
 		// step trough the list of meta_blobs and collect data
 		id_ptr := Ptr2ID(*sn.ID(), repositoryData)

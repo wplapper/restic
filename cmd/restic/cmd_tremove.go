@@ -18,7 +18,8 @@ import (
 	"github.com/wplapper/restic/library/debug"
 
 	// mapset
-	"github.com/deckarep/golang-set"
+	//"github.com/deckarep/golang-set"
+	"github.com/wplapper/restic/library/mapset"
 )
 
 type TRemoveOptions struct {
@@ -308,7 +309,7 @@ repositoryData *RepositoryData, detail bool) error {
 		}
 
 		// gather detail of deleted directories and files
-		deleted_files := mapset.NewSet()
+		deleted_files := mapset.NewSet[string]()
 		for blob := range unique_blobs {
 			filename := ""
 			ih := repositoryData.index_handle[repositoryData.index_to_blob[blob]]
@@ -330,7 +331,7 @@ repositoryData *RepositoryData, detail bool) error {
 		deleted_files_to_sort := make([]string, deleted_files.Cardinality())
 		index := 0
 		for filename := range deleted_files.Iter() {
-			deleted_files_to_sort[index] = filename.(string)
+			deleted_files_to_sort[index] = filename //.(string)
 			index++
 		}
 

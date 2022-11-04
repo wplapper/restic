@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	// sets
-	"github.com/deckarep/golang-set"
+	//"github.com/deckarep/golang-set"
 	//"../../libary/mapset"
 	"github.com/wplapper/restic/library/mapset"
 
@@ -38,13 +38,13 @@ type Newcomers struct {
 	mem_contents   map[CompContents]ContentsRecordMem
 	mem_packfiles  map[*restic.ID]PackfilesRecordMem
 
-	new_snapshots  mapset.Set
-	new_index_repo mapset.Set
-	new_names      mapset.Set
-	new_idd_file   mapset.Set
-	new_meta_dir   mapset.Set
-	new_contents   mapset.Set
-	new_packfiles  mapset.Set
+	new_snapshots  mapset.Set[string]
+	new_index_repo mapset.Set[*restic.ID]
+	new_names      mapset.Set[string]
+	new_idd_file   mapset.Set[CompIddFile]
+	new_meta_dir   mapset.Set[CompMetaDir]
+	new_contents   mapset.Set[CompContents]
+	new_packfiles  mapset.Set[*restic.ID]
 }
 
 var cmdDBAdd = &cobra.Command{
@@ -73,13 +73,13 @@ func InitNewcomers() *Newcomers {
 	new_comers.mem_contents = make(map[CompContents]ContentsRecordMem)
 	new_comers.mem_packfiles = make(map[*restic.ID]PackfilesRecordMem)
 
-	new_comers.new_snapshots = mapset.NewSet()
-	new_comers.new_index_repo = mapset.NewSet()
-	new_comers.new_names = mapset.NewSet()
-	new_comers.new_idd_file = mapset.NewSet()
-	new_comers.new_meta_dir = mapset.NewSet()
-	new_comers.new_contents = mapset.NewSet()
-	new_comers.new_packfiles = mapset.NewSet()
+	new_comers.new_snapshots = mapset.NewSet[string]()
+	new_comers.new_index_repo = mapset.NewSet[*restic.ID]()
+	new_comers.new_names 		= mapset.NewSet[string]()
+	new_comers.new_idd_file = mapset.NewSet[CompIddFile]()
+	new_comers.new_meta_dir = mapset.NewSet[CompMetaDir]()
+	new_comers.new_contents = mapset.NewSet[CompContents]()
+	new_comers.new_packfiles = mapset.NewSet[*restic.ID]()
 	return &new_comers
 }
 
@@ -183,7 +183,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	newComers.new_snapshots = NewMemoryKeys(*db_aggregate.table_snapshots, newComers.mem_snapshots)
 	high_snap := sqlite.Get_high_id("snapshots")
 	for snap := range newComers.new_snapshots.Iter() {
-		snap_id := snap.(string)
+		snap_id := snap
 		row := newComers.mem_snapshots[snap_id]
 		row.status = "new"
 		row.Id = high_snap
@@ -201,7 +201,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_names := sqlite.Get_high_id("names")
 	for raw := range newComers.new_names.Iter() {
-		name := raw.(string)
+		name := raw
 		row := newComers.mem_names[name]
 		row.status = "new"
 		row.Id = high_names
@@ -218,7 +218,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_pack := sqlite.Get_high_id("packfiles")
 	for raw := range newComers.new_packfiles.Iter() {
-		pack_ID_ptr := raw.(*restic.ID)
+		pack_ID_ptr := raw
 		row := newComers.mem_packfiles[pack_ID_ptr]
 		row.status = "new"
 		row.Id = high_pack
@@ -237,7 +237,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_repo := sqlite.Get_high_id("index_repo")
 	for unchecked := range newComers.new_index_repo.Iter() {
-		blob := unchecked.(*restic.ID)
+		blob := unchecked
 		ih := repositoryData.index_handle[*blob]
 		pack_Int := ih.pack_index
 		row := newComers.mem_index_repo[blob]
@@ -258,7 +258,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_idd := sqlite.Get_high_id("idd_file")
 	for raw := range newComers.new_idd_file.Iter() {
-		comp_ix := raw.(CompIddFile)
+		comp_ix := raw
 		meta_blob := comp_ix.meta_blob
 		position := comp_ix.position
 		row := newComers.mem_idd_file[comp_ix]
@@ -281,7 +281,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_mdir := sqlite.Get_high_id("meta_dir")
 	for raw := range newComers.new_meta_dir.Iter() {
-		comp_ix := raw.(CompMetaDir)
+		comp_ix := raw
 		snap_id := comp_ix.snap_id
 		p_meta_blob := comp_ix.meta_blob
 		row := newComers.mem_meta_dir[comp_ix]
@@ -300,7 +300,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 
 	high_cont := sqlite.Get_high_id("contents")
 	for raw := range newComers.new_contents.Iter() {
-		comp_ix := raw.(CompContents)
+		comp_ix := raw
 		p_meta_blob := comp_ix.meta_blob
 		row := newComers.mem_contents[comp_ix]
 		row.status = "new"
@@ -374,6 +374,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 
 	//type K comparable
 	//type V any
+	/*
 	type type_InsertATable func(string, interface{}, *sqlx.Tx, map[string][]string)
 	type InsertRecord struct {
 		table_name string
@@ -386,6 +387,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			return err
 		}
 	}
+	*/
 
 	err = InsertATable("snapshots", newComers.mem_snapshots, tx, column_names)
 	if err != nil {
@@ -476,15 +478,15 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 	// create a set of the new blobs
 	// new_blob_set is the Set of al new blobs
-	new_blob_set := mapset.NewSet()
+	new_blob_set := mapset.NewSet[*restic.ID]()
 	for key := range newComers.mem_index_repo {
 		new_blob_set.Add(key)
 	}
 
 	// assign all the new blobs to one or more snapshots
-	allocate_map := make(map[*restic.ID]mapset.Set)
+	allocate_map := make(map[*restic.ID]mapset.Set[string])
 	for raw := range newComers.new_snapshots.Iter() {
-		snap_id := raw.(string)
+		snap_id := raw
 		row := newComers.mem_snapshots[snap_id]
 		// we need access to the full *restic.ID of the snap
 		// reference and dereference the pointer properly
@@ -501,7 +503,7 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 					if new_blob_set.Contains(cont) {
 						_, ok := allocate_map[cont]
 						if !ok {
-							allocate_map[cont] = mapset.NewSet()
+							allocate_map[cont] = mapset.NewSet[string]()
 						}
 						allocate_map[cont].Add(snap_id)
 					}
@@ -512,7 +514,7 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 			if new_blob_set.Contains(ptr_meta_blob) {
 				_, ok := allocate_map[ptr_meta_blob]
 				if !ok {
-					allocate_map[ptr_meta_blob] = mapset.NewSet()
+					allocate_map[ptr_meta_blob] = mapset.NewSet[string]()
 				}
 				allocate_map[ptr_meta_blob].Add(snap_id)
 			}
@@ -520,14 +522,14 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 	}
 
 	//
-	map_snap_to_blobs := make(map[string]mapset.Set)
+	map_snap_to_blobs := make(map[string]mapset.Set[*restic.ID])
 	for ptr_meta_blob, snap_set := range allocate_map {
 		// we need to go over all members of 'snap_set'
 		for raw := range snap_set.Iter() {
-			snap_id := raw.(string)
+			snap_id := raw
 			_, ok := map_snap_to_blobs[snap_id]
 			if !ok {
-				map_snap_to_blobs[snap_id] = mapset.NewSet()
+				map_snap_to_blobs[snap_id] = mapset.NewSet[*restic.ID]()
 			}
 			// finally assign blob to a snap
 			map_snap_to_blobs[snap_id].Add(ptr_meta_blob)
@@ -542,7 +544,7 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 		count_meta_blobs := 0
 		count_data_blobs := 0
 		for raw := range blob_set.Iter() {
-			blob := raw.(*restic.ID)
+			blob := raw //.(*restic.ID)
 			ih := repositoryData.index_handle[*blob]
 			typ := ih.Type.String()[0:1]
 			if typ == "t" {
@@ -572,9 +574,9 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 // Sets
 type MemBuildFunc func(*DBAggregate, *RepositoryData, *Newcomers)
 
-func CalcuateNewEntries[K1 comparable, V1 any, K2 comparable, V2 any](
-	db_map map[K1]V1, mem_map map[K2]V2, repositoryData *RepositoryData,
-	db_aggregate *DBAggregate, mem_build MemBuildFunc, new_set *mapset.Set,
+func CalcuateNewEntries[K comparable, V1 any, V2 any](
+	db_map map[K]V1, mem_map map[K]V2, repositoryData *RepositoryData,
+	db_aggregate *DBAggregate, mem_build MemBuildFunc, new_set *mapset.Set[K],
 	new_comers *Newcomers) {
 
 	// build memory map
