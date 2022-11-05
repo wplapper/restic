@@ -32,7 +32,6 @@ type threadSafeSet[T comparable] struct {
 	sync.RWMutex
 }
 
-
 func newThreadSafeSet[T comparable]() threadSafeSet[T] {
 	return threadSafeSet[T]{s: newThreadUnsafeSet[T]()}
 }

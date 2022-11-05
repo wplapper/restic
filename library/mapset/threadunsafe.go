@@ -36,8 +36,8 @@ import (
 // type opStack[T comparable] map[T]struct{}
 type threadUnsafeSet[T comparable] map[T]struct{}
 // Golang needs the FooBar definition
-type FooBar[T comparable] struct {
-  ops threadUnsafeSet[T]
+type AnyType[T comparable] struct {
+  anything threadUnsafeSet[T]
 }
 
 // An OrderedPair represents a 2-tuple of values.
@@ -257,9 +257,9 @@ func (set *threadUnsafeSet[T]) Pop() T {
 
 /*
 func (set *threadUnsafeSet[T]) PowerSet() Set[T] {
-	powSet := NewThreadUnsafeSet[T]()
-	nullset := newThreadUnsafeSet[T]()
-	powSet.Add(&nullset)
+	powSet :=  NewThreadUnsafeSet[T]()
+	//nullset := newThreadUnsafeSet[T]()
+	//powSet.Add(&nullset)
 
 	for es := range *set {
 		u := newThreadUnsafeSet[T]()
@@ -267,7 +267,7 @@ func (set *threadUnsafeSet[T]) PowerSet() Set[T] {
 		for er := range j {
 			p := newThreadUnsafeSet[T]()
 			if reflect.TypeOf(er).Name() == "" {
-				k := er.(*threadUnsafeSet)
+				k := er //.(*threadUnsafeSet[T])
 				for ek := range *(k) {
 					p.Add(ek)
 				}
@@ -285,13 +285,14 @@ func (set *threadUnsafeSet[T]) PowerSet() Set[T] {
 }
 */
 
-/*func (set *threadUnsafeSet[T]) CartesianProduct(other Set[T]) Set[T] {
-	o := other.(*threadUnsafeSet)
-	cartProduct := NewThreadUnsafeSet()
+/*
+func (set *threadUnsafeSet[T]) CartesianProduct(other Set[T]) Set[T] {
+	o := other.(*threadUnsafeSet[T])
+	cartProduct := NewThreadUnsafeSet[T]()
 
 	for i := range *set {
 		for j := range *o {
-			elem := OrderedPair{First: i, Second: j}
+			elem := OrderedPair[T]{First: i, Second: j}
 			cartProduct.Add(elem)
 		}
 	}
