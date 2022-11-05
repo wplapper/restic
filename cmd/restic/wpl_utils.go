@@ -55,8 +55,6 @@ type RepositoryData struct {
 	names map[restic.IntID]string
 	// all directory children of a directory
 	children map[restic.IntID]restic.IntSet
-
-	// need to be restic.ID
 	// all tree blobs of a snapshot
 	meta_dir_map map[*restic.ID]restic.IntSet
 	// all tree and data blobs from the index
@@ -130,18 +128,21 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 	repositoryData *RepositoryData) {
 	//Printf("Convert_to_IntSet start\n")
-	pos := restic.IntID(0)
 
 	//start := time.Now()
 	// blob is a 'restic.PackedBlob' which contains
 	// ID,  PackID, Type, Length and Offset
+	pos := restic.IntID(0)
 	for blob := range repo.Index().Each(gopts.ctx) {
-		repositoryData.blob_to_index[blob.ID] = pos
-		repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
-		pos++
+		_, ok := repositoryData.blob_to_index[blob.ID]
+		if !ok {
+			repositoryData.blob_to_index[blob.ID] = pos
+			repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
+			pos++
+		}
 
 		// add packID from packflies to 'blob_to_index' and 'index_to_blob'
-		_, ok := repositoryData.blob_to_index[blob.PackID]
+		_, ok = repositoryData.blob_to_index[blob.PackID]
 		if !ok { // new PackID found
 			repositoryData.blob_to_index[blob.PackID] = pos
 			repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.PackID)
@@ -466,7 +467,7 @@ func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
 		return &(repositoryData.index_to_blob[ix])
 	} else {
 		// allocate new slot
-		Printf("Ptr2ID.allocate new %s\n", id.String()[:12])
+		//Printf("Ptr2ID.allocate new %s\n", id.String()[:12])
 		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
 		// be aware: length just changed during last 'append'

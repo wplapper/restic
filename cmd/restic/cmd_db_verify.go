@@ -50,7 +50,7 @@ type SnapshotRecordMem struct {
 	SnapshotRecordDB
 	ID_mem *restic.ID
 	root   *restic.ID
-	status string
+	Status string
 }
 
 type IndexRepoRecordDB struct {
@@ -66,7 +66,7 @@ type IndexRepoRecordMem struct {
 	IndexRepoRecordDB
 	idd      *restic.ID
 	packfile *restic.ID
-	status   string
+	Status   string
 }
 
 type NamesRecordDB struct {
@@ -77,7 +77,7 @@ type NamesRecordDB struct {
 
 type NamesRecordMem struct {
 	NamesRecordDB
-	status string
+	Status string
 }
 
 // database record mapping for sqlx.StructScan
@@ -89,7 +89,7 @@ type MetaDirRecordDB struct {
 
 type MetaDirRecordMem struct {
 	MetaDirRecordDB
-	status string
+	Status string
 }
 
 type ContentsRecordDB struct {
@@ -105,7 +105,7 @@ type ContentsRecordMem struct {
 	// raw part
 	ContentsRecordDB
 	id_data_idd *restic.ID
-	status      string
+	Status      string
 }
 
 type IddFileRecordDB struct {
@@ -123,7 +123,7 @@ type IddFileRecordMem struct {
 	// raw part
 	IddFileRecordDB
 	name   string
-	status string
+	Status string
 }
 
 type PackfilesRecordDB struct {
@@ -133,28 +133,28 @@ type PackfilesRecordDB struct {
 
 type PackfilesRecordMem struct {
 	PackfilesRecordDB
-	status string
+	Status string
 }
 
 type DBAggregate struct {
-	repositoryData *RepositoryData
-	db_conn        *sqlx.DB
-	table_counts   *map[string]int // count of all tables
+	repositoryData 		*RepositoryData
+	db_conn        		*sqlx.DB
+	table_counts   		map[string]int // count of all tables
 
 	// the database tables - memory representation
-	table_snapshots  *map[string]SnapshotRecordMem
-	table_index_repo *map[*restic.ID]IndexRepoRecordMem
-	table_meta_dir   *map[CompMetaDir]MetaDirRecordMem
-	table_packfiles  *map[*restic.ID]PackfilesRecordMem
-	table_idd_file   *map[CompIddFile]IddFileRecordMem
-	table_names      *map[string]NamesRecordMem
-	table_contents   *map[CompContents]ContentsRecordMem
+	table_snapshots  	*map[string]SnapshotRecordMem
+	table_index_repo 	*map[restic.ID]IndexRepoRecordMem
+	table_meta_dir   	*map[CompMetaDir]MetaDirRecordMem
+	table_packfiles  	*map[*restic.ID]PackfilesRecordMem
+	table_idd_file   	*map[CompIddFile]IddFileRecordMem
+	table_names      	*map[string]NamesRecordMem
+	table_contents   	*map[CompContents]ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots  *map[int]string     // meta_dir
-	pk_index_repo *map[int]*restic.ID // meta_dir, idd_file, contents
-	pk_names      *map[int]string     // idd_file
-	pk_packfiles  *map[int]*restic.ID // index_repo
+	pk_snapshots  		*map[int]string     // meta_dir
+	pk_index_repo 		*map[int]restic.ID  // meta_dir, idd_file, contents
+	pk_names      		*map[int]string     // idd_file
+	pk_packfiles  		*map[int]*restic.ID // index_repo
 }
 
 var db_aggregate DBAggregate
@@ -163,16 +163,16 @@ var db_aggregate DBAggregate
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
 	snap_id   string // consider pointers
-	meta_blob *restic.ID
+	meta_blob restic.ID
 }
 
 type CompIddFile struct {
-	meta_blob *restic.ID
+	meta_blob restic.ID
 	position  int
 }
 
 type CompContents struct {
-	meta_blob *restic.ID
+	meta_blob restic.ID
 	position  int
 	offset    int
 }
@@ -208,7 +208,7 @@ var cmdDBVerify = &cobra.Command{
 EXIT STATUS
 ===========
 
-Exit status is 0 if the command was successful, and non-zero if there was any error.
+Exit Status is 0 if the command was successful, and non-zero if there was any error.
 `,
 	DisableAutoGenTag: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -230,6 +230,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	repositoryData := init_repositoryData() // is a *RepositoryData
 	db_aggregate.repositoryData = repositoryData
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
+	newComers := InitNewcomers()
 	gOptions = gopts
 
 	// step 1: open repository
@@ -273,12 +274,12 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 
 	// gather counts for all tables in database
 	names_and_counts := make(map[string]int)
-	err = readAllTablesAndCounts(db_conn, &names_and_counts)
+	err = readAllTablesAndCounts(db_conn, names_and_counts)
 	if err != nil {
 		Printf("readAllTablesAndCounts error is %v\n", err)
 		return err
 	}
-	db_aggregate.table_counts = &names_and_counts
+	db_aggregate.table_counts = names_and_counts
 
 	// sort names
 	tbl_names_sorted := make([]string, len(names_and_counts))
@@ -302,13 +303,13 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 	var table_name string
 	var actions = []ActionStruct{
-		{table_name: "snapshots", routine: ReadSnapshotTable},
-		{table_name: "index_repo", routine: ReadIndexRepoTable},
-		{table_name: "meta_dir", routine: ReadMetaDirTable},
-		{table_name: "names", routine: ReadNamesTable},
-		{table_name: "idd_file", routine: ReadIddFileTable},
-		{table_name: "packfiles", routine: ReadPackfilesTable},
-		{table_name: "contents", routine: ReadContentsTable}}
+		{table_name: "snapshots", 	routine: ReadSnapshotTable},
+		{table_name: "index_repo", 	routine: ReadIndexRepoTable},
+		{table_name: "meta_dir", 		routine: ReadMetaDirTable},
+		{table_name: "names", 			routine: ReadNamesTable},
+		{table_name: "idd_file", 		routine: ReadIddFileTable},
+		{table_name: "packfiles", 	routine: ReadPackfilesTable},
+		{table_name: "contents", 		routine: ReadContentsTable}}
 
 	for _, action := range actions {
 		Printf("reading table %s\n", action.table_name)
@@ -322,7 +323,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare snapshots
 	table_name = "snapshots"
 	Printf("checking table %s\n", table_name)
-	equal := check_db_snapshots(*db_aggregate.table_snapshots, &db_aggregate, repositoryData)
+	equal := check_db_snapshots(*db_aggregate.table_snapshots, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -332,7 +334,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare index_repo
 	table_name = "index_repo"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_index_repo(*db_aggregate.table_index_repo, &db_aggregate, repositoryData)
+	equal = check_db_index_repo(*db_aggregate.table_index_repo, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -342,7 +345,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare packfiles
 	table_name = "packfiles"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_packfiles(*db_aggregate.table_packfiles, &db_aggregate, repositoryData)
+	equal = check_db_packfiles(*db_aggregate.table_packfiles, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -352,7 +356,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare contents
 	table_name = "contents"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_contents(*db_aggregate.table_contents, &db_aggregate, repositoryData)
+	equal = check_db_contents(*db_aggregate.table_contents, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -362,7 +367,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare meta_dir
 	table_name = "meta_dir"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_meta_dir(*db_aggregate.table_meta_dir, &db_aggregate, repositoryData)
+	equal = check_db_meta_dir(*db_aggregate.table_meta_dir, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -372,7 +378,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare names
 	table_name = "names"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_names(*db_aggregate.table_names, &db_aggregate, repositoryData)
+	equal = check_db_names(*db_aggregate.table_names, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -382,7 +389,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	// compare idd_file
 	table_name = "idd_file"
 	Printf("checking table %s\n", table_name)
-	equal = check_db_idd_file(*db_aggregate.table_idd_file, &db_aggregate, repositoryData)
+	equal = check_db_idd_file(*db_aggregate.table_idd_file, &db_aggregate,
+		repositoryData, newComers)
 	if equal {
 		Printf("table %s compares equal\n", table_name)
 	} else {
@@ -395,10 +403,10 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 }
 
 func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	// compare snapshots from repo with snapshots stored in the database
 	// step 1: build memory table to allow the comparison
-	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData)
+	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData, newComers)
 
 	// compare snapshot keys
 	equal := CompareKeys("snapshots", db_snapshots, mem_snapshots)
@@ -427,7 +435,6 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 
 		count := 0
 		for comp_ix := range diff.Iter() {
-			//fixed := comp_ix //.(string)
 			Printf("key %s %s\n", which, comp_ix)
 			count++
 			if count > 100 {
@@ -450,27 +457,10 @@ func check_db_snapshots(db_snapshots map[string]SnapshotRecordMem,
 	return compare_equals
 }
 
-func check_db_index_repo(db_index_repo map[*restic.ID]IndexRepoRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+func check_db_index_repo(db_index_repo map[restic.ID]IndexRepoRecordMem,
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 
-	// build memory table for comparison
-	/*
-		mem_repo_index_map := make(map[*restic.ID]IndexRepoRecordMem,
-			(*db_aggregate.table_counts)["index_repo"])
-		for id, data := range repositoryData.index_handle {
-			var index_type string
-			if data.Type == restic.TreeBlob {
-				index_type = "tree"
-			} else {
-				index_type = "data"
-			}
-			id_ptr := Ptr2ID(id, repositoryData)
-			mem_repo_index_map[id_ptr] = IndexRepoRecordMem{IndexRepoRecordDB:
-				IndexRepoRecordDB{Idd_size: int(data.size),
-				Index_type: index_type}, idd: id_ptr}
-		}*/
-	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData)
-
+	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
 	equal := CompareKeys("index_repo", db_index_repo, mem_repo_index_map)
 	if !equal {
 		return equal
@@ -490,10 +480,10 @@ func check_db_index_repo(db_index_repo map[*restic.ID]IndexRepoRecordMem,
 }
 
 func check_db_names(db_names map[string]NamesRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	// build a memory map of the names, whic come from three(3) different sources
 	table_name := "names"
-	mem_names_map := CreateMemNames(db_aggregate, repositoryData)
+	mem_names_map := CreateMemNames(db_aggregate, repositoryData, newComers)
 	equal := CompareKeys(table_name, db_names, mem_names_map)
 	if equal {
 		return equal
@@ -533,10 +523,10 @@ func check_db_names(db_names map[string]NamesRecordMem,
 }
 
 func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
-	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData)
+	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData, newComers)
 
 	// compare keys
 	return CompareKeys("packfiles", db_packfiles, mem_packfiles_map)
@@ -544,10 +534,10 @@ func check_db_packfiles(db_packfiles map[*restic.ID]PackfilesRecordMem,
 
 // check_db_contents
 func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
-	mem_contents_map := CreateMemContents(db_aggregate, repositoryData)
+	mem_contents_map := CreateMemContents(db_aggregate, repositoryData, newComers)
 
 	// compare keys
 	equal := CompareKeys("contents", table_contents, mem_contents_map)
@@ -608,8 +598,8 @@ func check_db_contents(table_contents map[CompContents]ContentsRecordMem,
 }
 
 func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
-	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData)
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
+	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData, newComers)
 
 	// compare keys
 	equal := CompareKeys("meta_dir", db_meta_dir, mem_meta_dir_map)
@@ -639,7 +629,7 @@ func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 		count := 0
 		count_empty_node := 0
 		for comp_ix := range diff.Iter() {
-			if comp_ix.meta_blob == PTR_EMPTY_NODE_ID {
+			if comp_ix.meta_blob == EMPTY_NODE_ID {
 				count_empty_node++
 				continue
 			}
@@ -661,10 +651,10 @@ func check_db_meta_dir(db_meta_dir map[CompMetaDir]MetaDirRecordMem,
 }
 
 func check_db_idd_file(db_idd_file map[CompIddFile]IddFileRecordMem,
-	db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
+	db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	table_name := "idd_file"
 	// build a memory map of the packfiles
-	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData)
+	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData, newComers)
 
 	// compare keys
 	equal := CompareKeys(table_name, db_idd_file, mem_idd_file_map)
@@ -700,15 +690,6 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 				(contents.id_blob,     index_repo.id),
 
 				(idd_file.id_name,     names.id),
-		)
-
-	  // relationship 1: index_repo.id_pack_id, packfiles.id
-	  make a set of packfiles.id (already a sort of set)
-	  table_packfiles  is a *map[restic.ID]PackfilesRecordDB
-	  table_index_repo *map[*restic.ID]IndexRepoRecordMem and
-	  IndexRepoRecordMem is a 	idd restic.ID, idd_size int,  index_type 	string
-	  set_packfiles_keys := mapset.NewSet()
-
 	*/
 	Printf("\n Check Foreign Key reationship\n")
 	all_good := true
@@ -825,4 +806,17 @@ func NewMemoryKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) maps
 		set_mem_keys.Add(key)
 	}
 	return set_mem_keys.Difference(set_db_keys)
+}
+
+func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
+	// define sets for the keys
+	set_db_keys  := mapset.NewSet[K]()
+	set_mem_keys := mapset.NewSet[K]()
+	for key := range db {
+		set_db_keys.Add(key)
+	}
+	for key := range mem {
+		set_mem_keys.Add(key)
+	}
+	return set_db_keys.Difference(set_mem_keys)
 }
