@@ -3,7 +3,7 @@ package main
 // compile with "go run build.go -tags debug""
 // run with DEBUG_LOG=/home/wplapper/restic/debug.log fully-qualified-name/restic -r <repo> overview
 
-// ref to onedrive:
+// ref to onedrive: rclone:onedrive:restic_backups
 
 import (
 	// system
@@ -94,6 +94,7 @@ func init() {
 	flags := cmdDBAdd.Flags()
 	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
 	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROOLABCK databae operations")
+	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
 func runDBAdd(gopts GlobalOptions, args []string) error {
@@ -104,6 +105,8 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	// need access to verbose option
 	gOptions = gopts
+	var db_name string
+	var ok bool
 
 	// step 1: open repository
 	repo, err := OpenRepository(gopts)
@@ -129,10 +132,14 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	GatherAllRepoData(gopts, repo, repositoryData)
 
 	// step 4.1: get database name
-	db_name, ok := DATABASE_NAMES[gopts.Repo]
-	if !ok {
-		Printf("database name for repo %s is missing!\n", gopts.Repo)
-		return nil
+	if dbOptions.altDB != "" {
+		db_name = dbOptions.altDB
+	} else {
+		db_name, ok = DATABASE_NAMES[gopts.Repo]
+		if !ok {
+			Printf("database name for repo %s is missing!\n", gopts.Repo)
+			return nil
+		}
 	}
 
 	// step 4.2: open selected database
@@ -183,7 +190,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("reading table %s\n", action.table_name)
 		err := action.routine(db_conn, &db_aggregate)
 		if err != nil {
-			Printf("error reading table %s %v\n", action.table_name, err)
+			Printf("error reading table %s: %v\n", action.table_name, err)
 			return err
 		}
 	}
@@ -225,8 +232,6 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	newComers.mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
 	newComers.new_packfiles = NewMemoryKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
 	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
-	Printf("%7d     records in db_packfiles\n",  len(*db_aggregate.table_packfiles))
-	Printf("%7d     records in mem_packfiles\n", len(newComers.mem_packfiles))
 
 	high_pack := sqlite.Get_high_id("packfiles")
 	for raw := range newComers.new_packfiles.Iter() {
@@ -245,26 +250,14 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	// compare index_repo with its DB counterpart
 	newComers.mem_index_repo = CreateMemIndexRepo(&db_aggregate, repositoryData, newComers)
 	newComers.new_index_repo = NewMemoryKeys(*db_aggregate.table_index_repo, newComers.mem_index_repo)
-	database_keys := mapset.NewSet[restic.ID]()
-	memory_keys   := mapset.NewSet[restic.ID]()
-	for key := range *db_aggregate.table_index_repo {
-		database_keys.Add(key)
-	}
-	for key := range newComers.mem_index_repo {
-		memory_keys.Add(key)
-	}
-	diff := memory_keys.Difference(database_keys)
-	Printf("%7d diff restic.ID\n", diff.Cardinality())
 	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
-	Printf("%7d     records in db_index_repo\n",  len(*db_aggregate.table_index_repo))
-	Printf("%7d     records in mem_index_repo\n", len(newComers.mem_index_repo))
-	Printf("check database\n")
-	//checkResticID(*db_aggregate.table_index_repo)
-	Printf("check memory before\n")
-	//checkResticID(newComers.mem_index_repo)
 
 	high_repo := sqlite.Get_high_id("index_repo")
+	print_count := 0
 	for blob := range newComers.new_index_repo.Iter() {
+		if blob == EMPTY_NODE_ID {
+			continue
+		}
 		ih 				:= repositoryData.index_handle[blob]
 		pack_Int 	:= ih.pack_index
 		row 			:= newComers.mem_index_repo[blob]
@@ -275,10 +268,19 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		row.Id_pack_id = newComers.mem_packfiles[ptr].Id
 		row.packfile = ptr
 		newComers.mem_index_repo[blob] = row
+		if print_count < 10 && row.Index_type == "tree" {
+			//Printf("mem_index_repo[%s] = %#v\n", row.Idd[:12], row)
+			print_count++
+		}
+
+		// consistency check
+		if row.Id_pack_id == 0 {
+			Printf("Logic error for pack pointer %p in index_repo %s IndexHandle %#v\n",
+				ptr, blob.String()[:12], ih)
+			panic("new index_repo")
+		}
 		high_repo++
 	}
-	Printf("check memory after\n")
-	//checkResticID(newComers.mem_index_repo)
 
 	// compare idd_file with its DB counterpart
 	newComers.mem_idd_file = CreateMemIddFile(&db_aggregate, repositoryData, newComers)
@@ -300,6 +302,17 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		row.Id_name = newComers.mem_names[name].Id
 		newComers.mem_idd_file[comp_ix] = row
 		high_idd++
+
+		// consistency check
+		if row.Id_blob == 0 {
+			Printf("Logic error for blob pointer %s in idd_file\n",
+				meta_blob.String()[:12])
+			panic("new idd_file 1")
+		}
+		if row.Id_blob == 0 {
+			Printf("Logic error for name pointer %s in idd_file\n", name)
+			panic("new idd_file 2")
+		}
 	}
 
 	// compare meta_dir with its DB counterpart
@@ -308,16 +321,34 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	Printf("%7d new records in new_meta_dir\n", newComers.new_meta_dir.Cardinality())
 
 	high_mdir := sqlite.Get_high_id("meta_dir")
-	for raw := range newComers.new_meta_dir.Iter() {
-		comp_ix := raw
-		snap_id := comp_ix.snap_id
-		row := newComers.mem_meta_dir[comp_ix]
-		row.Status = "new"
-		row.Id = high_mdir
-		row.Id_snap_id = newComers.mem_snapshots[snap_id].Id
-		row.Id_idd = newComers.mem_index_repo[comp_ix.meta_blob].Id
+	print_count = 0
+	for comp_ix := range newComers.new_meta_dir.Iter() {
+		snap_id 				:= comp_ix.snap_id
+		meta_blob       := comp_ix.meta_blob
+		row 						:= newComers.mem_meta_dir[comp_ix]
+		row.Status 			= "new"
+
+		row.Id 					= high_mdir
+		if print_count < 10 {
+			//Printf("mem_meta_dir[%#v] %#v\n", comp_ix, row)
+			print_count++
+		}
+		//row.Id_snap_id 	= newComers.mem_snapshots[snap_id].Id
+		//row.Id_idd 			= newComers.mem_index_repo[comp_ix.meta_blob].Id
 		newComers.mem_meta_dir[comp_ix] = row
 		high_mdir++
+
+		//  consistency check
+		if row.Id_snap_id == 0 {
+			Printf("Logic error for meta_dir.snap_idd %s %#v\n",
+				snap_id, newComers.mem_snapshots[snap_id])
+			panic("meta_dir 1")
+		}
+		if row.Id_idd == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				snap_id, newComers.mem_index_repo[meta_blob])
+			panic("meta_dir 2")
+		}
 	}
 
 	// compare contents with its DB counterpart
@@ -336,6 +367,18 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		row.Id_data_idd = newComers.mem_index_repo[*(row.id_data_idd)].Id
 		newComers.mem_contents[comp_ix] = row
 		high_cont++
+
+		// check consistency
+		if row.Id_blob == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				p_meta_blob.String()[:12], newComers.mem_index_repo[p_meta_blob])
+			panic("contents 1")
+		}
+		if row.Id_data_idd == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				(*(row.id_data_idd)).String()[:12], newComers.mem_index_repo[*(row.id_data_idd)])
+			panic("contents 2")
+		}
 	}
 
 	// create blob summary
@@ -397,43 +440,44 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		return err
 	}
 	Printf("BEGIN TRANSACTION\n")
-	err = InsertATable("snapshots", newComers.mem_snapshots, tx, column_names)
+	changes_made := false
+	err = InsertATable("snapshots", newComers.mem_snapshots, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("packfiles", newComers.mem_packfiles, tx, column_names)
+	err = InsertATable("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("index_repo", newComers.mem_index_repo, tx, column_names)
+	err = InsertATable("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("names", newComers.mem_names, tx, column_names)
+	err = InsertATable("names", newComers.mem_names, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("meta_dir", newComers.mem_meta_dir, tx, column_names)
+	err = InsertATable("meta_dir", newComers.mem_meta_dir, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("idd_file", newComers.mem_idd_file, tx, column_names)
+	err = InsertATable("idd_file", newComers.mem_idd_file, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
-	err = InsertATable("contents", newComers.mem_contents, tx, column_names)
+	err = InsertATable("contents", newComers.mem_contents, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}
 
 	// COMMIT or ROLLBACK transaction
-	if !dbOptions.rollback {
+	if !dbOptions.rollback && changes_made {
 		err = tx.Commit()
 		if err != nil {
 			Printf("COMMIT error %v\n")
@@ -448,7 +492,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 }
 
 func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
-	tx *sqlx.Tx, column_names map[string][]string) error {
+	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
 	if len(mem_table) == 0 {
 		return nil
 	}
@@ -472,8 +516,8 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	}
 
 	// do the INSERT
-	Printf("total number of rows is %5d number of columns is %d\n",
-		len(t_insert), len(column_list))
+	//Printf("total number of rows is %5d number of columns is %d\n",
+	//	len(t_insert), len(column_list))
 	for offset := 0; offset < len(t_insert); offset += 1000 {
 		max := len(t_insert)
 		if max > 1000 {
@@ -482,11 +526,15 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		if offset + max > len(t_insert) {
 			max = len(t_insert) - offset
 		}
-		Printf("INSERT from %4d to %4d\n", offset, offset + max)
-		_, err := tx.NamedExec(sql, t_insert[offset:offset + max])
+		//Printf("INSERT from %4d to %4d\n", offset, offset + max)
+		r, err := tx.NamedExec(sql, t_insert[offset:offset + max])
 		if err != nil {
 			Printf("error INSERT error is: %v\n", err)
 			return err
+		}
+		count,_ := r.RowsAffected()
+		if count > 0 {
+			*changes_made = true
 		}
 	}
 	Printf("%7d rows inserted into table %s\n", len(t_insert), tbl_name)
@@ -611,40 +659,11 @@ func filter_new[K comparable, V any](mem_map map[K]V, status string) {
 
 // generic funtion to INSERT new data into the database
 func InsertATable[K comparable, V any](table_name string, mem_map map[K]V,
-tx *sqlx.Tx,  column_names map[string][]string) error {
+tx *sqlx.Tx,  column_names map[string][]string, changes_made *bool) error {
 	filter_new(mem_map, "new")
-	err := InsertTable(table_name, mem_map, tx, column_names)
+	err := InsertTable(table_name, mem_map, tx, column_names, changes_made)
 	if err != nil {
 		return err
 	}
 	return nil
 }
-
-/*
-func checkResticID[K *restic.ID, V any](table map[K]V) {
-	// mapset.Set is of *restic.ID
-	// map te *restic.ID to restic.ID
-	comparator := make(map[restic.ID][]*restic.ID)
-	// build
-	for ID := range table {
-		deref := *ID
-		_,ok := comparator[deref]
-		if !ok {
-			comparator[deref] = make([]*restic.ID, 0)
-		}
-		comparator[deref] = append(comparator[deref], ID)
-	}
-
-	// compare
-	count := 0
-	for key, value := range comparator {
-		if len(value) > 1 {
-			Printf("ALARM %s has more than one mapping %#v\n", key.String()[:12], value)
-			count++
-			if count > 10 {
-				break
-			}
-		}
-	}
-}
-*/

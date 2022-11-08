@@ -16,7 +16,7 @@ import (
 )
 
 var SQLITE_TABLES = map[string]string{
-	"snapshots": `CREATE TABLE snapshots (
+  "snapshots": `CREATE TABLE snapshots (
   id INTEGER PRIMARY KEY,             -- ID of table row
   snap_id VARCHAR(8) NOT NULL,        -- snap ID, UNIQUE INDEX
   snap_time VARCHAR(19) NOT NULL,     -- time of snap
@@ -25,7 +25,7 @@ var SQLITE_TABLES = map[string]string{
   id_snap_root INTEGER NOT NULL       --  the root of the snap
   )`,
 
-	"index_repo": `CREATE TABLE index_repo (
+  "index_repo": `CREATE TABLE index_repo (
   -- maintains the contents of the index/ * files
   id INTEGER PRIMARY KEY,           -- the primary key
   idd VARCHAR(64) NOT NULL,         -- the idd, UNIQUE INDEX
@@ -35,13 +35,13 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(id_pack_id)   REFERENCES packfiles(id)
   )`,
 
-	"packfiles": `CREATE TABLE packfiles (
+  "packfiles": `CREATE TABLE packfiles (
   -- needed for the relationship between packfiles and blobs
   id INTEGER PRIMARY KEY,         -- the primary key
   packfile_id VARCHAR(64)         -- the packfile ID, UNIQUE INDEX
   )`,
 
-	"meta_dir": `CREATE TABLE meta_dir (
+  "meta_dir": `CREATE TABLE meta_dir (
   -- many to many relationship table between snaps and directory idds
   id INTEGER PRIMARY KEY,           -- the primary key
   id_snap_id INTEGER NOT NULL,      -- the snap_id , INDEX
@@ -51,7 +51,7 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(id_idd)       REFERENCES index_repo(id)
   )`,
 
-	"idd_file": `CREATE TABLE idd_file (
+  "idd_file": `CREATE TABLE idd_file (
   id INTEGER PRIMARY KEY,         -- the primary key
   id_blob INTEGER NOT NULL,       -- ptr to blob table
   position INTEGER NOT NULL,      -- offset in idd_file
@@ -65,21 +65,21 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(id_name) REFERENCES names(id)
   )`,
 
-	"names": `CREATE TABLE names (
+  "names": `CREATE TABLE names (
   id INTEGER PRIMARY KEY,         -- the primary key
   name TEXT,                      -- all names collected from restic system
   -- name is UNIQUE INDEX
   name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
   )`,
 
-	"timestamp": `CREATE TABLE timestamp (
+  "timestamp": `CREATE TABLE timestamp (
   id INTEGER PRIMARY KEY,                 -- the primary key
   restic_updated   TIMESTAMP NOT NULL,    --changes when restic gets updated
   database_updated TIMESTAMP NOT NULL,    --last update of database
   ts_created       TIMESTAMP NOT NULL     --creation date of database
   )`,
 
-	"contents": `CREATE TABLE contents (
+  "contents": `CREATE TABLE contents (
   id INTEGER PRIMARY KEY,         -- the primary key
   id_data_idd INTEGER NOT NULL,   -- ptr to data_idd, INDEX
   id_blob  INTEGER NOT NULL,      -- ptr to idd_file, needs INDEX
@@ -92,8 +92,8 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(id_fullpath) REFERENCES names(id)
   )`,
 
-	// history section
-	"snapshots_history": `CREATE TABLE snapshots_history (
+  // history section
+  "snapshots_history": `CREATE TABLE snapshots_history (
   id INTEGER PRIMARY KEY,         -- ID of table row
   timestamp  TIMESTAMP NOT NULL,
   action     TEXT NULL,           -- action type (INSERT, UPDATE, DELETE)
@@ -105,7 +105,7 @@ var SQLITE_TABLES = map[string]string{
   id_snap_root INTEGER NOT NULL   -- ref to the root of the snap
   )`,
 
-	"timestamp_history": `CREATE TABLE timestamp_history (
+  "timestamp_history": `CREATE TABLE timestamp_history (
   id INTEGER PRIMARY KEY,           -- ID of table row
   timestamp TIMESTAMP NOT NULL,
   action    TEXT NOT NULL,          -- action type (INSERT, UPDATE, DELETE)
@@ -116,16 +116,15 @@ var SQLITE_TABLES = map[string]string{
   )`}
 
 var SQLITE_INDEX = map[string][]ListIndexMaps{
-	"fullpath2": {ListIndexMaps{ixname: "ux_fp2_blob", on: "id_blob", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_fp2_name", on: "id_name", unique: ""}},
-
-	"index_repo": {ListIndexMaps{ixname: "ux_ix_repo_idd", on: "idd", unique: "UNIQUE"},
+	"index_repo": {
+		ListIndexMaps{ixname: "ux_ix_repo_idd", on: "idd", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_blob", unique: ""},
 		ListIndexMaps{ixname: "ix_ix_type", on: "index_type", unique: ""}},
 
 	"packfiles": {ListIndexMaps{ixname: "ux_packf_idd", on: "idd", unique: "UNIQUE"}},
 
-	"meta_dir": {ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
+	"meta_dir": {
+		ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_meta_dir_idd", on: "id_idd", unique: ""}},
 
 	"idd_file": {ListIndexMaps{ixname: "ux_idd_file_blob_pos", on: "id_blob,position", unique: "UNIQUE"},
@@ -135,11 +134,13 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
 	"names": {ListIndexMaps{ixname: "ux_names_name", on: "name", unique: "UNIQUE"}},
 
-	"contents": {ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
+	"contents": {
+		ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_cont_fpath", on: "id_fullpath", unique: ""},
 		ListIndexMaps{ixname: "ix_cont_data_idd", on: "id_data_idd", unique: ""}},
 
-	"snapshots_history": {ListIndexMaps{ixname: "ix_snaphist_snap_id", on: "snap_id", unique: ""},
+	"snapshots_history": {
+		ListIndexMaps{ixname: "ix_snaphist_snap_id", on: "snap_id", unique: ""},
 		ListIndexMaps{ixname: "ix_snaphist_action", on: "action", unique: ""}}}
 
 type DBDescriptor struct {
@@ -206,20 +207,19 @@ func init_tables() error {
 	  Create and manage the following tables:
 	  snapshots       - o2o straight from the snapshots json data
 	  index_repo      - o2o idd, size, type, packid back pointer
-	                  - o2m for pack_id -> blob
+			  - o2m for pack_id -> blob
 	  packfile        - o2o between idd and pack_ID
 	  meta_dir        - m2m between snap_id and idd
 	  file_idd        - o2o idd, offset, ptr to name, ptr to contents, size
-	                  - o2m for blob ptr
+			  - o2m for blob ptr
 	  names           - o2o id, name, name_type
-	  fullpath2       - o2o between names and directory blobs
 	  contents        - o2o between contents composite ptr and contents elem
 	  timestamp       - o2o info about changes to the real restic files and
-	                        info about last balance check
+				info about last balance check
 	  snapshots_history - 02m history when snap was added to the system or
-	                          removed
+				  removed
 	  timestamp_history - o2o all changes to the database are recorded here
-	                          with a timestamp
+				  with a timestamp
 	*/
 	//SQLite tables and INDEX definitions
 	for table_name, init_string := range SQLITE_TABLES {

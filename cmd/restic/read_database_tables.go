@@ -93,6 +93,7 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		db_aggregate.table_counts["snapshots"])
 	PK_snapshots := make(map[int]string, db_aggregate.table_counts["snapshots"])
 	rows, err := db_conn.Queryx("SELECT * FROM snapshots")
+	defer rows.Close()
 
 	// collect rows
 	for rows.Next() {
@@ -150,6 +151,7 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	PK_index_repo := make(map[int]restic.ID,
 		db_aggregate.table_counts["index_repo"])
 	rows, err := db_conn.Queryx("SELECT * FROM index_repo")
+	defer rows.Close()
 
 	// collect rows
 	for rows.Next() {
@@ -208,7 +210,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
-		snap_id := (*ptr_snapshot)[p.Id_snap_id]
+		snap_id   := (*ptr_snapshot)[p.Id_snap_id]
 		meta_blob := (*ptr_index_repo)[p.Id_idd]
 		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = MetaDirRecordMem{
 			MetaDirRecordDB: p, Status: "db"}
@@ -347,6 +349,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	db_contents := make(map[CompContents]ContentsRecordMem,
 		db_aggregate.table_counts[table_name])
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
+	defer rows.Close()
 
 	// collect rows
 	for rows.Next() {
@@ -365,7 +368,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		}
 
 		if !ok {
-			Printf("missing id_bob ponter in index_repo for %v\n", p.Id_data_idd)
+			Printf("missing id_blob ponter in index_repo for %v\n", p.Id_data_idd)
 			return errors.New("ReadContentsTable.index_repo incomplete data")
 		}
 

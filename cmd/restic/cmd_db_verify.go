@@ -220,6 +220,7 @@ func init() {
 	cmdRoot.AddCommand(cmdDBVerify)
 	flags := cmdDBVerify.Flags()
 	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
+	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
 func runDBVerify(gopts GlobalOptions, args []string) error {
@@ -232,6 +233,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	newComers := InitNewcomers()
 	gOptions = gopts
+	var db_name string
+	var ok bool
 
 	// step 1: open repository
 	repo, err := OpenRepository(gopts)
@@ -259,11 +262,16 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	//timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData (sum)", time.Now().Sub(start).Seconds())
 
 	// step 4.1: get database name
-	db_name, ok := DATABASE_NAMES[gopts.Repo]
-	if !ok {
-		Printf("database name for repo %s is missing!\n", gopts.Repo)
-		return nil
+	if dbOptions.altDB != "" {
+		db_name = dbOptions.altDB
+	} else {
+		db_name, ok = DATABASE_NAMES[gopts.Repo]
+		if !ok {
+			Printf("database name for repo %s is missing!\n", gopts.Repo)
+			return nil
+		}
 	}
+
 	// step 4.2: open selected database
 	db_conn, err := sqlite.OpenDatabase(db_name, true, 1, true)
 	if err != nil {
