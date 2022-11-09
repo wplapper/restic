@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"reflect"
+	"golang.org/x/sync/errgroup"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -25,33 +26,6 @@ import (
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
 )
-
-type Newcomers struct {
-	// setup variables and maps to catch the newcomers
-	mem_snapshots  map[string]SnapshotRecordMem
-	mem_index_repo map[restic.ID]IndexRepoRecordMem
-	mem_names      map[string]NamesRecordMem
-	mem_idd_file   map[CompIddFile]IddFileRecordMem
-	mem_meta_dir   map[CompMetaDir]MetaDirRecordMem
-	mem_contents   map[CompContents]ContentsRecordMem
-	mem_packfiles  map[*restic.ID]PackfilesRecordMem
-
-	new_snapshots  mapset.Set[string]
-	new_index_repo mapset.Set[restic.ID]
-	new_names      mapset.Set[string]
-	new_idd_file   mapset.Set[CompIddFile]
-	new_meta_dir   mapset.Set[CompMetaDir]
-	new_contents   mapset.Set[CompContents]
-	new_packfiles  mapset.Set[*restic.ID]
-
-	old_snapshots  mapset.Set[string]
-	old_index_repo mapset.Set[restic.ID]
-	old_names      mapset.Set[string]
-	old_idd_file   mapset.Set[CompIddFile]
-	//old_meta_dir   mapset.Set[CompMetaDir]
-	//old_contents   mapset.Set[CompContents]
-	old_packfiles  mapset.Set[*restic.ID]
-}
 
 var cmdDBAdd = &cobra.Command{
 	Use:   "db_add_record [flags]",
@@ -149,272 +123,84 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	db_aggregate.db_conn = db_conn
+	/*
 	// get the the highest id for each TABLE
 	err = sqlite.Get_all_high_ids()
 	if err != nil {
 		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
 		return err
-	}
+	}*/
 
 	// step 5 with multiple substeps: read the various tables:
 	// step 5.1: get table names and their counts
 	// gather counts for all tables in database
 	names_and_counts := make(map[string]int)
+	/*
 	err = readAllTablesAndCounts(db_conn, names_and_counts)
 	if err != nil {
 		Printf("readAllTablesAndCounts error is %v\n", err)
 		return err
-		return err
+	}
+	*/
+
+	// the first three tables go parallel
+	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return sqlite.Get_all_high_ids()})
+	wg.Go (func() error {return readAllTablesAndCounts(db_conn, names_and_counts)})
+	wg.Go (func() error {return ReadSnapshotTable (db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadNamesTable    (db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
+	res := wg.Wait()
+	if res != nil {
+		Printf("Esrror processing group 1. Error is %v\n", res)
+		return res
 	}
 	db_aggregate.table_counts = names_and_counts
 
-	// action loop for reading all database tables
-	// this is semi generic
-	type action_function func(*sqlx.DB, *DBAggregate) error
-	type ActionStruct struct {
-		table_name string
-		routine    action_function
-	}
-	// all these Read<tbl_name>Table functions store their work in a struct
-	// element of 'db_aggregate'. All TABLE results are maps.
-	var actions = []ActionStruct{
-		{table_name: "snapshots", 	routine: ReadSnapshotTable},
-		{table_name: "index_repo", 	routine: ReadIndexRepoTable},
-		{table_name: "meta_dir", 		routine: ReadMetaDirTable},
-		{table_name: "names", 			routine: ReadNamesTable},
-		{table_name: "idd_file", 		routine: ReadIddFileTable},
-		{table_name: "packfiles", 	routine: ReadPackfilesTable},
-		{table_name: "contents", 		routine: ReadContentsTable}}
-
-	for _, action := range actions {
-		Printf("reading table %s\n", action.table_name)
-		err := action.routine(db_conn, &db_aggregate)
-		if err != nil {
-			Printf("error reading table %s: %v\n", action.table_name, err)
-			return err
-		}
+	err = ReadIndexRepoTable(db_conn, &db_aggregate)
+	if err != nil {
+		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
+		return err
 	}
 
-	// compare snapshots in memory with snapshots in the database
-	newComers.mem_snapshots = CreateMemSnapshots(&db_aggregate, repositoryData, newComers)
-	newComers.new_snapshots = NewMemoryKeys(*db_aggregate.table_snapshots, newComers.mem_snapshots)
-	high_snap := sqlite.Get_high_id("snapshots")
-	for snap := range newComers.new_snapshots.Iter() {
-		snap_id := snap
-		row := newComers.mem_snapshots[snap_id]
-		row.Status = "new"
-		row.Id = high_snap
-		row.Snap_id = snap_id
-		row.Id_snap_root = row.ID_mem.String()
-		newComers.mem_snapshots[snap_id] = row
-		high_snap++
-	}
-	Printf("%7d new records in new_snapshots\n", newComers.new_snapshots.Cardinality())
-
-	// compare names with its DB counterpart
-	newComers.mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
-	newComers.new_names = NewMemoryKeys(*db_aggregate.table_names, newComers.mem_names)
-	Printf("%7d new records in new_names\n", newComers.new_names.Cardinality())
-
-	high_names := sqlite.Get_high_id("names")
-	for raw := range newComers.new_names.Iter() {
-		name := raw
-		row := newComers.mem_names[name]
-		row.Status = "new"
-		row.Id = high_names
-		row.Name = name
-		row.Name_type = "b" // there is no other name type (left)
-		newComers.mem_names[name] = row
-		high_names++
+	// the last tree tables can be reaf in parallel, since they dont depend on one another
+	wg1, _ := errgroup.WithContext(gopts.ctx)
+	wg1.Go (func() error {return ReadMetaDirTable (db_conn, &db_aggregate)})
+	wg1.Go (func() error {return ReadIddFileTable (db_conn, &db_aggregate)})
+	wg1.Go (func() error {return ReadContentsTable(db_conn, &db_aggregate)})
+	res = wg1.Wait()
+	if res != nil {
+		Printf("Error processing group 2. Error is %v\n", res)
+		return res
 	}
 
-	// compare packfiles with its DB counterpart
-	newComers.mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
-	newComers.new_packfiles = NewMemoryKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
-	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
-
-	high_pack := sqlite.Get_high_id("packfiles")
-	for raw := range newComers.new_packfiles.Iter() {
-		pack_ID_ptr := raw
-		row := newComers.mem_packfiles[pack_ID_ptr]
-		row.Status = "new"
-		row.Id = high_pack
-		row.Packfile_id = (*pack_ID_ptr).String()
-
-		// check if we need to update the back pointer
-		//(*db_aggregate.pk_packfiles)[high_pack] = pack_ID_ptr
-		newComers.mem_packfiles[pack_ID_ptr] = row
-		high_pack++
+	wg, _ = errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return CompareSnapsots(&db_aggregate, repositoryData, newComers)})
+	wg.Go (func() error {return CompareNames(&db_aggregate, repositoryData, newComers)})
+	wg.Go (func() error {return ComparePackfiles(&db_aggregate, repositoryData, newComers)})
+	res = wg.Wait()
+	if res != nil {
+		Printf("Error processing Compare group 1. Error is %v\n", res)
+		return res
 	}
 
-	// compare index_repo with its DB counterpart
-	newComers.mem_index_repo = CreateMemIndexRepo(&db_aggregate, repositoryData, newComers)
-	newComers.new_index_repo = NewMemoryKeys(*db_aggregate.table_index_repo, newComers.mem_index_repo)
-	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
+	// sync
+	CompareIndexRepo(&db_aggregate, repositoryData, newComers)
 
-	high_repo := sqlite.Get_high_id("index_repo")
-	print_count := 0
-	for blob := range newComers.new_index_repo.Iter() {
-		if blob == EMPTY_NODE_ID {
-			continue
-		}
-		ih 				:= repositoryData.index_handle[blob]
-		pack_Int 	:= ih.pack_index
-		row 			:= newComers.mem_index_repo[blob]
-		row.Status = "new"
-		row.Id 		= high_repo
-		row.Idd 	= blob.String()
-		ptr 			:= &(repositoryData.index_to_blob[pack_Int])
-		row.Id_pack_id = newComers.mem_packfiles[ptr].Id
-		row.packfile = ptr
-		newComers.mem_index_repo[blob] = row
-		if print_count < 10 && row.Index_type == "tree" {
-			//Printf("mem_index_repo[%s] = %#v\n", row.Idd[:12], row)
-			print_count++
-		}
-
-		// consistency check
-		if row.Id_pack_id == 0 {
-			Printf("Logic error for pack pointer %p in index_repo %s IndexHandle %#v\n",
-				ptr, blob.String()[:12], ih)
-			panic("new index_repo")
-		}
-		high_repo++
+	wg, _ = errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return CompareIddFile(&db_aggregate, repositoryData, newComers)})
+	wg.Go (func() error {return CompareMetaDir(&db_aggregate, repositoryData, newComers)})
+	wg.Go (func() error {return CompareContents(&db_aggregate, repositoryData, newComers)})
+	res = wg.Wait()
+	if res != nil {
+		Printf("Error processing Compare group 2. Error is %v\n", res)
+		return res
 	}
 
-	// compare idd_file with its DB counterpart
-	newComers.mem_idd_file = CreateMemIddFile(&db_aggregate, repositoryData, newComers)
-	newComers.new_idd_file = NewMemoryKeys(*db_aggregate.table_idd_file, newComers.mem_idd_file)
-	Printf("%7d new records in new_idd_file\n", newComers.new_idd_file.Cardinality())
-
-	high_idd := sqlite.Get_high_id("idd_file")
-	for raw := range newComers.new_idd_file.Iter() {
-		comp_ix := raw
-		meta_blob := comp_ix.meta_blob
-		position := comp_ix.position
-		row := newComers.mem_idd_file[comp_ix]
-		meta := repositoryData.directory_map[repositoryData.blob_to_index[meta_blob]][position]
-		name := meta.name
-		row.Status = "new"
-		row.Id = high_idd
-		row.Id_blob = newComers.mem_index_repo[meta_blob].Id
-		row.Position = position
-		row.Id_name = newComers.mem_names[name].Id
-		newComers.mem_idd_file[comp_ix] = row
-		high_idd++
-
-		// consistency check
-		if row.Id_blob == 0 {
-			Printf("Logic error for blob pointer %s in idd_file\n",
-				meta_blob.String()[:12])
-			panic("new idd_file 1")
-		}
-		if row.Id_blob == 0 {
-			Printf("Logic error for name pointer %s in idd_file\n", name)
-			panic("new idd_file 2")
-		}
-	}
-
-	// compare meta_dir with its DB counterpart
-	newComers.mem_meta_dir = CreateMemMetaDir(&db_aggregate, repositoryData, newComers)
-	newComers.new_meta_dir = NewMemoryKeys(*db_aggregate.table_meta_dir, newComers.mem_meta_dir)
-	Printf("%7d new records in new_meta_dir\n", newComers.new_meta_dir.Cardinality())
-
-	high_mdir := sqlite.Get_high_id("meta_dir")
-	print_count = 0
-	for comp_ix := range newComers.new_meta_dir.Iter() {
-		snap_id 				:= comp_ix.snap_id
-		meta_blob       := comp_ix.meta_blob
-		row 						:= newComers.mem_meta_dir[comp_ix]
-		row.Status 			= "new"
-
-		row.Id 					= high_mdir
-		if print_count < 10 {
-			//Printf("mem_meta_dir[%#v] %#v\n", comp_ix, row)
-			print_count++
-		}
-		//row.Id_snap_id 	= newComers.mem_snapshots[snap_id].Id
-		//row.Id_idd 			= newComers.mem_index_repo[comp_ix.meta_blob].Id
-		newComers.mem_meta_dir[comp_ix] = row
-		high_mdir++
-
-		//  consistency check
-		if row.Id_snap_id == 0 {
-			Printf("Logic error for meta_dir.snap_idd %s %#v\n",
-				snap_id, newComers.mem_snapshots[snap_id])
-			panic("meta_dir 1")
-		}
-		if row.Id_idd == 0 {
-			Printf("Logic error for meta_dir.blob %s %#v\n",
-				snap_id, newComers.mem_index_repo[meta_blob])
-			panic("meta_dir 2")
-		}
-	}
-
-	// compare contents with its DB counterpart
-	newComers.mem_contents = CreateMemContents(&db_aggregate, repositoryData, newComers)
-	newComers.new_contents = NewMemoryKeys(*db_aggregate.table_contents, newComers.mem_contents)
-	Printf("%7d new records in new_contents\n", newComers.new_contents.Cardinality())
-
-	high_cont := sqlite.Get_high_id("contents")
-	for raw := range newComers.new_contents.Iter() {
-		comp_ix := raw
-		p_meta_blob := comp_ix.meta_blob
-		row := newComers.mem_contents[comp_ix]
-		row.Status = "new"
-		row.Id = high_cont
-		row.Id_blob = newComers.mem_index_repo[p_meta_blob].Id
-		row.Id_data_idd = newComers.mem_index_repo[*(row.id_data_idd)].Id
-		newComers.mem_contents[comp_ix] = row
-		high_cont++
-
-		// check consistency
-		if row.Id_blob == 0 {
-			Printf("Logic error for meta_dir.blob %s %#v\n",
-				p_meta_blob.String()[:12], newComers.mem_index_repo[p_meta_blob])
-			panic("contents 1")
-		}
-		if row.Id_data_idd == 0 {
-			Printf("Logic error for meta_dir.blob %s %#v\n",
-				(*(row.id_data_idd)).String()[:12], newComers.mem_index_repo[*(row.id_data_idd)])
-			panic("contents 2")
-		}
-	}
-
-	// create blob summary
-	for key, data := range newComers.mem_index_repo {
-		if data.Status != "new" {
-			delete(newComers.mem_index_repo, key)
-		}
-	}
-	sum_data_blobs := uint64(0)
-	sum_meta_blobs := uint64(0)
-	count_meta_blobs := 0
-	count_data_blobs := 0
-	for blob := range newComers.mem_index_repo {
-		ih := repositoryData.index_handle[blob]
-		typ := ih.Type.String()[0:1]
-		if typ == "t" {
-			sum_meta_blobs += uint64(ih.size)
-			count_meta_blobs++
-		} else if typ == "d" {
-			sum_data_blobs += uint64(ih.size)
-			count_data_blobs++
-		}
-	}
-	Printf("\n*** Summary of new data in database ***\n")
-	Printf("%s %7d %10.3f MiB\n", "meta", count_meta_blobs, float64(sum_meta_blobs)/ONE_MEG)
-	Printf("%s %7d %10.3f MiB\n", "data", count_data_blobs, float64(sum_data_blobs)/ONE_MEG)
-	Printf("%s %7d %10.3f MiB\n", "sum ", count_data_blobs+count_meta_blobs,
-		float64(sum_data_blobs+sum_meta_blobs)/ONE_MEG)
-	Printf("\n")
-
-	ShowBlobsPerSnap(repositoryData, newComers)
-	CalcuateNewEntries(*db_aggregate.table_names, newComers.mem_names,
-		repositoryData, &db_aggregate, CreateMemNamesV2, &newComers.new_names, newComers)
+	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
 	// finale: INSERT new records
-	err = CommitNewRecords(&db_aggregate, repositoryData, newComers)
+	err = CommitNewRecords(&db_aggregate, repositoryData, newComers, gopts)
 	if err != nil {
 		return err
 	}
@@ -422,11 +208,11 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 }
 
 // CommitNewRecords goes over all the Sets created before and INSERTs the
-// newly found dta into the database
+// newly found data into the database
 // because of my lack of generic programming capabilities in Go I have
 // to do every TABLE by hand
 func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
+	newComers *Newcomers, gopts GlobalOptions,) error {
 	column_names, err := GetColumnNames(db_aggregate.db_conn)
 	if err != nil {
 		return err
@@ -441,39 +227,25 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 	Printf("BEGIN TRANSACTION\n")
 	changes_made := false
-	err = InsertATable("snapshots", newComers.mem_snapshots, tx, column_names, &changes_made)
-	if err != nil {
-		return err
+
+	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return InsertATable("snapshots",  newComers.mem_snapshots,  tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("packfiles",  newComers.mem_packfiles,  tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("names",      newComers.mem_names,      tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("meta_dir",   newComers.mem_meta_dir,   tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("idd_file",   newComers.mem_idd_file,   tx, column_names, &changes_made)})
+	wg.Go (func() error {return InsertATable("contents",   newComers.mem_contents,   tx, column_names, &changes_made)})
+	res := wg.Wait()
+	if res != nil {
+		Printf("Error processing INSERT INTO tables Error is %v\n", res)
+		return res
 	}
 
-	err = InsertATable("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
+	// update timestamp
+	err = db_update_timestamp(*db_aggregate.table_snapshots, tx)
 	if err != nil {
-		return err
-	}
-
-	err = InsertATable("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made)
-	if err != nil {
-		return err
-	}
-
-	err = InsertATable("names", newComers.mem_names, tx, column_names, &changes_made)
-	if err != nil {
-		return err
-	}
-
-	err = InsertATable("meta_dir", newComers.mem_meta_dir, tx, column_names, &changes_made)
-	if err != nil {
-		return err
-	}
-
-	err = InsertATable("idd_file", newComers.mem_idd_file, tx, column_names, &changes_made)
-	if err != nil {
-		return err
-	}
-
-	err = InsertATable("contents", newComers.mem_contents, tx, column_names, &changes_made)
-	if err != nil {
-		return err
+		Printf("update timestamp failed: error is %v\n", err)
 	}
 
 	// COMMIT or ROLLBACK transaction
@@ -516,8 +288,8 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	}
 
 	// do the INSERT
-	//Printf("total number of rows is %5d number of columns is %d\n",
-	//	len(t_insert), len(column_list))
+	// te splittin into sements could a bit more dynamic
+	// its is imited by te product of column * rows_inserted
 	for offset := 0; offset < len(t_insert); offset += 1000 {
 		max := len(t_insert)
 		if max > 1000 {
@@ -529,7 +301,7 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		//Printf("INSERT from %4d to %4d\n", offset, offset + max)
 		r, err := tx.NamedExec(sql, t_insert[offset:offset + max])
 		if err != nil {
-			Printf("error INSERT error is: %v\n", err)
+			Printf("error INSERT %s error is: %v\n", tbl_name, err)
 			return err
 		}
 		count,_ := r.RowsAffected()
@@ -626,8 +398,8 @@ func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
 		Printf("\n*** snap %s %s %s:%s ***\n", snap_id, row.Snap_time, row.Snap_host, row.Snap_fsys)
 		Printf("meta %5d %10.3f MiB\n", count_meta_blobs, float64(sum_meta_blobs)/ONE_MEG)
 		Printf("data %5d %10.3f MiB\n", count_data_blobs, float64(sum_data_blobs)/ONE_MEG)
-		Printf("sum  %5d %10.3f MiB\n", count_data_blobs+count_meta_blobs,
-			float64(sum_data_blobs+sum_meta_blobs)/ONE_MEG)
+		Printf("sum  %5d %10.3f MiB\n", count_data_blobs + count_meta_blobs,
+			float64(sum_data_blobs + sum_meta_blobs)/ONE_MEG)
 	}
 	Printf("\n")
 }
@@ -664,6 +436,283 @@ tx *sqlx.Tx,  column_names map[string][]string, changes_made *bool) error {
 	err := InsertTable(table_name, mem_map, tx, column_names, changes_made)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func CompareSnapsots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare snapshots in memory with snapshots in the database
+	newComers.mem_snapshots = CreateMemSnapshots(db_aggregate, repositoryData, newComers)
+	newComers.new_snapshots = NewMemoryKeys(*db_aggregate.table_snapshots, newComers.mem_snapshots)
+	high_snap := sqlite.Get_high_id("snapshots")
+	for snap := range newComers.new_snapshots.Iter() {
+		snap_id := snap
+		row := newComers.mem_snapshots[snap_id]
+		row.Status = "new"
+		row.Id = high_snap
+		row.Snap_id = snap_id
+		row.Id_snap_root = row.ID_mem.String()
+		newComers.mem_snapshots[snap_id] = row
+		high_snap++
+	}
+	Printf("%7d new records in new_snapshots\n", newComers.new_snapshots.Cardinality())
+	return nil
+}
+
+func CompareNames(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare names with its DB counterpart
+	newComers.mem_names = CreateMemNames(db_aggregate, repositoryData, newComers)
+	newComers.new_names = NewMemoryKeys(*db_aggregate.table_names, newComers.mem_names)
+	Printf("%7d new records in new_names\n", newComers.new_names.Cardinality())
+
+	high_names := sqlite.Get_high_id("names")
+	for raw := range newComers.new_names.Iter() {
+		name := raw
+		row := newComers.mem_names[name]
+		row.Status = "new"
+		row.Id = high_names
+		row.Name = name
+		row.Name_type = "b" // there is no other name type (left)
+		newComers.mem_names[name] = row
+		high_names++
+	}
+	return nil
+}
+
+func ComparePackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare packfiles with its DB counterpart
+	newComers.mem_packfiles = CreateMemPackfiles(db_aggregate, repositoryData, newComers)
+	newComers.new_packfiles = NewMemoryKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
+	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
+
+	high_pack := sqlite.Get_high_id("packfiles")
+	for raw := range newComers.new_packfiles.Iter() {
+		pack_ID_ptr := raw
+		row := newComers.mem_packfiles[pack_ID_ptr]
+		row.Status = "new"
+		row.Id = high_pack
+		row.Packfile_id = (*pack_ID_ptr).String()
+		newComers.mem_packfiles[pack_ID_ptr] = row
+		high_pack++
+	}
+	return nil
+}
+
+func CompareIndexRepo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare index_repo with its DB counterpart
+	newComers.mem_index_repo = CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
+	newComers.new_index_repo = NewMemoryKeys(*db_aggregate.table_index_repo, newComers.mem_index_repo)
+	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
+
+	high_repo := sqlite.Get_high_id("index_repo")
+	for blob := range newComers.new_index_repo.Iter() {
+		if blob == EMPTY_NODE_ID {
+			continue
+		}
+		ih 				:= repositoryData.index_handle[blob]
+		pack_Int 	:= ih.pack_index
+		row 			:= newComers.mem_index_repo[blob]
+		row.Status = "new"
+		row.Id 		= high_repo
+		row.Idd 	= blob.String()
+		ptr 			:= &(repositoryData.index_to_blob[pack_Int])
+		row.Id_pack_id = newComers.mem_packfiles[ptr].Id
+		row.packfile = ptr
+		newComers.mem_index_repo[blob] = row
+
+		// consistency check
+		if row.Id_pack_id == 0 {
+			Printf("Logic error for pack pointer %p in index_repo %s IndexHandle %#v\n",
+				ptr, blob.String()[:12], ih)
+			panic("new index_repo")
+		}
+		high_repo++
+	}
+	return nil
+}
+
+func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare idd_file with its DB counterpart
+	newComers.mem_idd_file = CreateMemIddFile(db_aggregate, repositoryData, newComers)
+	newComers.new_idd_file = NewMemoryKeys(*db_aggregate.table_idd_file, newComers.mem_idd_file)
+	Printf("%7d new records in new_idd_file\n", newComers.new_idd_file.Cardinality())
+
+	high_idd := sqlite.Get_high_id("idd_file")
+	for raw := range newComers.new_idd_file.Iter() {
+		comp_ix := raw
+		meta_blob := comp_ix.meta_blob
+		position := comp_ix.position
+		row := newComers.mem_idd_file[comp_ix]
+		meta := repositoryData.directory_map[repositoryData.blob_to_index[meta_blob]][position]
+		name := meta.name
+		row.Status = "new"
+		row.Id = high_idd
+		row.Id_blob = newComers.mem_index_repo[meta_blob].Id
+		row.Position = position
+		row.Id_name = newComers.mem_names[name].Id
+		newComers.mem_idd_file[comp_ix] = row
+		high_idd++
+
+		// consistency check
+		if row.Id_blob == 0 {
+			Printf("Logic error for blob pointer %s in idd_file\n",
+				meta_blob.String()[:12])
+			panic("new idd_file 1")
+		}
+		if row.Id_blob == 0 {
+			Printf("Logic error for name pointer %s in idd_file\n", name)
+			panic("new idd_file 2")
+		}
+	}
+	return nil
+}
+
+func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare meta_dir with its DB counterpart
+	newComers.mem_meta_dir = CreateMemMetaDir(db_aggregate, repositoryData, newComers)
+	newComers.new_meta_dir = NewMemoryKeys(*db_aggregate.table_meta_dir, newComers.mem_meta_dir)
+	Printf("%7d new records in new_meta_dir\n", newComers.new_meta_dir.Cardinality())
+
+	high_mdir := sqlite.Get_high_id("meta_dir")
+	for comp_ix := range newComers.new_meta_dir.Iter() {
+		snap_id 				:= comp_ix.snap_id
+		meta_blob       := comp_ix.meta_blob
+		row 						:= newComers.mem_meta_dir[comp_ix]
+		row.Status 			= "new"
+		row.Id 					= high_mdir
+		newComers.mem_meta_dir[comp_ix] = row
+		high_mdir++
+
+		//  consistency check
+		if row.Id_snap_id == 0 {
+			Printf("Logic error for meta_dir.snap_idd %s %#v\n",
+				snap_id, newComers.mem_snapshots[snap_id])
+			panic("meta_dir 1")
+		}
+		if row.Id_idd == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				snap_id, newComers.mem_index_repo[meta_blob])
+			panic("meta_dir 2")
+		}
+	}
+	return nil
+}
+
+func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) error {
+	// compare contents with its DB counterpart
+	newComers.mem_contents = CreateMemContents(db_aggregate, repositoryData, newComers)
+	newComers.new_contents = NewMemoryKeys(*db_aggregate.table_contents, newComers.mem_contents)
+	Printf("%7d new records in new_contents\n", newComers.new_contents.Cardinality())
+
+	high_cont := sqlite.Get_high_id("contents")
+	for raw := range newComers.new_contents.Iter() {
+		comp_ix := raw
+		p_meta_blob := comp_ix.meta_blob
+		row := newComers.mem_contents[comp_ix]
+		row.Status = "new"
+		row.Id = high_cont
+		row.Id_blob = newComers.mem_index_repo[p_meta_blob].Id
+		row.Id_data_idd = newComers.mem_index_repo[*(row.id_data_idd)].Id
+		newComers.mem_contents[comp_ix] = row
+		high_cont++
+
+		// check consistency
+		if row.Id_blob == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				p_meta_blob.String()[:12], newComers.mem_index_repo[p_meta_blob])
+			panic("contents 1")
+		}
+		if row.Id_data_idd == 0 {
+			Printf("Logic error for meta_dir.blob %s %#v\n",
+				(*(row.id_data_idd)).String()[:12], newComers.mem_index_repo[*(row.id_data_idd)])
+			panic("contents 2")
+		}
+	}
+	return nil
+}
+
+func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) {
+	// create blob summary
+	for key, data := range newComers.mem_index_repo {
+		if data.Status != "new" {
+			delete(newComers.mem_index_repo, key)
+		}
+	}
+	sum_data_blobs := uint64(0)
+	sum_meta_blobs := uint64(0)
+	count_meta_blobs := 0
+	count_data_blobs := 0
+	for blob := range newComers.mem_index_repo {
+		ih := repositoryData.index_handle[blob]
+		typ := ih.Type.String()[0:1]
+		if typ == "t" {
+			sum_meta_blobs += uint64(ih.size)
+			count_meta_blobs++
+		} else if typ == "d" {
+			sum_data_blobs += uint64(ih.size)
+			count_data_blobs++
+		}
+	}
+	Printf("\n*** Summary of new data in database ***\n")
+	Printf("%s %7d %10.3f MiB\n", "meta", count_meta_blobs, float64(sum_meta_blobs)/ONE_MEG)
+	Printf("%s %7d %10.3f MiB\n", "data", count_data_blobs, float64(sum_data_blobs)/ONE_MEG)
+	Printf("%s %7d %10.3f MiB\n", "sum ", count_data_blobs+count_meta_blobs,
+		float64(sum_data_blobs+sum_meta_blobs)/ONE_MEG)
+	Printf("\n")
+
+	ShowBlobsPerSnap(repositoryData, newComers)
+	CalcuateNewEntries(*db_aggregate.table_names, newComers.mem_names,
+		repositoryData, db_aggregate, CreateMemNamesV2, &newComers.new_names, newComers)
+}
+
+// manae timestamp table (with one row)
+func db_update_timestamp(table_snapshots map[string]SnapshotRecordMem, tx *sqlx.Tx) error {
+	max_time := ""
+	for _, data := range table_snapshots {
+		if data.Snap_time > max_time {
+			max_time = data.Snap_time
+		}
+	}
+	//  convert youngest time from snapshots
+	max_snap_time, err := time.Parse("2006-01-02 15:04:05", max_time)
+	if err != nil {
+		Printf("GetMaxSnaptime: error parsing time %v\n", err)
+		panic("GetMaxSnaptime: error parsing time")
+	}
+
+	// get restic_updated time from timestamp
+	var restic_updated time.Time
+	sql := "SELECT restic_updated FROM timestamp WHERE id = 1"
+	err = tx.Get(&restic_updated, sql)
+	if err != nil {
+		Printf("UPDATE timestamp failed 1: %v\n", err)
+		return err
+	}
+
+	if restic_updated.Before(max_snap_time) {
+		sql = `UPDATE timestamp SET database_updated =
+              (SELECT datetime('now', 'localtime')),
+              restic_updated = :restic_updated WHERE id = 1`
+    _, err := tx.Exec(sql, max_snap_time)
+    if err != nil {
+			Printf("UPDATE timestamp failed 1: %v\n", err)
+			return err
+		}
+   } else {
+		 sql := `UPDATE timestamp SET database_updated =
+               (SELECT datetime('now', 'localtime')) WHERE id = 1`
+    _, err := tx.Exec(sql)
+    if err != nil {
+			Printf("UPDATE timestamp failed 2: %v\n", err)
+			return err
+		}
 	}
 	return nil
 }

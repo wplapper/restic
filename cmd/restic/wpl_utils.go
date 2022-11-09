@@ -17,53 +17,8 @@ import (
 	"github.com/gammazero/deque"
 )
 
-/*type SortByPack struct {
-	pack_ID restic.ID
-	offset uint
-	blob_ID restic.ID
-}*/
-
 // static variable
 var gOptions GlobalOptions
-
-type BlobFile2 struct {
-	// name, size, type_, mtime, content and subtree ID
-	size       uint64
-	inode      uint64
-	content    []restic.IntID
-	subtree_ID restic.IntID
-	name       string
-	Type       string
-	mtime      time.Time
-}
-
-type Index_Handle struct {
-	blob_index restic.IntID
-	pack_index restic.IntID
-	size       uint
-	Type       restic.BlobType
-}
-
-type RepositoryData struct {
-	// all snapshots
-	snaps []*restic.Snapshot
-	// map contents of tree blob record via JSON to memory
-	directory_map map[restic.IntID][]BlobFile2
-	// map directory blob to a path name
-	fullpath map[restic.IntID]string
-	// all directory names, basename ony
-	names map[restic.IntID]string
-	// all directory children of a directory
-	children map[restic.IntID]restic.IntSet
-	// all tree blobs of a snapshot
-	meta_dir_map map[*restic.ID]restic.IntSet
-	// all tree and data blobs from the index
-	index_handle map[restic.ID]Index_Handle
-	// map blob to an IntID number
-	blob_to_index map[restic.ID]restic.IntID
-	// address this slice via an IntID index to get back to the restic.ID
-	index_to_blob []restic.ID
-}
 
 var EMPTY_NODE_ID restic.ID
 var PTR_EMPTY_NODE_ID *restic.ID
@@ -88,7 +43,6 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository) ([]*restic.
 	// collect all snap records
 	snaps := make([]*restic.Snapshot, 0, 10)
 	repo.List(gopts.ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
-		// could possibly be paralllized
 		sn, err := restic.LoadSnapshot(gopts.ctx, repo, id)
 		if err != nil {
 			Printf("Skip snap record %s!\n", id)

@@ -7,6 +7,7 @@ package main
 
 import (
 	"time"
+	"golang.org/x/sync/errgroup"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -19,15 +20,6 @@ import (
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
 )
-
-type RemoveTable struct {
-	Id int
-}
-
-type UpdateTable_index_repo struct {
-	Id int
-	Id_pack_id int
-}
 
 var cmdDBRem = &cobra.Command{
 	Use:   "db_rem_record [flags]",
@@ -105,45 +97,30 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
-	// get all high IDs
-	err = sqlite.Get_all_high_ids()
-	if err != nil {
-		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
-		return err
-	}
-
 	db_aggregate.db_conn = db_conn
 	names_and_counts := make(map[string]int)
-	err = readAllTablesAndCounts(db_conn, names_and_counts)
-	if err != nil {
-		Printf("readAllTablesAndCounts error is %v\n", err)
-		return err
+
+	// the first three tables go in parallel
+	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return sqlite.Get_all_high_ids()})
+	wg.Go (func() error {return readAllTablesAndCounts(db_conn, names_and_counts)})
+	wg.Go (func() error {return ReadSnapshotTable(db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadNamesTable(db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
+	res := wg.Wait()
+	if res != nil {
+		Printf("error processing group 1\n")
+		return res
 	}
 	db_aggregate.table_counts = names_and_counts
 
-	// action loop for reading all database tables
-	// this is semi generic
-	type action_function func(*sqlx.DB, *DBAggregate) error
-	type ActionStruct struct {
-		table_name string
-		routine    action_function
+	err = ReadIndexRepoTable(db_conn, &db_aggregate)
+	if err != nil {
+		return err
 	}
-	// all these Read<tbl_name>Table functions store their work in a struct
-	// element of 'db_aggregate'. All TABLE results are maps.
-	var actions = []ActionStruct{
-		{table_name: "snapshots", 	routine: ReadSnapshotTable},
-		{table_name: "index_repo", 	routine: ReadIndexRepoTable},
-		{table_name: "names", 			routine: ReadNamesTable},
-		{table_name: "idd_file", 		routine: ReadIddFileTable},
-		{table_name: "packfiles", 	routine: ReadPackfilesTable}}
-
-	for _, action := range actions {
-		Printf("reading table %s\n", action.table_name)
-		err := action.routine(db_conn, &db_aggregate)
-		if err != nil {
-			Printf("error reading table %s %v\n", action.table_name, err)
-			return err
-		}
+	err = ReadIddFileTable(db_conn, &db_aggregate)
+	if err != nil {
+		return err
 	}
 
 	// compare snapshots in memory with snapshots in the database
@@ -168,7 +145,6 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 			row := (*db_aggregate.table_snapshots)[snap_id]
 			row.Status = "delete"
 			(*db_aggregate.table_snapshots)[snap_id] = row
-			//Printf("DELETE %#v\n", row)
 			t_insert = append(t_insert, RemoveSnaps{Id: row.Id})
 		}
 
@@ -184,13 +160,14 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	// compare packfiles with its DB counterpart
 	newComers.mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
 	newComers.old_packfiles = OldDBKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
-	Printf("%7d old records in old_packfiles\n", newComers.new_packfiles.Cardinality())
+	Printf("%7d old records in old_packfiles\n", newComers.old_packfiles.Cardinality())
 	for packID := range newComers.old_packfiles.Iter() {
 		row := (*db_aggregate.table_packfiles)[packID]
 		row.Status = "delete"
 		(*db_aggregate.table_packfiles)[packID] = row
 	}
 
+	/*
 	// any new packfiles needed?
 	newComers.new_packfiles = NewMemoryKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
 	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
@@ -204,17 +181,23 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		row.Packfile_id = (*pack_ID_ptr).String()
 		newComers.mem_packfiles[pack_ID_ptr] = row
 		high_pack++
-	}
+	}*/
+	ComparePackfiles(&db_aggregate, repositoryData, newComers)
 
 	// compare index_repo with its DB counterpart
 	newComers.mem_index_repo = CreateMemIndexRepo(&db_aggregate, repositoryData, newComers)
 	newComers.old_index_repo = OldDBKeys(*db_aggregate.table_index_repo, newComers.mem_index_repo)
 	Printf("%7d old records in old_index_repo\n", newComers.old_index_repo.Cardinality())
+	for name := range newComers.old_index_repo.Iter() {
+		row := (*db_aggregate.table_index_repo)[name]
+		row.Status = "delete"
+		(*db_aggregate.table_index_repo)[name] = row
+	}
 
 	// compare names with its DB counterpart
 	newComers.mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
 	newComers.old_names = OldDBKeys(*db_aggregate.table_names, newComers.mem_names)
-	Printf("%7d old records in old_names\n", newComers.new_names.Cardinality())
+	Printf("%7d old records in old_names\n", newComers.old_names.Cardinality())
 	for name := range newComers.old_names.Iter() {
 		row := (*db_aggregate.table_names)[name]
 		row.Status = "delete"
@@ -224,7 +207,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	// compare idd_file with its DB counterpart
 	newComers.mem_idd_file = CreateMemIddFile(&db_aggregate, repositoryData, newComers)
 	newComers.old_idd_file = OldDBKeys(*db_aggregate.table_idd_file, newComers.mem_idd_file)
-	Printf("%7d old records in old_idd_file\n", newComers.new_idd_file.Cardinality())
+	Printf("%7d old records in old_idd_file\n", newComers.old_idd_file.Cardinality())
 	for comp_ix := range newComers.old_idd_file.Iter() {
 		row := (*db_aggregate.table_idd_file)[comp_ix]
 		row.Status = "delete"
@@ -312,7 +295,6 @@ newComers *Newcomers)  error {
 	count_updates := 0
 	// update index_repo.id_pack_id
 	for id, ih := range repositoryData.index_handle {
-		//blob_index := ih.blob_index
 		pack_index := ih.pack_index
 		db_index_repo, ok := (*db_aggregate.table_index_repo)[id]
 		if !ok {
@@ -327,7 +309,6 @@ newComers *Newcomers)  error {
 		}
 
 		if db_index_repo.Id_pack_id != pack_row.Id {
-			// needs updating
 			db_index_repo.Status = "update"
 			db_index_repo.Id_pack_id = pack_row.Id
 			(*db_aggregate.table_index_repo)[id] = db_index_repo
@@ -356,25 +337,30 @@ newComers *Newcomers)  error {
 	}
 	Printf("BEGIN TRANSACTION\n")
 
-	var sqls = []string {
-		`DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`,
-		`DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`,
-		`DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`,
-		`DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`,
-		`DELETE FROM index_repo WHERE index_repo.id IN (SELECT id FROM meta_blobs)`,}
+	var sqls = []RemoveSqLTable {
+		RemoveSqLTable{table_name: "snapshots",
+			sql:`DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{table_name: "meta_dir",
+			sql: `DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{table_name: "contents",
+			sql: `DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{table_name: "idd_file",
+			sql: `DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{table_name: "index_repo",
+			sql: `DELETE FROM index_repo WHERE index_repo.id IN (SELECT id FROM meta_blobs)`,}}
 
 	for _, sql := range sqls {
 		if dbOptions.echo {
-			Printf("%s\n", sql)
+			Printf("%s\n", sql.sql)
 		}
 
-		r, err := tx.Exec(sql)
+		r, err := tx.Exec(sql.sql)
 		if err != nil {
-			Printf("error %s error is: %v\n", sql, err)
+			Printf("error %s error is: %v\n", sql.sql, err)
 			return err
 		}
 		count,_ := r.RowsAffected()
-		Printf("%5d rows deleted.\n", count)
+		Printf("%-15s %5d rows deleted.\n", sql.table_name, count)
 		if count > 0 {
 			changes_made = true
 		}
@@ -452,6 +438,12 @@ newComers *Newcomers)  error {
 		changes_made = true
 	}
 
+	// update timestamp
+	err = db_update_timestamp(*db_aggregate.table_snapshots, tx)
+	if err != nil {
+		Printf("update timestamp failed: error is %v\n", err)
+	}
+
 	// COMMIT or ROLLBACK transaction
 	if !dbOptions.rollback  && changes_made {
 		err = tx.Commit()
@@ -467,6 +459,7 @@ newComers *Newcomers)  error {
 	return nil
 }
 
+// this is an ugly fix, because sql / sqlx cannot do bulk DELETEs
 // delete_selected_rows generates a bulk DELETE via subquery
 // DELETE FROM <table_name> WHERE id IN (SELECT id FROM delete_table)
 func delete_selected_rows(t_del *[]RemoveTable,db *sqlx.Tx, table_name string,
@@ -505,7 +498,7 @@ changes_made *bool) error {
 	}
 
 	// empty TEMP TABLE
-	sql = `DELETE FROM delete_table`
+	sql = "DELETE FROM delete_table"
 	r, err = db.Exec(sql)
 	if err != nil {
 		Printf("error in %s: error is: %v\n", sql, err)
