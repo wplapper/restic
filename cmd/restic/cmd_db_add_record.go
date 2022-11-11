@@ -143,13 +143,13 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	*/
 
-	// the first three tables go parallel
+	// the first three tables can go parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go (func() error {return sqlite.Get_all_high_ids()})
 	wg.Go (func() error {return readAllTablesAndCounts(db_conn, names_and_counts)})
 	wg.Go (func() error {return ReadSnapshotTable (db_conn, &db_aggregate)})
 	wg.Go (func() error {return ReadNamesTable    (db_conn, &db_aggregate)})
-	wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
+	//wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
 	res := wg.Wait()
 	if res != nil {
 		Printf("Esrror processing group 1. Error is %v\n", res)
@@ -162,8 +162,13 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
 	}
+	err = ReadPackfilesTable(db_conn, &db_aggregate)
+	if err != nil {
+		Printf("Error processing ReadPackfilesTable. Error is %v\n", err)
+		return err
+	}
 
-	// the last tree tables can be reaf in parallel, since they dont depend on one another
+	// the first tree tables can be read in parallel, since they dont depend on one another
 	wg1, _ := errgroup.WithContext(gopts.ctx)
 	wg1.Go (func() error {return ReadMetaDirTable (db_conn, &db_aggregate)})
 	wg1.Go (func() error {return ReadIddFileTable (db_conn, &db_aggregate)})
@@ -174,8 +179,9 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return res
 	}
 
+	// the last tree tables can be read in parallel, since they dont depend on one another
 	wg, _ = errgroup.WithContext(gopts.ctx)
-	wg.Go (func() error {return CompareSnapsots(&db_aggregate, repositoryData, newComers)})
+	wg.Go (func() error {return CompareSnapshots(&db_aggregate, repositoryData, newComers)})
 	wg.Go (func() error {return CompareNames(&db_aggregate, repositoryData, newComers)})
 	wg.Go (func() error {return ComparePackfiles(&db_aggregate, repositoryData, newComers)})
 	res = wg.Wait()
@@ -219,7 +225,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 
 	// BEGIN TRANSACTION
-	tx, err := (*db_aggregate).db_conn.Beginx()
+	tx, err := (db_aggregate).db_conn.Beginx()
 	_ = tx
 	if err != nil {
 		Printf("Cant start transaction. Error is %v\n", err)
@@ -243,7 +249,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 
 	// update timestamp
-	err = db_update_timestamp(*db_aggregate.table_snapshots, tx)
+	err = db_update_timestamp(db_aggregate.table_snapshots, tx)
 	if err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
 	}
@@ -421,8 +427,18 @@ func CalcuateNewEntries[K comparable, V1 any, V2 any](
 // generic function using 'reflect' to access the status field
 // for removal of all rows which do not have a status of "new"
 func filter_new[K comparable, V any](mem_map map[K]V, status string) {
+	print_count := 0
 	for key, data := range mem_map {
 		v := reflect.ValueOf(data)
+		if print_count < 3 {
+			for i := 0; i < v.NumField(); i++ {
+				the_field := v.Type().Field(i)
+				fieldName := the_field.Name
+				varType   := the_field.Type
+				Printf("%-20s %s\n", fieldName, varType)
+			}
+		}
+		print_count++
 		if v.FieldByName("Status").String() != status {
 			delete(mem_map, key)
 		}
@@ -440,11 +456,11 @@ tx *sqlx.Tx,  column_names map[string][]string, changes_made *bool) error {
 	return nil
 }
 
-func CompareSnapsots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+func CompareSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare snapshots in memory with snapshots in the database
 	newComers.mem_snapshots = CreateMemSnapshots(db_aggregate, repositoryData, newComers)
-	newComers.new_snapshots = NewMemoryKeys(*db_aggregate.table_snapshots, newComers.mem_snapshots)
+	newComers.new_snapshots = NewMemoryKeys(db_aggregate.table_snapshots, newComers.mem_snapshots)
 	high_snap := sqlite.Get_high_id("snapshots")
 	for snap := range newComers.new_snapshots.Iter() {
 		snap_id := snap
@@ -464,7 +480,7 @@ func CompareNames(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare names with its DB counterpart
 	newComers.mem_names = CreateMemNames(db_aggregate, repositoryData, newComers)
-	newComers.new_names = NewMemoryKeys(*db_aggregate.table_names, newComers.mem_names)
+	newComers.new_names = NewMemoryKeys(db_aggregate.table_names, newComers.mem_names)
 	Printf("%7d new records in new_names\n", newComers.new_names.Cardinality())
 
 	high_names := sqlite.Get_high_id("names")
@@ -485,7 +501,7 @@ func ComparePackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare packfiles with its DB counterpart
 	newComers.mem_packfiles = CreateMemPackfiles(db_aggregate, repositoryData, newComers)
-	newComers.new_packfiles = NewMemoryKeys(*db_aggregate.table_packfiles, newComers.mem_packfiles)
+	newComers.new_packfiles = NewMemoryKeys(db_aggregate.table_packfiles, newComers.mem_packfiles)
 	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
 
 	high_pack := sqlite.Get_high_id("packfiles")
@@ -505,7 +521,7 @@ func CompareIndexRepo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare index_repo with its DB counterpart
 	newComers.mem_index_repo = CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
-	newComers.new_index_repo = NewMemoryKeys(*db_aggregate.table_index_repo, newComers.mem_index_repo)
+	newComers.new_index_repo = NewMemoryKeys(db_aggregate.table_index_repo, newComers.mem_index_repo)
 	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
 
 	high_repo := sqlite.Get_high_id("index_repo")
@@ -539,7 +555,7 @@ func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare idd_file with its DB counterpart
 	newComers.mem_idd_file = CreateMemIddFile(db_aggregate, repositoryData, newComers)
-	newComers.new_idd_file = NewMemoryKeys(*db_aggregate.table_idd_file, newComers.mem_idd_file)
+	newComers.new_idd_file = NewMemoryKeys(db_aggregate.table_idd_file, newComers.mem_idd_file)
 	Printf("%7d new records in new_idd_file\n", newComers.new_idd_file.Cardinality())
 
 	high_idd := sqlite.Get_high_id("idd_file")
@@ -576,7 +592,7 @@ func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare meta_dir with its DB counterpart
 	newComers.mem_meta_dir = CreateMemMetaDir(db_aggregate, repositoryData, newComers)
-	newComers.new_meta_dir = NewMemoryKeys(*db_aggregate.table_meta_dir, newComers.mem_meta_dir)
+	newComers.new_meta_dir = NewMemoryKeys(db_aggregate.table_meta_dir, newComers.mem_meta_dir)
 	Printf("%7d new records in new_meta_dir\n", newComers.new_meta_dir.Cardinality())
 
 	high_mdir := sqlite.Get_high_id("meta_dir")
@@ -608,7 +624,7 @@ func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare contents with its DB counterpart
 	newComers.mem_contents = CreateMemContents(db_aggregate, repositoryData, newComers)
-	newComers.new_contents = NewMemoryKeys(*db_aggregate.table_contents, newComers.mem_contents)
+	newComers.new_contents = NewMemoryKeys(db_aggregate.table_contents, newComers.mem_contents)
 	Printf("%7d new records in new_contents\n", newComers.new_contents.Cardinality())
 
 	high_cont := sqlite.Get_high_id("contents")
@@ -668,7 +684,7 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	Printf("\n")
 
 	ShowBlobsPerSnap(repositoryData, newComers)
-	CalcuateNewEntries(*db_aggregate.table_names, newComers.mem_names,
+	CalcuateNewEntries(db_aggregate.table_names, newComers.mem_names,
 		repositoryData, db_aggregate, CreateMemNamesV2, &newComers.new_names, newComers)
 }
 

@@ -54,7 +54,10 @@ type DBOptions struct {
 	altDB              string
 	rollback           bool
 }
+//==============================================================================
 
+// the following types represent databse tables and teir content in the
+// database and in memory
 type SnapshotRecordDB struct {
 	Id           int
 	Snap_id      string
@@ -65,11 +68,11 @@ type SnapshotRecordDB struct {
 }
 
 type SnapshotRecordMem struct {
-	// raw part
 	SnapshotRecordDB
-	ID_mem *restic.ID
-	root   *restic.ID
-	Status string
+	// mem
+	ID_mem 			*restic.ID
+	root   			*restic.ID
+	Status 			string
 }
 
 type IndexRepoRecordDB struct {
@@ -77,15 +80,15 @@ type IndexRepoRecordDB struct {
 	Idd        string
 	Idd_size   int
 	Index_type string
-	Id_pack_id int // unused
+	Id_pack_id int
 }
 
 type IndexRepoRecordMem struct {
-	// raw part
 	IndexRepoRecordDB
-	idd      *restic.ID
-	packfile *restic.ID
-	Status   string
+	// mem
+	idd      	*restic.ID
+	packfile 	*restic.ID
+	Status   	string
 }
 
 type NamesRecordDB struct {
@@ -96,7 +99,8 @@ type NamesRecordDB struct {
 
 type NamesRecordMem struct {
 	NamesRecordDB
-	Status string
+	// mem
+	Status 		string
 }
 
 type MetaDirRecordDB struct {
@@ -107,6 +111,7 @@ type MetaDirRecordDB struct {
 
 type MetaDirRecordMem struct {
 	MetaDirRecordDB
+	// mem
 	Status string
 }
 
@@ -120,8 +125,8 @@ type ContentsRecordDB struct {
 }
 
 type ContentsRecordMem struct {
-	// raw part
 	ContentsRecordDB
+	// mem
 	id_data_idd *restic.ID
 	Status      string
 }
@@ -138,10 +143,10 @@ type IddFileRecordDB struct {
 }
 
 type IddFileRecordMem struct {
-	// raw part
 	IddFileRecordDB
-	name   string
-	Status string
+	// mem
+	name   	string
+	Status 	string
 }
 
 type PackfilesRecordDB struct {
@@ -151,7 +156,8 @@ type PackfilesRecordDB struct {
 
 type PackfilesRecordMem struct {
 	PackfilesRecordDB
-	Status string
+	// mem
+	Status 			string
 }
 
 type TimeStamp struct {
@@ -178,30 +184,26 @@ type CompContents struct {
 	position  int
 	offset    int
 }
+//==============================================================================
 
+// the holding collections
 type RepositoryData struct {
 	// all snapshots
-	snaps []*restic.Snapshot
-	// map contents of tree blob record via JSON to memory
+	snaps 				[]*restic.Snapshot
 	directory_map map[restic.IntID][]BlobFile2
-	// map directory blob to a path name
-	fullpath map[restic.IntID]string
-	// all directory names, basename ony
-	names map[restic.IntID]string
-	// all directory children of a directory
-	children map[restic.IntID]restic.IntSet
-	// all tree blobs of a snapshot
-	meta_dir_map map[*restic.ID]restic.IntSet
-	// all tree and data blobs from the index
-	index_handle map[restic.ID]Index_Handle
-	// map blob to an IntID number
+	fullpath 			map[restic.IntID]string
+	names 				map[restic.IntID]string
+	children 			map[restic.IntID]restic.IntSet
+	meta_dir_map 	map[*restic.ID]restic.IntSet
+	index_handle 	map[restic.ID]Index_Handle
+
+	// the last two entries manage the restic.ID to *restic.ID relationships
 	blob_to_index map[restic.ID]restic.IntID
-	// address this slice via an IntID index to get back to the restic.ID
 	index_to_blob []restic.ID
 }
 
 type Newcomers struct {
-	// setup variables and maps to catch the newcomers
+	// the contanets of various meory tables
 	mem_snapshots  map[string]SnapshotRecordMem
 	mem_index_repo map[restic.ID]IndexRepoRecordMem
 	mem_names      map[string]NamesRecordMem
@@ -210,6 +212,7 @@ type Newcomers struct {
 	mem_contents   map[CompContents]ContentsRecordMem
 	mem_packfiles  map[*restic.ID]PackfilesRecordMem
 
+	// we aso need sets for easy manipulation
 	new_snapshots  mapset.Set[string]
 	new_index_repo mapset.Set[restic.ID]
 	new_names      mapset.Set[string]
@@ -231,18 +234,18 @@ type DBAggregate struct {
 	table_counts   		map[string]int // count of all tables
 
 	// the database tables - memory representation
-	table_snapshots  	*map[string]SnapshotRecordMem
-	table_index_repo 	*map[restic.ID]IndexRepoRecordMem
-	table_meta_dir   	*map[CompMetaDir]MetaDirRecordMem
-	table_packfiles  	*map[*restic.ID]PackfilesRecordMem
-	table_idd_file   	*map[CompIddFile]IddFileRecordMem
-	table_names      	*map[string]NamesRecordMem
-	table_contents   	*map[CompContents]ContentsRecordMem
+	table_snapshots  	map[string]SnapshotRecordMem
+	table_index_repo 	map[restic.ID]IndexRepoRecordMem
+	table_meta_dir   	map[CompMetaDir]MetaDirRecordMem
+	table_packfiles  	map[*restic.ID]PackfilesRecordMem
+	table_idd_file   	map[CompIddFile]IddFileRecordMem
+	table_names      	map[string]NamesRecordMem
+	table_contents   	map[CompContents]ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots  		*map[int]string     // meta_dir
-	pk_index_repo 		*map[int]restic.ID  // meta_dir, idd_file, contents
-	pk_names      		*map[int]string     // idd_file
-	pk_packfiles  		*map[int]*restic.ID // index_repo
+	pk_snapshots  		map[int]string     // meta_dir
+	pk_index_repo 		map[int]restic.ID  // meta_dir, idd_file, contents
+	pk_names      		map[int]string     // idd_file
+	pk_packfiles  		map[int]*restic.ID // index_repo
 }
 

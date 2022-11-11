@@ -121,18 +121,22 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_blob", unique: ""},
 		ListIndexMaps{ixname: "ix_ix_type", on: "index_type", unique: ""}},
 
-	"packfiles": {ListIndexMaps{ixname: "ux_packf_idd", on: "idd", unique: "UNIQUE"}},
+	"packfiles": {
+		ListIndexMaps{ixname: "ux_packf_idd", on: "idd", unique: "UNIQUE"}},
 
 	"meta_dir": {
 		ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_meta_dir_idd", on: "id_idd", unique: ""}},
 
-	"idd_file": {ListIndexMaps{ixname: "ux_idd_file_blob_pos", on: "id_blob,position", unique: "UNIQUE"},
+	"idd_file": {
+		ListIndexMaps{ixname: "ux_idd_file_blob_pos", on: "id_blob,position", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_idd_file_name", on: "id_name", unique: ""}},
 
-	"snapshots": {ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id", unique: "UNIQUE"}},
+	"snapshots": {
+		ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id", unique: "UNIQUE"}},
 
-	"names": {ListIndexMaps{ixname: "ux_names_name", on: "name", unique: "UNIQUE"}},
+	"names": {
+		ListIndexMaps{ixname: "ux_names_name", on: "name", unique: "UNIQUE"}},
 
 	"contents": {
 		ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
