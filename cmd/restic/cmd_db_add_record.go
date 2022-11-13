@@ -123,52 +123,33 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	db_aggregate.db_conn = db_conn
-	/*
+
 	// get the the highest id for each TABLE
 	err = sqlite.Get_all_high_ids()
 	if err != nil {
 		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
 		return err
-	}*/
+	}
 
 	// step 5 with multiple substeps: read the various tables:
-	// step 5.1: get table names and their counts
-	// gather counts for all tables in database
-	names_and_counts := make(map[string]int)
-	/*
-	err = readAllTablesAndCounts(db_conn, names_and_counts)
-	if err != nil {
-		Printf("readAllTablesAndCounts error is %v\n", err)
-		return err
-	}
-	*/
-
 	// the first three tables can go parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go (func() error {return sqlite.Get_all_high_ids()})
-	wg.Go (func() error {return readAllTablesAndCounts(db_conn, names_and_counts)})
 	wg.Go (func() error {return ReadSnapshotTable (db_conn, &db_aggregate)})
 	wg.Go (func() error {return ReadNamesTable    (db_conn, &db_aggregate)})
-	//wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
 	res := wg.Wait()
 	if res != nil {
 		Printf("Esrror processing group 1. Error is %v\n", res)
 		return res
 	}
-	db_aggregate.table_counts = names_and_counts
 
 	err = ReadIndexRepoTable(db_conn, &db_aggregate)
 	if err != nil {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
 	}
-	err = ReadPackfilesTable(db_conn, &db_aggregate)
-	if err != nil {
-		Printf("Error processing ReadPackfilesTable. Error is %v\n", err)
-		return err
-	}
 
-	// the first tree tables can be read in parallel, since they dont depend on one another
+	// the next three tables can be read in parallel, since they dont depend on one another
 	wg1, _ := errgroup.WithContext(gopts.ctx)
 	wg1.Go (func() error {return ReadMetaDirTable (db_conn, &db_aggregate)})
 	wg1.Go (func() error {return ReadIddFileTable (db_conn, &db_aggregate)})
@@ -179,7 +160,8 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return res
 	}
 
-	// the last tree tables can be read in parallel, since they dont depend on one another
+ // the first three tables can be compared in parallel, since they dont depend on one another
+	Printf("Start first wg\n")
 	wg, _ = errgroup.WithContext(gopts.ctx)
 	wg.Go (func() error {return CompareSnapshots(&db_aggregate, repositoryData, newComers)})
 	wg.Go (func() error {return CompareNames(&db_aggregate, repositoryData, newComers)})
@@ -189,15 +171,15 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("Error processing Compare group 1. Error is %v\n", res)
 		return res
 	}
-
 	// sync
 	CompareIndexRepo(&db_aggregate, repositoryData, newComers)
 
-	wg, _ = errgroup.WithContext(gopts.ctx)
-	wg.Go (func() error {return CompareIddFile(&db_aggregate, repositoryData, newComers)})
-	wg.Go (func() error {return CompareMetaDir(&db_aggregate, repositoryData, newComers)})
-	wg.Go (func() error {return CompareContents(&db_aggregate, repositoryData, newComers)})
-	res = wg.Wait()
+	// compare the rest in paralel
+	wg1, _ = errgroup.WithContext(gopts.ctx)
+	wg1.Go (func() error {return CompareIddFile(&db_aggregate, repositoryData, newComers)})
+	wg1.Go (func() error {return CompareMetaDir(&db_aggregate, repositoryData, newComers)})
+	wg1.Go (func() error {return CompareContents(&db_aggregate, repositoryData, newComers)})
+	res = wg1.Wait()
 	if res != nil {
 		Printf("Error processing Compare group 2. Error is %v\n", res)
 		return res
@@ -234,6 +216,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	Printf("BEGIN TRANSACTION\n")
 	changes_made := false
 
+	// all INSERTs can be done in parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go (func() error {return InsertATable("snapshots",  newComers.mem_snapshots,  tx, column_names, &changes_made)})
 	wg.Go (func() error {return InsertATable("packfiles",  newComers.mem_packfiles,  tx, column_names, &changes_made)})
@@ -249,7 +232,11 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 
 	// update timestamp
-	err = db_update_timestamp(db_aggregate.table_snapshots, tx)
+	if len(db_aggregate.table_snapshots) > 0 {
+		err = db_update_timestamp(db_aggregate.table_snapshots, tx)
+	} else {
+		err = db_update_timestamp(newComers.mem_snapshots, tx)
+	}
 	if err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
 	}
@@ -275,7 +262,8 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		return nil
 	}
 
-	// build INSERT statement
+	// build INSERT statement - bulk INSERT is the only SQL statement which
+	// does not need a loop over all new rows
 	column_list := column_names[tbl_name]
 	value_list := make([]string, len(column_list))
 	for ix, name := range column_list {
@@ -294,8 +282,8 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	}
 
 	// do the INSERT
-	// te splittin into sements could a bit more dynamic
-	// its is imited by te product of column * rows_inserted
+	// the splitting into segments could a bit more dynamic
+	// its is limited by the product of number-of-columns * rows_inserted
 	for offset := 0; offset < len(t_insert); offset += 1000 {
 		max := len(t_insert)
 		if max > 1000 {
@@ -304,7 +292,6 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		if offset + max > len(t_insert) {
 			max = len(t_insert) - offset
 		}
-		//Printf("INSERT from %4d to %4d\n", offset, offset + max)
 		r, err := tx.NamedExec(sql, t_insert[offset:offset + max])
 		if err != nil {
 			Printf("error INSERT %s error is: %v\n", tbl_name, err)
@@ -428,15 +415,21 @@ func CalcuateNewEntries[K comparable, V1 any, V2 any](
 // for removal of all rows which do not have a status of "new"
 func filter_new[K comparable, V any](mem_map map[K]V, status string) {
 	print_count := 0
+	if print_count == 0 {
+		//v2 := reflect.ValueOf(mem_map)
+		//Printf("filter_new.table for %v\n", v2.Type().String())
+	}
+
 	for key, data := range mem_map {
 		v := reflect.ValueOf(data)
-		if print_count < 3 {
+		if print_count == 0 {
+			/*
 			for i := 0; i < v.NumField(); i++ {
 				the_field := v.Type().Field(i)
 				fieldName := the_field.Name
 				varType   := the_field.Type
-				Printf("%-20s %s\n", fieldName, varType)
-			}
+				Printf("filter_new.fields %-20s %s\n", fieldName, varType)
+			}*/
 		}
 		print_count++
 		if v.FieldByName("Status").String() != status {
@@ -460,6 +453,10 @@ func CompareSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare snapshots in memory with snapshots in the database
 	newComers.mem_snapshots = CreateMemSnapshots(db_aggregate, repositoryData, newComers)
+	if newComers.mem_snapshots == nil {
+		Printf("Alarm CreateMemSnapshots\n")
+		return nil
+	}
 	newComers.new_snapshots = NewMemoryKeys(db_aggregate.table_snapshots, newComers.mem_snapshots)
 	high_snap := sqlite.Get_high_id("snapshots")
 	for snap := range newComers.new_snapshots.Iter() {
@@ -521,14 +518,18 @@ func CompareIndexRepo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) error {
 	// compare index_repo with its DB counterpart
 	newComers.mem_index_repo = CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
+	if newComers.mem_index_repo == nil {
+		Printf("Alarm CompareIndexRepo\n")
+		return nil
+	}
 	newComers.new_index_repo = NewMemoryKeys(db_aggregate.table_index_repo, newComers.mem_index_repo)
 	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
 
 	high_repo := sqlite.Get_high_id("index_repo")
 	for blob := range newComers.new_index_repo.Iter() {
-		if blob == EMPTY_NODE_ID {
+		/*if blob == EMPTY_NODE_ID {
 			continue
-		}
+		}*/
 		ih 				:= repositoryData.index_handle[blob]
 		pack_Int 	:= ih.pack_index
 		row 			:= newComers.mem_index_repo[blob]
@@ -544,7 +545,7 @@ newComers *Newcomers) error {
 		if row.Id_pack_id == 0 {
 			Printf("Logic error for pack pointer %p in index_repo %s IndexHandle %#v\n",
 				ptr, blob.String()[:12], ih)
-			panic("new index_repo")
+			panic("CompareIndexRepo: new index_repo")
 		}
 		high_repo++
 	}
@@ -578,11 +579,11 @@ newComers *Newcomers) error {
 		if row.Id_blob == 0 {
 			Printf("Logic error for blob pointer %s in idd_file\n",
 				meta_blob.String()[:12])
-			panic("new idd_file 1")
+			panic("CompareIddFile: new idd_file 1")
 		}
 		if row.Id_blob == 0 {
 			Printf("Logic error for name pointer %s in idd_file\n", name)
-			panic("new idd_file 2")
+			panic("CompareIddFile: new idd_file 2")
 		}
 	}
 	return nil
@@ -603,18 +604,19 @@ newComers *Newcomers) error {
 		row.Status 			= "new"
 		row.Id 					= high_mdir
 		newComers.mem_meta_dir[comp_ix] = row
+		//Printf("CompareMetaDir:new %+v\n", row)
 		high_mdir++
 
 		//  consistency check
 		if row.Id_snap_id == 0 {
 			Printf("Logic error for meta_dir.snap_idd %s %#v\n",
 				snap_id, newComers.mem_snapshots[snap_id])
-			panic("meta_dir 1")
+			panic("CompareMetaDir: meta_dir 1")
 		}
 		if row.Id_idd == 0 {
 			Printf("Logic error for meta_dir.blob %s %#v\n",
 				snap_id, newComers.mem_index_repo[meta_blob])
-			panic("meta_dir 2")
+			panic("CompareMetaDir: meta_dir 2")
 		}
 	}
 	return nil
@@ -643,12 +645,12 @@ newComers *Newcomers) error {
 		if row.Id_blob == 0 {
 			Printf("Logic error for meta_dir.blob %s %#v\n",
 				p_meta_blob.String()[:12], newComers.mem_index_repo[p_meta_blob])
-			panic("contents 1")
+			panic("CompareContents: contents 1")
 		}
 		if row.Id_data_idd == 0 {
 			Printf("Logic error for meta_dir.blob %s %#v\n",
 				(*(row.id_data_idd)).String()[:12], newComers.mem_index_repo[*(row.id_data_idd)])
-			panic("contents 2")
+			panic("CompareContents: contents 2")
 		}
 	}
 	return nil
@@ -708,7 +710,14 @@ func db_update_timestamp(table_snapshots map[string]SnapshotRecordMem, tx *sqlx.
 	sql := "SELECT restic_updated FROM timestamp WHERE id = 1"
 	err = tx.Get(&restic_updated, sql)
 	if err != nil {
-		Printf("UPDATE timestamp failed 1: %v\n", err)
+		// there is no row in timestamp, create one
+		now := time.Now()
+		sql2 := `INSERT INTO timestamp(id,restic_updated,database_updated,ts_created)
+							VALUES(:id,:restic_updated,:database_updated,:ts_created)`
+		_, err := tx.Exec(sql2, 1, now, now, now)
+		if err != nil {
+			fmt.Printf("Can't INSERT INTO timestamp. Error is %v\n", err)
+		}
 		return err
 	}
 

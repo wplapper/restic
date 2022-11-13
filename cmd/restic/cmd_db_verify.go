@@ -165,6 +165,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		table_name string
 		routine    action_function
 	}
+	/*
 	//var table_name string
 	var actions = []ActionStruct{
 		{table_name: "snapshots", 	routine: ReadSnapshotTable},
@@ -183,7 +184,37 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 			return err
 		}
 	}
+	*/
+	// the first three tables can go parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go (func() error {return ReadSnapshotTable (db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadNamesTable    (db_conn, &db_aggregate)})
+	wg.Go (func() error {return ReadPackfilesTable(db_conn, &db_aggregate)})
+	res := wg.Wait()
+	if res != nil {
+		Printf("Esrror processing group 1. Error is %v\n", res)
+		return res
+	}
+
+	err = ReadIndexRepoTable(db_conn, &db_aggregate)
+	if err != nil {
+		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
+		return err
+	}
+
+	// the first tree tables can be read in parallel, since they dont depend on one another
+	wg1, _ := errgroup.WithContext(gopts.ctx)
+	wg1.Go (func() error {return ReadMetaDirTable (db_conn, &db_aggregate)})
+	wg1.Go (func() error {return ReadIddFileTable (db_conn, &db_aggregate)})
+	wg1.Go (func() error {return ReadContentsTable(db_conn, &db_aggregate)})
+	res = wg1.Wait()
+	if res != nil {
+		Printf("Error processing group 2. Error is %v\n", res)
+		return res
+	}
+
+
+	wg, _ = errgroup.WithContext(gopts.ctx)
 	_ = wg
 	var r1 bool
 	var r2 bool
@@ -200,7 +231,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	wg.Go (func() error {return GenericCompare("meta_dir", &db_aggregate, check_db_meta_dir, repositoryData, newComers, &r5)})
 	wg.Go (func() error {return GenericCompare("names", &db_aggregate, check_db_names, repositoryData, newComers, &r6)})
 	wg.Go (func() error {return GenericCompare("idd_file", &db_aggregate, check_db_idd_file, repositoryData, newComers, &r7)})
-	res := wg.Wait()
+	res = wg.Wait()
 	if res != nil {
 		Printf("Error processing group 1. Error is %v\n", res)
 		return res
@@ -281,6 +312,10 @@ func check_db_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryDa
 newComers *Newcomers) bool {
 
 	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
+	if mem_repo_index_map == nil {
+		Printf("Cannot create CreateMemIndexRepo\n")
+		return false
+	}
 	equal := CompareKeys("index_repo", db_aggregate.table_index_repo, mem_repo_index_map)
 	if !equal {
 		return equal
@@ -347,7 +382,9 @@ newComers *Newcomers) bool {
 	//table_name := "packfiles"
 	// build a memory map of the packfiles
 	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData, newComers)
-
+	if mem_packfiles_map == nil {
+		return false
+	}
 	// compare keys
 	return CompareKeys("packfiles", db_aggregate.table_packfiles, mem_packfiles_map)
 }
@@ -358,6 +395,9 @@ newComers *Newcomers) bool {
 	//table_name := "contents"
 	// build a memory map of the contents
 	mem_contents_map := CreateMemContents(db_aggregate, repositoryData, newComers)
+	if mem_contents_map == nil {
+		return false
+	}
 
 	// compare keys
 	equal := CompareKeys("contents", db_aggregate.table_contents, mem_contents_map)
@@ -420,6 +460,9 @@ newComers *Newcomers) bool {
 func check_db_meta_dir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) bool {
 	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData, newComers)
+	if mem_meta_dir_map == nil {
+		return false
+	}
 
 	// compare keys
 	equal := CompareKeys("meta_dir", db_aggregate.table_meta_dir, mem_meta_dir_map)
@@ -475,7 +518,9 @@ newComers *Newcomers) bool {
 	table_name := "idd_file"
 	// build a memory map of the packfiles
 	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData, newComers)
-
+	if mem_idd_file_map == nil {
+		return false
+	}
 	// compare keys
 	equal := CompareKeys(table_name, db_aggregate.table_idd_file, mem_idd_file_map)
 	if !equal {
@@ -486,7 +531,7 @@ newComers *Newcomers) bool {
 	for db_key, db_value := range db_aggregate.table_idd_file {
 		mem_value := mem_idd_file_map[db_key]
 		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
-			mem_value.Mtime != db_value.Mtime || mem_value.Type != db_value.Type {
+			mem_value.Mtime  != db_value.Mtime || mem_value.Type != db_value.Type {
 			equal = false
 			Printf("key %s.%3d\n", db_key.meta_blob.String()[:12], db_key.position)
 			Printf("  db   %8d %7d %s %-4s\n", db_value.Inode, db_value.Size,
@@ -524,12 +569,13 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 	// loop over all ForeignKeys
 	for _, entry := range check_tables {
 		table_good := true
-		Printf("checking %s.%s vs %s.id\n", entry.table_name, entry.column_name,
-			entry.ref_table)
+		Printf("checking %s.%s vs %s.id\n", entry.table_name, entry.column_name, entry.ref_table)
 		current_group := entry.group_number
 		if current_group != previous_group {
 			ref_table := dyna_table.FieldByName("table_" + entry.ref_table)
-			ref_table_keys1 = mapset.NewSet[int64]()
+			//Printf("ref_table %s : %v\n", entry.ref_table, ref_table.Type().String())
+
+			ref_table_keys1.Clear()
 			iter := ref_table.MapRange()
 			for iter.Next() {
 				v2  := reflect.ValueOf(iter.Value())
@@ -556,8 +602,25 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 
 		// start iterating over dynamic table, values() only
 		iter := dyna_table.FieldByName("table_" + entry.table_name).MapRange()
+		//the_table := dyna_table.FieldByName("table_" + entry.table_name)
+		//Printf("X-table %s : %v\n", entry.table_name, the_table.Type().String())
+		//print_details := true
 		for iter.Next() {
 			ptr := reflect.ValueOf(iter.Value()).FieldByName("ptr")
+			/*
+			val2 := the_table.MapIndex(key)
+			ref_val2 := reflect.ValueOf(val2)
+			//Printf("kind of val2 %v\n", ref_val2.Kind().String())
+			if print_details {
+				print_details = false
+				/*
+				for i := 0; i < ref_val2.NumField(); i++ {
+					Printf("ty %v nm %s\n", ref_val2.Type().Field(i).Type,
+						ref_val2.Type().Field(i).Name)
+				}
+				Printf("typ  %+v\n", ref_val2.FieldByName("typ"))
+				Printf("flag %+v\n", ref_val2.FieldByName("flag"))
+			}*/
 
 			var data interface{}
 			switch entry.table_name {
@@ -572,8 +635,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 				data = *(*ContentsRecordMem)(ptr.UnsafePointer())
 			}
 
-			v3 := reflect.ValueOf(data)
-			to_be_checked := v3.FieldByName(entry.column_name).Int()
+			to_be_checked := reflect.ValueOf(data).FieldByName(entry.column_name).Int()
 			if !ref_table_keys1.Contains(to_be_checked) {
 				table_good = false
 				all_good   = false
@@ -581,7 +643,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 					to_be_checked, entry.ref_table)
 			}
 		}
-		Printf("table compares %v\n", table_good)
+		Printf("foreign key constraints for %-15s %v\n", entry.table_name, table_good)
 	}
 	return all_good
 }

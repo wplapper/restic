@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"os"
 	"time"
-	//"reflect"
 
 	// sets
-	"github.com/deckarep/golang-set"
+	"github.com/wplapper/restic/library/mapset"
 
 	// sqlite3 interface
 	"database/sql"
@@ -118,11 +117,11 @@ var SQLITE_TABLES = map[string]string{
 var SQLITE_INDEX = map[string][]ListIndexMaps{
 	"index_repo": {
 		ListIndexMaps{ixname: "ux_ix_repo_idd", on: "idd", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_blob", unique: ""},
+		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_pack_id", unique: ""},
 		ListIndexMaps{ixname: "ix_ix_type", on: "index_type", unique: ""}},
 
 	"packfiles": {
-		ListIndexMaps{ixname: "ux_packf_idd", on: "idd", unique: "UNIQUE"}},
+		ListIndexMaps{ixname: "ux_packf_idd", on: "packfile_id", unique: "UNIQUE"}},
 
 	"meta_dir": {
 		ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
@@ -140,7 +139,6 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
 	"contents": {
 		ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_cont_fpath", on: "id_fullpath", unique: ""},
 		ListIndexMaps{ixname: "ix_cont_data_idd", on: "id_data_idd", unique: ""}},
 
 	"snapshots_history": {
@@ -197,7 +195,7 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
 		return nil, err
 	}
 	if index {
-		err := build_index()
+		err := build_index(echo)
 		if err != nil {
 			Printf("error in build_index %v\n", err)
 			return nil, err
@@ -252,8 +250,8 @@ type ListIndexMaps struct {
 	unique string
 }
 
-func build_index() error {
-	//Printf("sqlite:build_index\n")
+func build_index(echo bool) error {
+	//Printf("sqlite:build_index.start\n")
 	type TableIndex struct {
 		Name     string
 		Tbl_name string
@@ -267,41 +265,46 @@ func build_index() error {
 	}
 
 	// build a map of index_names which point back to the owning table
-	index_names := make(map[string]string)
-	indices_have := mapset.NewSet()
-	indices_want := mapset.NewSet()
+	index_names  := make(map[string]string)
+	indices_have := mapset.NewSet[string]()
+	indices_want := mapset.NewSet[string]()
+
+	// this loop is initially empty!! -- collect existing index names
 	for _, row := range result {
-		index_name := row.Name
-		table_name := row.Tbl_name
-		index_names[index_name] = table_name
-		indices_have.Add(index_name)
+		indices_have.Add(row.Name)
 	}
 
-	// check the indices we want
-	for _, action_list := range SQLITE_INDEX {
+	// need to consult SQLITE_INDEX about all indices wanted
+	for table_name, action_list := range SQLITE_INDEX {
 		for _, action := range action_list {
+			// map index to table_name
+			index_names[action.ixname] = table_name
 			indices_want.Add(action.ixname)
 		}
 	}
 
 	// which indices do we still need?
 	for ixname := range indices_want.Difference(indices_have).Iter() {
-		ixname_conf := ixname.(string)
-		table_name := index_names[ixname_conf]
+		table_name, ok  := index_names[ixname]
+		if !ok {
+			Printf("No entry for %s in index_names\n", ixname)
+			panic("index_name does not map back to table_name`")
+		}
+
+		//Printf("ix_name.new %-25s -> %s\n", ixname, table_name)
 		for _, entry := range SQLITE_INDEX[table_name] {
 			if indices_have.Contains(entry.ixname) {
 				continue
 			}
-
-			// need to build sql string
-			sql = fmt.Sprintf("CREATE %-6s INDEX %s ON %s", entry.unique, entry.ixname, table_name)
-			if db_descriptor.verbose > 0 {
+			sql = fmt.Sprintf("CREATE %-6s INDEX %s ON %s(%s)", entry.unique,
+				entry.ixname, table_name, entry.on)
+			if db_descriptor.verbose > 0 || echo {
 				Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), sql)
 			}
 
 			_, err := db_descriptor.DB_ptr.Exec(sql)
 			if err != nil {
-				Printf("failed to CREATE INDEX %v\n", err)
+				Printf("failed to CREATE INDEX. Error is %v\n", err)
 				return err
 			}
 			indices_have.Add(entry.ixname)
@@ -313,12 +316,21 @@ func build_index() error {
 var tables_high_id map[string]int
 
 func Get_all_high_ids() error {
-	var max sql.NullInt64
 	tables_high_id = make(map[string]int)
-	for _, tbl_name := range db_descriptor.table_names {
-		err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from "+tbl_name)
+
+	sql1 := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+	table_names := make([]string, 0)
+	err := db_descriptor.DB_ptr.Select(&table_names, sql1)
+	if err != nil {
+		Printf("Get_all_high_ids.Select. Error in Select %v\n", err)
+		return err
+	}
+
+	var max sql.NullInt64
+	for _, tbl_name := range table_names {
+		err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from " + tbl_name)
 		if err != nil {
-			Printf("Query error for Get max(id) is %v\n", err)
+			Printf("Get_all_high_ids.Query error for Get max(id) is %v\n", err)
 			return err
 		}
 		if !max.Valid {
@@ -326,13 +338,16 @@ func Get_all_high_ids() error {
 		} else {
 			tables_high_id[tbl_name] = int(max.Int64) + 1
 		}
+		//Printf("Get_all_high_ids.high %-15s %6d\n", tbl_name, tables_high_id[tbl_name])
 	}
+	//Printf("Get_all_high_ids.ended\n")
 	return nil
 }
 
 func Get_high_id(tbl_name string) int {
 	value, ok := tables_high_id[tbl_name]
 	if !ok {
+		Printf("table %s not found in tables_high_id\n", tbl_name)
 		panic("Get_high_id invalid table_name!")
 	}
 	return value

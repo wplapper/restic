@@ -21,6 +21,7 @@ newComers *Newcomers) map[string]SnapshotRecordMem {
 				Snap_time: sn.Time.String()[:19],
 				Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0], Snap_id: key},
 				ID_mem: sn.ID(), root: sn.Tree}
+			//Printf("CreateMemSnapshots.new[%s]=%+v\n", key, mem_snapshots[key])
 		} else {
 			data.Status = "db"
 			mem_snapshots[key] = data
@@ -56,7 +57,7 @@ func CreateMemIndexRepo(db_aggregate *DBAggregate,
 		ptr_packID := &(repositoryData.index_to_blob[pack_index])
 		data3, ok3 := newComers.mem_packfiles[ptr_packID]
 		if !ok3 {
-			panic("CreateMemIndexRepo access packfiles")
+			return nil
 		}
 		id_pack_id_mem := data3.Id
 
@@ -135,7 +136,7 @@ func CreateMemContents(db_aggregate *DBAggregate,
 					data2, ok2 := newComers.mem_index_repo[meta_blob]
 					if !ok2 {
 						Printf("CreateMemContents meta_blob %s\n", meta_blob.String()[:12])
-						panic("CreateMemContents meta_blob")
+						return nil
 					}
 					id_blob := data2.Id
 
@@ -143,7 +144,7 @@ func CreateMemContents(db_aggregate *DBAggregate,
 					if !ok2 {
 						Printf("CreateMemContents data_blob %s\n",
 							repositoryData.index_to_blob[data_blob].String()[:12])
-						panic("CreateMemContents meta_blob")
+						return nil
 					}
 					id_data_idd := data2.Id
 					mem_contents_map[ix] = ContentsRecordMem{ContentsRecordDB:
@@ -173,17 +174,24 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 			data, ok := (db_aggregate.table_meta_dir)[ix]
 			if !ok {
 				the_meta_blob := repositoryData.index_to_blob[meta_blob]
-				id_idd, ok 		:= newComers.mem_index_repo[the_meta_blob]
+				/*if the_meta_blob == EMPTY_NODE_ID {
+					continue
+				}*/
+				id_idd, ok := newComers.mem_index_repo[the_meta_blob]
 				if !ok {
-					Printf("No record of %s\n", the_meta_blob.String()[:12])
-					panic("Inconsistency meta_dir id_idd")
+					Printf("CreateMemMetaDir No restic.ID for %s\n", the_meta_blob.String()[:12])
+					return nil
+				}
+				if id_idd.Id == 0 {
+					Printf("CreateMemMetaDir: underlying meta_blob=%s row=%+v\n", the_meta_blob.String()[:12], id_idd)
+					panic("CreateMemMetaDir no Id_idd assined!")
 				}
 
 				the_snap_id := (*snap_id).Str()
 				id_snap_id, ok := newComers.mem_snapshots[the_snap_id]
 				if !ok {
 					Printf("snap_id should be %s\n", the_snap_id)
-					panic("Inconsistency meta_dir snap_id")
+					return nil
 				}
 				mem_meta_dir_map[ix] = MetaDirRecordMem{MetaDirRecordDB:
 					MetaDirRecordDB{Id_snap_id: id_snap_id.Id, Id_idd: id_idd.Id},
@@ -222,7 +230,7 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 					row_name, ok := newComers.mem_names[meta.name]
 					if !ok {
 						Printf("CreateMemIddFile .id_name name=%s\n", meta.name)
-						panic("CreateMemIddFile .id_name")
+						return nil
 					}
 					mem_idd_file_map[ix] = IddFileRecordMem{IddFileRecordDB:
 						IddFileRecordDB{Size: int(meta.size),

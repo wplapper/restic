@@ -116,20 +116,11 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		}
 
 		root_ptr := Ptr2ID(root, db_aggregate.repositoryData) // ReadSnapshotTable
-		m := SnapshotRecordMem{SnapshotRecordDB: p,
-			root: root_ptr, Status: "db"}
+		m := SnapshotRecordMem{SnapshotRecordDB: p, root: root_ptr, Status: "db"}
 		db_snapshots[p.Snap_id] = m
+		//Printf("ReadSnapshotTable db[%s]=%+v\n", p.Snap_id, m)
 		// map snapshot PK to db_snapshots
 		PK_snapshots[p.Id] = p.Snap_id
-		//v := reflect.ValueOf(m)
-		//v_type := v.Type()
-		/*
-		for i := 0; i < v.NumField(); i++ {
-			the_field := v.Type().Field(i)
-			fieldName := the_field.Name
-			varType   := the_field.Type
-			Printf("snapshots: %-20s %-10s %+v\n", fieldName, varType, v.FieldByName(fieldName))
-		}*/
 	}
 	rows.Close()
 	db_aggregate.table_snapshots = db_snapshots
