@@ -234,13 +234,13 @@ type DBAggregate struct {
 	table_counts   		map[string]int // count of all tables
 
 	// the database tables - memory representation
-	table_snapshots  	map[string]SnapshotRecordMem
-	table_index_repo 	map[restic.ID]IndexRepoRecordMem
-	table_meta_dir   	map[CompMetaDir]MetaDirRecordMem
-	table_packfiles  	map[*restic.ID]PackfilesRecordMem
-	table_idd_file   	map[CompIddFile]IddFileRecordMem
-	table_names      	map[string]NamesRecordMem
-	table_contents   	map[CompContents]ContentsRecordMem
+	Table_snapshots  	map[string]SnapshotRecordMem
+	Table_index_repo 	map[restic.ID]IndexRepoRecordMem
+	Table_meta_dir   	map[CompMetaDir]MetaDirRecordMem
+	Table_packfiles  	map[*restic.ID]PackfilesRecordMem
+	Table_idd_file   	map[CompIddFile]IddFileRecordMem
+	Table_names      	map[string]NamesRecordMem
+	Table_contents   	map[CompContents]ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
 	pk_snapshots  		map[int]string     // meta_dir

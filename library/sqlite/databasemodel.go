@@ -116,20 +116,20 @@ var SQLITE_TABLES = map[string]string{
 
 var SQLITE_INDEX = map[string][]ListIndexMaps{
 	"index_repo": {
-		ListIndexMaps{ixname: "ux_ix_repo_idd", on: "idd", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ux_ix_repo_idd",     on: "idd", unique: "UNIQUE"},
 		ListIndexMaps{ixname: "ix_ix_repo_pack_id", on: "id_pack_id", unique: ""},
-		ListIndexMaps{ixname: "ix_ix_type", on: "index_type", unique: ""}},
+		ListIndexMaps{ixname: "ix_ix_type",         on: "index_type", unique: ""}},
 
 	"packfiles": {
 		ListIndexMaps{ixname: "ux_packf_idd", on: "packfile_id", unique: "UNIQUE"}},
 
 	"meta_dir": {
 		ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "id_snap_id,id_idd", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_meta_dir_idd", on: "id_idd", unique: ""}},
+		ListIndexMaps{ixname: "ix_meta_dir_idd",         on: "id_idd", unique: ""}},
 
 	"idd_file": {
 		ListIndexMaps{ixname: "ux_idd_file_blob_pos", on: "id_blob,position", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_idd_file_name", on: "id_name", unique: ""}},
+		ListIndexMaps{ixname: "ix_idd_file_name",     on: "id_name", unique: ""}},
 
 	"snapshots": {
 		ListIndexMaps{ixname: "ux_snaphshots_snap_id", on: "snap_id", unique: "UNIQUE"}},
@@ -139,11 +139,11 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
 	"contents": {
 		ListIndexMaps{ixname: "ux_cont_blob_pos_off", on: "id_blob,position,offset", unique: "UNIQUE"},
-		ListIndexMaps{ixname: "ix_cont_data_idd", on: "id_data_idd", unique: ""}},
+		ListIndexMaps{ixname: "ix_cont_data_idd",     on: "id_data_idd", unique: ""}},
 
 	"snapshots_history": {
 		ListIndexMaps{ixname: "ix_snaphist_snap_id", on: "snap_id", unique: ""},
-		ListIndexMaps{ixname: "ix_snaphist_action", on: "action", unique: ""}}}
+		ListIndexMaps{ixname: "ix_snaphist_action",  on: "action", unique: ""}}}
 
 type DBDescriptor struct {
 	DB_ptr          *sqlx.DB
@@ -251,7 +251,6 @@ type ListIndexMaps struct {
 }
 
 func build_index(echo bool) error {
-	//Printf("sqlite:build_index.start\n")
 	type TableIndex struct {
 		Name     string
 		Tbl_name string
@@ -338,9 +337,7 @@ func Get_all_high_ids() error {
 		} else {
 			tables_high_id[tbl_name] = int(max.Int64) + 1
 		}
-		//Printf("Get_all_high_ids.high %-15s %6d\n", tbl_name, tables_high_id[tbl_name])
 	}
-	//Printf("Get_all_high_ids.ended\n")
 	return nil
 }
 

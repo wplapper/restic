@@ -54,15 +54,15 @@ func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
 	table_column_names := make(map[string][]string)
 	// get table nams first
 	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
-	table_names := make([]string, 0)
-	err := db_conn.Select(&table_names, sql)
+	Table_names := make([]string, 0)
+	err := db_conn.Select(&Table_names, sql)
 	if err != nil {
 		Printf("SELECT tbl_name FROM sqlite_master failed err %v\n", err)
 		return nil, err
 	}
 
 	var result TableInfo
-	for _, tbl_name := range table_names {
+	for _, tbl_name := range Table_names {
 		column_names := make([]string, 0)
 		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('" + tbl_name + "')")
 		if err != nil {
@@ -123,7 +123,7 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		PK_snapshots[p.Id] = p.Snap_id
 	}
 	rows.Close()
-	db_aggregate.table_snapshots = db_snapshots
+	db_aggregate.Table_snapshots = db_snapshots
 	db_aggregate.pk_snapshots = PK_snapshots
 	return nil
 }
@@ -154,7 +154,7 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 		repositoryData := db_aggregate.repositoryData
 		ptr_packfile   := &repositoryData.index_to_blob[repositoryData.blob_to_index[idd_as_ID]]
-		/*
+		/* IndexRepoRecordDB:
 		Id         int
 		Idd        string
 		Idd_size   int
@@ -168,7 +168,7 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		PK_index_repo[p.Id] = idd_as_ID
 	}
 	rows.Close()
-	db_aggregate.table_index_repo = db_index_repo
+	db_aggregate.Table_index_repo = db_index_repo
 	db_aggregate.pk_index_repo    = PK_index_repo
 	return nil
 }
@@ -194,7 +194,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		// and a composite index
 		snap_id   := ptr_snapshot[p.Id_snap_id]
 		meta_blob := ptr_index_repo[p.Id_idd]
-		/*
+		/* MetaDirRecordDB:
 			Id         int
 			Id_snap_id int // map back to snapshots
 			Id_idd     int // map back to index_repo
@@ -203,7 +203,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			MetaDirRecordDB: p, Status: "db"}
 	}
 	rows.Close()
-	db_aggregate.table_meta_dir = db_meta_dir
+	db_aggregate.Table_meta_dir = db_meta_dir
 	return nil
 }
 
@@ -229,7 +229,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		meta_blob := ptr_index_repo[p.Id_blob]
 		name 			:= ptr_name[p.Id_name]
 		p.Mtime   = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
-		/*
+		/* IddFileRecordDB:
 		Id       int
 		Id_blob  int // map back to index_repo
 		Position int
@@ -242,7 +242,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			IddFileRecordMem{IddFileRecordDB : p, name: name, Status: "db"})
 	}
 	rows.Close()
-	db_aggregate.table_idd_file = db_idd_file
+	db_aggregate.Table_idd_file = db_idd_file
 	return nil
 }
 
@@ -260,7 +260,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			Printf("ReadNamesTable.StructScan failed %v\n", err)
 			return err
 		}
-		/*
+		/* NamesRecordDB:
 		Id        int
 		Name      string
 		Name_type string
@@ -269,7 +269,7 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		PK_names[p.Id] = p.Name
 	}
 	rows.Close()
-	db_aggregate.table_names = db_names
+	db_aggregate.Table_names = db_names
 	db_aggregate.pk_names = PK_names
 	return nil
 }
@@ -302,7 +302,7 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		PK_packfiles[p.Id] = id_ptr
 	}
 	rows.Close()
-	db_aggregate.table_packfiles = db_packfiles
+	db_aggregate.Table_packfiles = db_packfiles
 	db_aggregate.pk_packfiles = PK_packfiles
 	return nil
 }
@@ -337,7 +337,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		}
 
 		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
-		/*
+		/* ContentsRecordDB:
 		Id          int
 		Id_data_idd int // map back to index_repo
 		Id_blob     int // map back to index_repo
@@ -347,6 +347,6 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, Status: "db"}
 	}
 	rows.Close()
-	db_aggregate.table_contents = db_contents
+	db_aggregate.Table_contents = db_contents
 	return nil
 }

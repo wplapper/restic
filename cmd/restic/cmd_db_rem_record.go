@@ -100,7 +100,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	db_aggregate.db_conn = db_conn
 	names_and_counts := make(map[string]int)
 
-	// the first three tables go in parallel
+	// the first three tables can be read in paralel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go (func() error {return sqlite.Get_all_high_ids()})
 	wg.Go (func() error {return readAllTablesAndCounts(db_conn, names_and_counts)})
@@ -113,6 +113,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 	db_aggregate.table_counts = names_and_counts
 
+	// te rest is sequential
 	err = ReadIndexRepoTable(db_conn, &db_aggregate)
 	if err != nil {
 		return err
@@ -129,7 +130,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 
 	// compare snapshots in memory with snapshots in the database
 	newComers.mem_snapshots = CreateMemSnapshots(&db_aggregate, repositoryData, newComers)
-	newComers.old_snapshots = OldDBKeys(db_aggregate.table_snapshots, newComers.mem_snapshots)
+	newComers.old_snapshots = OldDBKeys(db_aggregate.Table_snapshots, newComers.mem_snapshots)
 	Printf("%7d old records in old_snapshots\n", newComers.old_snapshots.Cardinality())
 
 	// create TEMP TABLE remove_snaps
@@ -141,15 +142,12 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 
 	// fill TABLE remove_snaps
 	if newComers.old_snapshots.Cardinality() > 0 {
-		type RemoveSnaps struct {
-			Id int
-		}
-		t_insert := make([]RemoveSnaps, 0, newComers.old_snapshots.Cardinality())
+		t_insert := make([]RemoveTable, 0, newComers.old_snapshots.Cardinality())
 		for snap_id := range newComers.old_snapshots.Iter() {
-			row := (db_aggregate.table_snapshots)[snap_id]
+			row := (db_aggregate.Table_snapshots)[snap_id]
 			row.Status = "delete"
-			(db_aggregate.table_snapshots)[snap_id] = row
-			t_insert = append(t_insert, RemoveSnaps{Id: row.Id})
+			(db_aggregate.Table_snapshots)[snap_id] = row
+			t_insert = append(t_insert, RemoveTable{Id: row.Id})
 		}
 
 		sql := "INSERT INTO remove_snaps(id) VALUES(:id)"
@@ -163,45 +161,46 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 
 	// compare packfiles with its DB counterpart
 	newComers.mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
-	newComers.old_packfiles = OldDBKeys(db_aggregate.table_packfiles, newComers.mem_packfiles)
+	newComers.old_packfiles = OldDBKeys(db_aggregate.Table_packfiles, newComers.mem_packfiles)
 	Printf("%7d old records in old_packfiles\n", newComers.old_packfiles.Cardinality())
 	for packID := range newComers.old_packfiles.Iter() {
-		row := (db_aggregate.table_packfiles)[packID]
+		row := (db_aggregate.Table_packfiles)[packID]
 		row.Status = "delete"
-		(db_aggregate.table_packfiles)[packID] = row
+		(db_aggregate.Table_packfiles)[packID] = row
 	}
 	ComparePackfiles(&db_aggregate, repositoryData, newComers)
 
 	// compare index_repo with its DB counterpart
 	newComers.mem_index_repo = CreateMemIndexRepo(&db_aggregate, repositoryData, newComers)
-	newComers.old_index_repo = OldDBKeys(db_aggregate.table_index_repo, newComers.mem_index_repo)
+	newComers.old_index_repo = OldDBKeys(db_aggregate.Table_index_repo, newComers.mem_index_repo)
 	Printf("%7d old records in old_index_repo\n", newComers.old_index_repo.Cardinality())
 	for name := range newComers.old_index_repo.Iter() {
-		row := (db_aggregate.table_index_repo)[name]
+		row := (db_aggregate.Table_index_repo)[name]
 		row.Status = "delete"
-		(db_aggregate.table_index_repo)[name] = row
+		(db_aggregate.Table_index_repo)[name] = row
 	}
 
 	// compare names with its DB counterpart
 	newComers.mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
-	newComers.old_names = OldDBKeys(db_aggregate.table_names, newComers.mem_names)
+	newComers.old_names = OldDBKeys(db_aggregate.Table_names, newComers.mem_names)
 	Printf("%7d old records in old_names\n", newComers.old_names.Cardinality())
 	for name := range newComers.old_names.Iter() {
-		row := db_aggregate.table_names[name]
+		row := db_aggregate.Table_names[name]
 		row.Status = "delete"
-		db_aggregate.table_names[name] = row
+		db_aggregate.Table_names[name] = row
 	}
 
 	// compare idd_file with its DB counterpart
 	newComers.mem_idd_file = CreateMemIddFile(&db_aggregate, repositoryData, newComers)
-	newComers.old_idd_file = OldDBKeys(db_aggregate.table_idd_file, newComers.mem_idd_file)
+	newComers.old_idd_file = OldDBKeys(db_aggregate.Table_idd_file, newComers.mem_idd_file)
 	Printf("%7d old records in old_idd_file\n", newComers.old_idd_file.Cardinality())
 	for comp_ix := range newComers.old_idd_file.Iter() {
-		row := (db_aggregate.table_idd_file)[comp_ix]
+		row := (db_aggregate.Table_idd_file)[comp_ix]
 		row.Status = "delete"
-		(db_aggregate.table_idd_file)[comp_ix] = row
+		(db_aggregate.Table_idd_file)[comp_ix] = row
 	}
 
+	// process index_repo changes
 	err = db_rem_index_repo(&db_aggregate, repositoryData, newComers)
 	if err != nil {
 		return err
@@ -276,22 +275,22 @@ newComers *Newcomers)  error {
 				Printf("Query error for Get %s is %v\n", sql, err)
 				return err
 			}
-			Printf("TEMP TABLE %-14s has %4d entries.\n", table_name, count)
+			Printf("TEMP TABLE %-15s has %5d entries.\n", table_name, count)
 		}
 	}
 
 	count_updates := 0
-	// update index_repo.id_pack_id
+	// update index_repo.id_pack_id, packfiles.id is master here!s
 	for id, ih := range repositoryData.index_handle {
 		pack_index := ih.pack_index
-		db_index_repo, ok := (db_aggregate.table_index_repo)[id]
+		db_index_repo, ok := (db_aggregate.Table_index_repo)[id]
 		if !ok {
 			panic("update_index_repo: index_repo row not found in database")
 		}
 
 		// translate memory 'pack_index' into database packfiles index
 		pack_key := &(repositoryData.index_to_blob[pack_index])
-		pack_row, ok := (db_aggregate.table_packfiles)[pack_key]
+		pack_row, ok := (db_aggregate.Table_packfiles)[pack_key]
 		if !ok {
 			panic("update_index_repo: packfiles row not found in database")
 		}
@@ -299,7 +298,7 @@ newComers *Newcomers)  error {
 		if db_index_repo.Id_pack_id != pack_row.Id {
 			db_index_repo.Status = "update"
 			db_index_repo.Id_pack_id = pack_row.Id
-			(db_aggregate.table_index_repo)[id] = db_index_repo
+			(db_aggregate.Table_index_repo)[id] = db_index_repo
 			count_updates++
 		}
 	}
@@ -355,9 +354,9 @@ newComers *Newcomers)  error {
 	}
 
 	// DELETE FROM names
-	t_delete := make([]RemoveTable, 0)
+	t_delete := make([]RemoveTable, 0, newComers.old_names.Cardinality())
 	for name := range newComers.old_names.Iter() {
-		row := db_aggregate.table_names[name]
+		row := db_aggregate.Table_names[name]
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
@@ -365,9 +364,9 @@ newComers *Newcomers)  error {
 	delete_selected_rows(&t_delete, tx, "names", &changes_made)
 
 	// DELETE FROM packfiles
-	t_delete = make([]RemoveTable, 0)
+	t_delete = make([]RemoveTable, 0, newComers.old_packfiles.Cardinality())
 	for key := range newComers.old_packfiles.Iter() {
-		row := (db_aggregate.table_packfiles)[key]
+		row := (db_aggregate.Table_packfiles)[key]
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
@@ -381,9 +380,9 @@ newComers *Newcomers)  error {
 	}
 
 	// DELETE FROM index_repo
-	t_delete = make([]RemoveTable, 0)
+	t_delete = make([]RemoveTable, 0, newComers.old_index_repo.Cardinality())
 	for key := range newComers.old_index_repo.Iter() {
-		row := (db_aggregate.table_index_repo)[key]
+		row := (db_aggregate.Table_index_repo)[key]
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
@@ -392,7 +391,7 @@ newComers *Newcomers)  error {
 
 	// UPDATE index_repo
 	update_table := make([]UpdateTable_index_repo, 0)
-	for _, row := range db_aggregate.table_index_repo {
+	for _, row := range db_aggregate.Table_index_repo {
 		if row.Status == "update" {
 			update_table = append(update_table, UpdateTable_index_repo{
 				Id_pack_id: row.Id_pack_id, Id: row.Id})
@@ -427,7 +426,7 @@ newComers *Newcomers)  error {
 	}
 
 	// update timestamp
-	err = db_update_timestamp(db_aggregate.table_snapshots, tx)
+	err = db_update_timestamp(db_aggregate.Table_snapshots, tx)
 	if err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
 	}
@@ -450,7 +449,8 @@ newComers *Newcomers)  error {
 // this is an ugly fix, because sql / sqlx cannot do bulk DELETEs
 // delete_selected_rows generates a bulk DELETE via subquery
 // DELETE FROM <table_name> WHERE id IN (SELECT id FROM delete_table)
-func delete_selected_rows(t_del *[]RemoveTable,db *sqlx.Tx, table_name string,
+// but it can DELETE <table_name> WHERE id IN (SELECT id FROM <t_del>)
+func delete_selected_rows(t_del *[]RemoveTable, db *sqlx.Tx, table_name string,
 changes_made *bool) error {
 
 	if len(*t_del) 	== 0 {

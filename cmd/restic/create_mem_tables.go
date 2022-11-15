@@ -15,13 +15,12 @@ newComers *Newcomers) map[string]SnapshotRecordMem {
 	mem_snapshots := make(map[string]SnapshotRecordMem, len(snaps))
 	for _, sn := range snaps {
 		key := sn.ID().Str()
-		data, ok := (db_aggregate.table_snapshots)[key]
+		data, ok := (db_aggregate.Table_snapshots)[key]
 		if !ok {
 			mem_snapshots[key] = SnapshotRecordMem{SnapshotRecordDB: SnapshotRecordDB{
 				Snap_time: sn.Time.String()[:19],
 				Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0], Snap_id: key},
 				ID_mem: sn.ID(), root: sn.Tree}
-			//Printf("CreateMemSnapshots.new[%s]=%+v\n", key, mem_snapshots[key])
 		} else {
 			data.Status = "db"
 			mem_snapshots[key] = data
@@ -40,7 +39,7 @@ func CreateMemIndexRepo(db_aggregate *DBAggregate,
 
 	var index_type string
 	for id, data := range repositoryData.index_handle {
-		data2, ok := (db_aggregate.table_index_repo)[id]
+		data2, ok := (db_aggregate.Table_index_repo)[id]
 		if ok {
 			mem_repo_index_map[id] = data2
 			continue
@@ -79,7 +78,7 @@ func CreateMemNames(db_aggregate *DBAggregate,
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
-				data, ok := db_aggregate.table_names[meta.name]
+				data, ok := db_aggregate.Table_names[meta.name]
 				if !ok {
 					mem_names_map[meta.name] = NamesRecordMem{NamesRecordDB:
 						NamesRecordDB{Name_type: "b", Name: meta.name}, Status: "memory"}
@@ -107,7 +106,7 @@ newComers *Newcomers) map[*restic.ID]PackfilesRecordMem {
 	mem_packfiles_map := make(map[*restic.ID]PackfilesRecordMem, pack_intIDs.Cardinality())
 	for pack_intID := range pack_intIDs.Iter() {
 		ix := &(repositoryData.index_to_blob)[pack_intID]
-		data, ok := (db_aggregate.table_packfiles)[ix]
+		data, ok := (db_aggregate.Table_packfiles)[ix]
 		if !ok {
 			mem_packfiles_map[ix] = PackfilesRecordMem{PackfilesRecordDB:
 				PackfilesRecordDB{Packfile_id: (*ix).String()}, Status: "memory"}
@@ -130,7 +129,7 @@ func CreateMemContents(db_aggregate *DBAggregate,
 		for position, meta := range file_list {
 			for offset, data_blob := range meta.content {
 				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
-				data, ok := db_aggregate.table_contents[ix]
+				data, ok := db_aggregate.Table_contents[ix]
 				if !ok {
 					// get id_blob and id_data
 					data2, ok2 := newComers.mem_index_repo[meta_blob]
@@ -171,12 +170,9 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 		for meta_blob := range blob_set {
 			ix := CompMetaDir{snap_id: snap_id.Str(),
 				meta_blob: repositoryData.index_to_blob[meta_blob]}
-			data, ok := (db_aggregate.table_meta_dir)[ix]
+			data, ok := (db_aggregate.Table_meta_dir)[ix]
 			if !ok {
 				the_meta_blob := repositoryData.index_to_blob[meta_blob]
-				/*if the_meta_blob == EMPTY_NODE_ID {
-					continue
-				}*/
 				id_idd, ok := newComers.mem_index_repo[the_meta_blob]
 				if !ok {
 					Printf("CreateMemMetaDir No restic.ID for %s\n", the_meta_blob.String()[:12])
@@ -210,13 +206,6 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 
 	//Printf("CreateMemIddFile\n")
 	mem_idd_file_map := make(map[CompIddFile]IddFileRecordMem)
-	/*type IddFileRecordMem struct {
-			 id_name	int
-			 size			int
-			 inode		int64
-			 mtime		string
-			 Type			string
-	}*/
 	for meta_blob_int, file_list := range repositoryData.directory_map {
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
@@ -224,7 +213,7 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 			case "file", "dir":
 				mtime := meta.mtime.String()[:19]
 				ix := CompIddFile{meta_blob: meta_blob, position: position}
-				data, ok := (db_aggregate.table_idd_file)[ix]
+				data, ok := (db_aggregate.Table_idd_file)[ix]
 				if !ok {
 					// compute Id_name
 					row_name, ok := newComers.mem_names[meta.name]
@@ -254,7 +243,7 @@ func CreateMemNamesV2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
-				data, ok := db_aggregate.table_names[meta.name]
+				data, ok := db_aggregate.Table_names[meta.name]
 				if !ok {
 					mem_names[meta.name] = NamesRecordMem{Status: "memory"}
 				} else {

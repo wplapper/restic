@@ -11,6 +11,7 @@ import (
 	"time"
 	"golang.org/x/sync/errgroup"
 	"reflect"
+	//"regexp"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -20,7 +21,7 @@ import (
 	"github.com/wplapper/restic/library/mapset"
 
 	// sqlx for sqlite3
-	"github.com/jmoiron/sqlx"
+	//"github.com/jmoiron/sqlx"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -33,7 +34,7 @@ var dbOptions 		 DBOptions
 var newComers 		 *Newcomers
 var repositoryData *RepositoryData
 
-// map repo to database - really a const, but not accordin to the o gospel
+// map repo to database - really a const, but not according to the o gospel
 var DATABASE_NAMES = map[string]string{
 	// master
 	"/media/mount-points/Backup-ext4-Mate/restic_master":  "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
@@ -42,7 +43,6 @@ var DATABASE_NAMES = map[string]string{
 	// onedrive
 	"rclone:onedrive:restic_backups":
 	"/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
-	////"/home/wplapper/restic/db/restic-onedrive.db",
 
 	// most
 	"/media/mount-points/Backup-ext4-Mate/restic_most":  "/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
@@ -59,7 +59,7 @@ var DATABASE_NAMES = map[string]string{
 var cmdDBVerify = &cobra.Command{
 	Use:   "db_verify [flags]",
 	Short: "verify SQLite database with repository",
-	Long: `gverify SQLite database with repository.
+	Long:  `verify SQLite database with repository.
 
 EXIT STATUS
 ===========
@@ -160,31 +160,6 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		Printf("%-25s %8d\n", tbl_name, count)
 	}
 
-	type action_function func(*sqlx.DB, *DBAggregate) error
-	type ActionStruct struct {
-		table_name string
-		routine    action_function
-	}
-	/*
-	//var table_name string
-	var actions = []ActionStruct{
-		{table_name: "snapshots", 	routine: ReadSnapshotTable},
-		{table_name: "index_repo", 	routine: ReadIndexRepoTable},
-		{table_name: "meta_dir", 		routine: ReadMetaDirTable},
-		{table_name: "names", 			routine: ReadNamesTable},
-		{table_name: "idd_file", 		routine: ReadIddFileTable},
-		{table_name: "packfiles", 	routine: ReadPackfilesTable},
-		{table_name: "contents", 		routine: ReadContentsTable}}
-
-	for _, action := range actions {
-		Printf("reading table %s\n", action.table_name)
-		err := action.routine(db_conn, &db_aggregate)
-		if err != nil {
-			Printf("error reading table %s %v\n", action.table_name, err)
-			return err
-		}
-	}
-	*/
 	// the first three tables can go parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go (func() error {return ReadSnapshotTable (db_conn, &db_aggregate)})
@@ -202,7 +177,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
-	// the first tree tables can be read in parallel, since they dont depend on one another
+	// the last three tables can be read in parallel, since they dont depend on one another
 	wg1, _ := errgroup.WithContext(gopts.ctx)
 	wg1.Go (func() error {return ReadMetaDirTable (db_conn, &db_aggregate)})
 	wg1.Go (func() error {return ReadIddFileTable (db_conn, &db_aggregate)})
@@ -213,9 +188,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		return res
 	}
 
-
 	wg, _ = errgroup.WithContext(gopts.ctx)
-	_ = wg
+	//_ = wg
 	var r1 bool
 	var r2 bool
 	var r3 bool
@@ -236,6 +210,8 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		Printf("Error processing group 1. Error is %v\n", res)
 		return res
 	}
+
+	// collect summary
 	var flags = []bool{r1, r2, r3, r4, r5, r6, r7}
 	total := true
 	for ix, which := range flags {
@@ -260,11 +236,11 @@ func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryDat
 	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData, newComers)
 
 	// compare snapshot keys
-	equal := CompareKeys("snapshots", db_aggregate.table_snapshots, mem_snapshots)
+	equal := CompareKeys("snapshots", db_aggregate.Table_snapshots, mem_snapshots)
 	if !equal {
 		set_db_keys  := mapset.NewSet[string]()
 		set_mem_keys := mapset.NewSet[string]()
-		for key := range db_aggregate.table_snapshots {
+		for key := range db_aggregate.Table_snapshots {
 			set_db_keys.Add(key)
 		}
 		for key := range mem_snapshots {
@@ -286,7 +262,7 @@ func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryDat
 
 		count := 0
 		for comp_ix := range diff.Iter() {
-			Printf("key %s %s\n", which, comp_ix)
+			Printf("check_db_snapshots key %s %s\n", which, comp_ix)
 			count++
 			if count > 20 {
 				break
@@ -297,7 +273,7 @@ func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryDat
 
 	// compare snapshot values
 	compare_equals := true
-	for db_key, db_value := range db_aggregate.table_snapshots {
+	for db_key, db_value := range db_aggregate.Table_snapshots {
 		mem_value := mem_snapshots[db_key]
 		if db_value.Snap_host != mem_value.Snap_host || db_value.Snap_time != mem_value.Snap_time {
 			Printf("db  %s %s %s %s\n", db_value.Snap_time, db_value.Snap_host, db_value.Snap_fsys, db_value.root)
@@ -316,14 +292,14 @@ newComers *Newcomers) bool {
 		Printf("Cannot create CreateMemIndexRepo\n")
 		return false
 	}
-	equal := CompareKeys("index_repo", db_aggregate.table_index_repo, mem_repo_index_map)
+	equal := CompareKeys("index_repo", db_aggregate.Table_index_repo, mem_repo_index_map)
 	if !equal {
 		return equal
 	}
 
 	// compare table values
 	compare_equals := true
-	for db_key, db_value := range db_aggregate.table_index_repo {
+	for db_key, db_value := range db_aggregate.Table_index_repo {
 		mem_value := mem_repo_index_map[db_key]
 		if db_value.Idd_size != mem_value.Idd_size || db_value.Index_type != mem_value.Index_type {
 			Printf("v db  %7d\n", db_value.Idd_size)
@@ -339,14 +315,14 @@ newComers *Newcomers) bool {
 	// build a memory map of the names, whic come from three(3) different sources
 	table_name := "names"
 	mem_names_map := CreateMemNames(db_aggregate, repositoryData, newComers)
-	equal := CompareKeys(table_name, db_aggregate.table_names, mem_names_map)
+	equal := CompareKeys(table_name, db_aggregate.Table_names, mem_names_map)
 	if equal {
 		return equal
 	}
 
 	set_db_keys  := mapset.NewSet[string]()
 	set_mem_keys := mapset.NewSet[string]()
-	for key := range db_aggregate.table_names {
+	for key := range db_aggregate.Table_names {
 		set_db_keys.Add(key)
 	}
 	for key := range mem_names_map {
@@ -370,7 +346,7 @@ newComers *Newcomers) bool {
 	for comp_ix := range diff.Iter() {
 		Printf("%s %s\n", which, comp_ix)
 		count++
-		if count > 100 {
+		if count > 20 {
 			break
 		}
 	}
@@ -386,7 +362,7 @@ newComers *Newcomers) bool {
 		return false
 	}
 	// compare keys
-	return CompareKeys("packfiles", db_aggregate.table_packfiles, mem_packfiles_map)
+	return CompareKeys("packfiles", db_aggregate.Table_packfiles, mem_packfiles_map)
 }
 
 // check_db_contents
@@ -400,15 +376,15 @@ newComers *Newcomers) bool {
 	}
 
 	// compare keys
-	equal := CompareKeys("contents", db_aggregate.table_contents, mem_contents_map)
+	equal := CompareKeys("contents", db_aggregate.Table_contents, mem_contents_map)
 	if !equal {
 		Printf("**** Key mismatch for contents ***\n")
 		set_db_keys  := mapset.NewSet[CompContents]()
 		set_mem_keys := mapset.NewSet[CompContents]()
-		for key := range db_aggregate.table_contents {
+		for key := range db_aggregate.Table_contents {
 			set_db_keys.Add(key)
 		}
-		for key := range db_aggregate.table_contents {
+		for key := range db_aggregate.Table_contents {
 			set_mem_keys.Add(key)
 		}
 		diff := set_db_keys.Difference(set_mem_keys)
@@ -419,7 +395,7 @@ newComers *Newcomers) bool {
 			Printf("missing %s %3d %3d\n", meta_blob.String()[:12], comp_ix.position,
 				comp_ix.offset)
 			count++
-			if count > 100 {
+			if count > 20 {
 				break
 			}
 		}
@@ -429,7 +405,7 @@ newComers *Newcomers) bool {
 	// loop over data_blobs
 	equal = true
 	count := 0
-	for db_key, db_value := range db_aggregate.table_contents {
+	for db_key, db_value := range db_aggregate.Table_contents {
 		mem_value := mem_contents_map[db_key]
 		if db_value.id_data_idd != mem_value.id_data_idd {
 			equal = false
@@ -441,7 +417,7 @@ newComers *Newcomers) bool {
 	}
 
 	count = 0
-	for db_key, db_value := range db_aggregate.table_contents {
+	for db_key, db_value := range db_aggregate.Table_contents {
 		mem_value := mem_contents_map[db_key]
 		if db_value.id_data_idd != mem_value.id_data_idd {
 			Printf("key db  %s %3d %3d\n", db_key.meta_blob.String()[:12], db_key.position,
@@ -449,7 +425,7 @@ newComers *Newcomers) bool {
 			Printf("  db  %v\n", db_value)
 			Printf("  mem %v\n", mem_value)
 			count++
-			if count > 100 {
+			if count > 20 {
 				break
 			}
 		}
@@ -465,11 +441,11 @@ newComers *Newcomers) bool {
 	}
 
 	// compare keys
-	equal := CompareKeys("meta_dir", db_aggregate.table_meta_dir, mem_meta_dir_map)
+	equal := CompareKeys("meta_dir", db_aggregate.Table_meta_dir, mem_meta_dir_map)
 	if !equal {
 		set_db_keys  := mapset.NewSet[CompMetaDir]()
 		set_mem_keys := mapset.NewSet[CompMetaDir]()
-		for key := range db_aggregate.table_meta_dir {
+		for key := range db_aggregate.Table_meta_dir {
 			set_db_keys.Add(key)
 		}
 		for key := range mem_meta_dir_map {
@@ -498,7 +474,7 @@ newComers *Newcomers) bool {
 			}
 			Printf("%s %s %s\n", which, comp_ix.snap_id, comp_ix.meta_blob)
 			count++
-			if count > 100 {
+			if count > 10 {
 				break
 			}
 		}
@@ -522,13 +498,14 @@ newComers *Newcomers) bool {
 		return false
 	}
 	// compare keys
-	equal := CompareKeys(table_name, db_aggregate.table_idd_file, mem_idd_file_map)
+	equal := CompareKeys(table_name, db_aggregate.Table_idd_file, mem_idd_file_map)
 	if !equal {
 		return equal
 	}
 
 	// check contents of idd_file
-	for db_key, db_value := range db_aggregate.table_idd_file {
+	count_print := 0
+	for db_key, db_value := range db_aggregate.Table_idd_file {
 		mem_value := mem_idd_file_map[db_key]
 		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
 			mem_value.Mtime  != db_value.Mtime || mem_value.Type != db_value.Type {
@@ -538,6 +515,10 @@ newComers *Newcomers) bool {
 				db_value.Mtime, db_value.Type)
 			Printf("  mem  %8d %7d %s %-4s %s\n", mem_value.Inode, mem_value.Size,
 				mem_value.Mtime, mem_value.Type, mem_value.name)
+			count_print++
+			if count_print > 20 {
+				break
+			}
 		}
 	}
 	return equal
@@ -545,110 +526,86 @@ newComers *Newcomers) bool {
 
 func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	type ForeignKeys struct {
-		table_name  	string
+		check_table  	string
 		column_name 	string
 		group_number 	int
 		ref_table     string
+		db_table      interface{}
+		db_ref_table  interface{}
 	}
 	var check_tables = []ForeignKeys{
-		{"index_repo", 	"Id_pack_id", 1, "packfiles"},
-		{"meta_dir", 		"Id_snap_id", 2, "snapshots"},
-		{"meta_dir", 		"Id_idd", 		3, "index_repo"},
-		{"idd_file", 		"Id_blob", 		3, "index_repo"},
-		{"contents", 		"Id_data_idd",3, "index_repo"},
-		{"contents", 		"Id_blob",		3, "index_repo"},
-		{"idd_file",		"Id_name",		4, "names"}}
+		{"meta_dir",   "Id_snap_id", 2, "snapshots",  MetaDirRecordMem{},   SnapshotRecordMem{}},
+		{"meta_dir",   "Id_idd",     3, "index_repo", MetaDirRecordMem{},   IndexRepoRecordMem{}},
+		{"idd_file",   "Id_blob",    3, "index_repo", IddFileRecordMem{},   IndexRepoRecordMem{}},
+		{"contents",   "Id_data_idd",3, "index_repo", ContentsRecordMem{},  IndexRepoRecordMem{}},
+		{"contents",   "Id_blob",    3, "index_repo", ContentsRecordMem{},  IndexRepoRecordMem{}},
+		{"idd_file",   "Id_name",    4, "names",      IddFileRecordMem{},   NamesRecordMem{}},
+		{"index_repo", "Id_pack_id", 5, "packfiles",  IndexRepoRecordMem{}, PackfilesRecordMem{}}}
 
-	Printf("\n Check Foreign Key relationship\n")
-
-	// start reflecting
+	Printf("\n*** Check Foreign Key relationship ***\n")
 	dyna_table := reflect.ValueOf(db_aggregate).Elem()
 	previous_group := 0
-	ref_table_keys1 	:= mapset.NewSet[int64]()
+	ref_table_keys1 := mapset.NewSet[int64]()
 	all_good := true
-	// loop over all ForeignKeys
+
+	// loop over all ForeignKeys relationships
 	for _, entry := range check_tables {
 		table_good := true
-		Printf("checking %s.%s vs %s.id\n", entry.table_name, entry.column_name, entry.ref_table)
+		Printf("checking %s.%s vs %s.id\n", entry.check_table, entry.column_name, entry.ref_table)
 		current_group := entry.group_number
 		if current_group != previous_group {
-			ref_table := dyna_table.FieldByName("table_" + entry.ref_table)
-			//Printf("ref_table %s : %v\n", entry.ref_table, ref_table.Type().String())
-
-			ref_table_keys1.Clear()
-			iter := ref_table.MapRange()
-			for iter.Next() {
-				v2  := reflect.ValueOf(iter.Value())
-				ptr := v2.FieldByName("ptr")
-
-				// we need to o back to real data, refection is too difficult
-				switch entry.ref_table {
-				case "packfiles":
-					data := *(*PackfilesRecordMem)(ptr.UnsafePointer())
-					ref_table_keys1.Add(int64(data.Id))
-				case "snapshots":
-					data := *(*SnapshotRecordMem)(ptr.UnsafePointer())
-					ref_table_keys1.Add(int64(data.Id))
-				case "index_repo":
-					data := *(*IndexRepoRecordMem)(ptr.UnsafePointer())
-					ref_table_keys1.Add(int64(data.Id))
-				case "names":
-					data := *(*NamesRecordMem)(ptr.UnsafePointer())
-					ref_table_keys1.Add(int64(data.Id))
-				}
-			}
+			ref_table_keys1 = BuildReferenceSet(db_aggregate, entry.ref_table, entry.db_ref_table)
 			previous_group = current_group
 		}
 
-		// start iterating over dynamic table, values() only
-		iter := dyna_table.FieldByName("table_" + entry.table_name).MapRange()
-		//the_table := dyna_table.FieldByName("table_" + entry.table_name)
-		//Printf("X-table %s : %v\n", entry.table_name, the_table.Type().String())
-		//print_details := true
-		for iter.Next() {
-			ptr := reflect.ValueOf(iter.Value()).FieldByName("ptr")
-			/*
-			val2 := the_table.MapIndex(key)
-			ref_val2 := reflect.ValueOf(val2)
-			//Printf("kind of val2 %v\n", ref_val2.Kind().String())
-			if print_details {
-				print_details = false
-				/*
-				for i := 0; i < ref_val2.NumField(); i++ {
-					Printf("ty %v nm %s\n", ref_val2.Type().Field(i).Type,
-						ref_val2.Type().Field(i).Name)
-				}
-				Printf("typ  %+v\n", ref_val2.FieldByName("typ"))
-				Printf("flag %+v\n", ref_val2.FieldByName("flag"))
-			}*/
+		// build reflect iterator for the check_table
+		iter := dyna_table.FieldByName("Table_" + entry.check_table).MapRange()
 
-			var data interface{}
-			switch entry.table_name {
-			// need to cast, straight indirection of 'ptr' impossible (or tricky??)
-			case "index_repo":
-				data = *(*IndexRepoRecordMem)(ptr.UnsafePointer())
-			case "meta_dir":
-				data = *(*MetaDirRecordMem)(ptr.UnsafePointer())
-			case "idd_file":
-				data = *(*IddFileRecordMem)(ptr.UnsafePointer())
-			case "contents":
-				data = *(*ContentsRecordMem)(ptr.UnsafePointer())
+		// regex to extract key and value Type
+		//re := regexp.MustCompile(`^map\[([A-Za-z0-9_.]+)\]([A-Za-z0-9_.]+)$`)
+		//res := re.FindStringSubmatch(type_string)
+		//Printf("result of regex key='%s' values='%s'\n", res[1], res[2])
+
+		print_count := 0
+		var data interface{}
+		for iter.Next() {
+			raw_data := iter.Value()
+			print_count++
+
+			switch typ := entry.db_table.(type) {
+			case IndexRepoRecordMem:
+				data = raw_data.Interface().(IndexRepoRecordMem)
+			case MetaDirRecordMem:
+				data = raw_data.Interface().(MetaDirRecordMem)
+			case IddFileRecordMem:
+				data = raw_data.Interface().(IddFileRecordMem)
+			case ContentsRecordMem:
+				data = raw_data.Interface().(ContentsRecordMem)
+			default:
+				Printf("Wrong Type %v\n", typ)
+				panic("Wrong Type -- loop 2")
 			}
 
+			// extract id-data from <check_table>.<column_name>, convert to int64
 			to_be_checked := reflect.ValueOf(data).FieldByName(entry.column_name).Int()
-			if !ref_table_keys1.Contains(to_be_checked) {
+			if ! ref_table_keys1.Contains(to_be_checked) {
 				table_good = false
 				all_good   = false
-				Printf("%s.%s[%v] not in %s.id\n", entry.table_name, entry.column_name,
-					to_be_checked, entry.ref_table)
+				if print_count < 10 {
+					Printf("%s.%s[%v] not in %s.id\n", entry.check_table, entry.column_name,
+						to_be_checked, entry.ref_table)
+				}
 			}
 		}
-		Printf("foreign key constraints for %-15s %v\n", entry.table_name, table_good)
+		Printf("foreign key constraints for %-15s %v\n", entry.check_table, table_good)
 	}
+	ref_table_keys1.Clear()
 	return all_good
 }
 
 // utility function - compare_keys
+// compare the keys of the equvalent memory and database table,
+// test of equalness and return result
 func CompareKeys[K comparable, V1 any, V2 any](table_name string, db map[K]V1, mem map[K]V2) bool {
 	// define sets for the keys
 	set_db_keys  := mapset.NewSet[K]()
@@ -662,6 +619,8 @@ func CompareKeys[K comparable, V1 any, V2 any](table_name string, db map[K]V1, m
 	return set_mem_keys.Equal(set_db_keys)
 }
 
+// compare the keys of the equvalent memory and database table,
+// return the difference between memory and database
 func NewMemoryKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
 	// define sets for the keys
 	set_db_keys  := mapset.NewSet[K]()
@@ -675,6 +634,8 @@ func NewMemoryKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) maps
 	return set_mem_keys.Difference(set_db_keys)
 }
 
+// compare the keys of the equvalent memory and database table,
+// return the difference between database and memory
 func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
 	// define sets for the keys
 	set_db_keys  := mapset.NewSet[K]()
@@ -688,10 +649,51 @@ func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.S
 	return set_db_keys.Difference(set_mem_keys)
 }
 
+// call generic comparator
 type ComparatorFunc func(*DBAggregate, *RepositoryData, *Newcomers) bool
 func GenericCompare(table_name string, db_aggregate *DBAggregate, comparator ComparatorFunc,
 repositoryData *RepositoryData, newComers *Newcomers, return_value *bool) error {
 	Printf("checking table %s\n", table_name)
 	*return_value = comparator(db_aggregate, repositoryData, newComers)
 	return nil
+}
+
+// build mapset.Set based on table_name, use Id as field reference
+func BuildReferenceSet(db_aggregate *DBAggregate, table_name string,
+db_ref_table  interface{}) mapset.Set[int64] {
+	// reflect on db_aggregate.Table_<table_name>
+	dyna_table := reflect.ValueOf(db_aggregate).Elem()
+	ref_table  := dyna_table.FieldByName("Table_" + table_name)
+	iter       := ref_table.MapRange()
+	reference_set := mapset.NewSet[int64]()
+	for iter.Next() {
+		raw_data := iter.Value()
+		switch typ := db_ref_table.(type) {
+		case IndexRepoRecordMem:
+			data := raw_data.Interface().(IndexRepoRecordMem)
+			reference_set.Add(int64(data.Id))
+		case MetaDirRecordMem:
+			data := raw_data.Interface().(MetaDirRecordMem)
+			reference_set.Add(int64(data.Id))
+		case IddFileRecordMem:
+			data := raw_data.Interface().(IddFileRecordMem)
+			reference_set.Add(int64(data.Id))
+		case ContentsRecordMem:
+			data := raw_data.Interface().(ContentsRecordMem)
+			reference_set.Add(int64(data.Id))
+		case SnapshotRecordMem:
+			data := raw_data.Interface().(SnapshotRecordMem)
+			reference_set.Add(int64(data.Id))
+		case NamesRecordMem:
+			data := raw_data.Interface().(NamesRecordMem)
+			reference_set.Add(int64(data.Id))
+		case PackfilesRecordMem:
+			data := raw_data.Interface().(PackfilesRecordMem)
+			reference_set.Add(int64(data.Id))
+		default:
+			Printf("Wrong Type %+v\n", typ)
+			panic("Wrong Type -- loop 1")
+		}
+	}
+	return reference_set
 }
