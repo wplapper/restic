@@ -396,11 +396,11 @@ func PrintMemUsage() {
 	runtime.GC()
 	runtime.ReadMemStats(&m2)
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc        = %4d MiB", bToMb(m2.Alloc))
+	fmt.Printf("Alloc = %4d MiB", bToMb(m2.Alloc))
 	fmt.Printf("\tTotalAlloc = %4d MiB", bToMb(m2.TotalAlloc))
-	fmt.Printf("\tSys        = %4d MiB", bToMb(m2.Sys))
-	fmt.Printf("\tHeap       = %4d MiB", bToMb(m2.HeapInuse))
-	fmt.Printf("\tNumGC      = %4d\n", m2.NumGC)
+	fmt.Printf("\tSys = %4d MiB", bToMb(m2.Sys))
+	fmt.Printf("\tHeap = %4d MiB", bToMb(m2.HeapInuse))
+	fmt.Printf("\tNumGC = %4d\n", m2.NumGC)
 }
 
 func bToMb(b uint64) uint64 {

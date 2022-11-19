@@ -1,5 +1,6 @@
 package main
 
+
 import (
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -9,18 +10,18 @@ import (
 )
 
 func CreateMemSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) map[string]SnapshotRecordMem {
+newComers *Newcomers) map[string]*SnapshotRecordMem {
 	snaps := repositoryData.snaps
 	//Printf("CreateMemSnapshots\n")
-	mem_snapshots := make(map[string]SnapshotRecordMem, len(snaps))
+	mem_snapshots := make(map[string]*SnapshotRecordMem, len(snaps))
 	for _, sn := range snaps {
 		key := sn.ID().Str()
 		data, ok := (db_aggregate.Table_snapshots)[key]
 		if !ok {
-			mem_snapshots[key] = SnapshotRecordMem{SnapshotRecordDB: SnapshotRecordDB{
-				Snap_time: sn.Time.String()[:19],
-				Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0], Snap_id: key},
-				ID_mem: sn.ID(), root: sn.Tree}
+			p := SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
+				Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
+				Snap_fsys: sn.Paths[0], Snap_id: key, Status: "memory"}
+			mem_snapshots[key] = &p
 		} else {
 			data.Status = "db"
 			mem_snapshots[key] = data
@@ -31,57 +32,53 @@ newComers *Newcomers) map[string]SnapshotRecordMem {
 }
 
 func CreateMemIndexRepo(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[restic.ID]IndexRepoRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[restic.ID]*IndexRepoRecordMem {
 	// make a new map for all entries stored in memory
 	//Printf("CreateMemIndexRepo\n")
-	mem_repo_index_map := make(map[restic.ID]IndexRepoRecordMem,
+	mem_repo_index_map := make(map[restic.ID]*IndexRepoRecordMem,
 		db_aggregate.table_counts["index_repo"])
 
 	var index_type string
 	for id, data := range repositoryData.index_handle {
-		data2, ok := (db_aggregate.Table_index_repo)[id]
+		data2, ok := db_aggregate.Table_index_repo[id]
 		if ok {
 			mem_repo_index_map[id] = data2
-			continue
-		}
-
-		pack_index := data.pack_index
-		if data.Type == restic.TreeBlob {
-			index_type = "tree"
 		} else {
-			index_type = "data"
-		}
+			pack_index := data.pack_index
+			if data.Type == restic.TreeBlob {
+				index_type = "tree"
+			} else {
+				index_type = "data"
+			}
 
-		// pack pointer
-		ptr_packID := &(repositoryData.index_to_blob[pack_index])
-		data3, ok3 := newComers.mem_packfiles[ptr_packID]
-		if !ok3 {
-			return nil
+			// pack pointer
+			ptr_packID := &(repositoryData.index_to_blob[pack_index])
+			data3, ok3 := newComers.mem_packfiles[ptr_packID]
+			if !ok3 {
+				return nil
+			}
+			id_pack_id_mem := data3.Id
+			p := IndexRepoRecordMem{Idd_size: int(data.size),
+				Index_type: index_type,	Id_pack_id: id_pack_id_mem, Idd: id.String(),
+				Status: "memory"}
+			mem_repo_index_map[id] = &p
 		}
-		id_pack_id_mem := data3.Id
-
-		// convert id to a *restic.ID pointer
-		ptr_id := &repositoryData.index_to_blob[repositoryData.blob_to_index[id]]
-		mem_repo_index_map[id] = IndexRepoRecordMem{
-			IndexRepoRecordDB: IndexRepoRecordDB{Idd_size: int(data.size),
-				Index_type: index_type,	Id_pack_id: id_pack_id_mem, Idd: id.String()},
-			Status: "memory", idd: ptr_id, packfile: ptr_packID}
 	}
 	return mem_repo_index_map
 }
 
 func CreateMemNames(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[string]NamesRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[string]*NamesRecordMem {
 	//Printf("CreateMemNames\n")
-	mem_names_map := make(map[string]NamesRecordMem)
+	mem_names_map := make(map[string]*NamesRecordMem)
 	for _, file_list := range repositoryData.directory_map {
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
 				data, ok := db_aggregate.Table_names[meta.name]
 				if !ok {
-					mem_names_map[meta.name] = NamesRecordMem{NamesRecordDB:
-						NamesRecordDB{Name_type: "b", Name: meta.name}, Status: "memory"}
+					p := NamesRecordMem{Name_type: "b", Name: meta.name, Status: "memory"}
+					mem_names_map[meta.name] = &p
 				} else {
 					data.Status = "db"
 					mem_names_map[meta.name] = data
@@ -93,7 +90,7 @@ func CreateMemNames(db_aggregate *DBAggregate,
 }
 
 func CreateMemPackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) map[*restic.ID]PackfilesRecordMem {
+newComers *Newcomers) map[*restic.ID]*PackfilesRecordMem {
 
 	// collect all packfiles from the index_handle
 	//Printf("CreateMemPackfiles\n")
@@ -103,13 +100,13 @@ newComers *Newcomers) map[*restic.ID]PackfilesRecordMem {
 	}
 
 	// convert the set to a map of mem_packfiles_map
-	mem_packfiles_map := make(map[*restic.ID]PackfilesRecordMem, pack_intIDs.Cardinality())
+	mem_packfiles_map := make(map[*restic.ID]*PackfilesRecordMem, pack_intIDs.Cardinality())
 	for pack_intID := range pack_intIDs.Iter() {
 		ix := &(repositoryData.index_to_blob)[pack_intID]
 		data, ok := (db_aggregate.Table_packfiles)[ix]
 		if !ok {
-			mem_packfiles_map[ix] = PackfilesRecordMem{PackfilesRecordDB:
-				PackfilesRecordDB{Packfile_id: (*ix).String()}, Status: "memory"}
+			p := PackfilesRecordMem{Packfile_id: (*ix).String(), Status: "memory"}
+			mem_packfiles_map[ix] = &p
 		} else {
 			data.Status = "db"
 			mem_packfiles_map[ix] = data
@@ -119,11 +116,11 @@ newComers *Newcomers) map[*restic.ID]PackfilesRecordMem {
 }
 
 func CreateMemContents(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[CompContents]ContentsRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[CompContents]*ContentsRecordMem {
 
 	// contents data in memory
 	//Printf("CreateMemContents\n")
-	mem_contents_map := make(map[CompContents]ContentsRecordMem)
+	mem_contents_map := make(map[CompContents]*ContentsRecordMem)
 	for meta_blob_int, file_list := range repositoryData.directory_map {
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
@@ -146,10 +143,10 @@ func CreateMemContents(db_aggregate *DBAggregate,
 						return nil
 					}
 					id_data_idd := data2.Id
-					mem_contents_map[ix] = ContentsRecordMem{ContentsRecordDB:
-						ContentsRecordDB{Position: position, Offset: offset,
-							Id_fullpath: 0, Id_blob: id_blob, Id_data_idd: id_data_idd},
-						id_data_idd: &(repositoryData.index_to_blob[int(data_blob)])}
+					p := ContentsRecordMem{Position: position, Offset: offset,
+							Id_fullpath: 0, Id_blob: id_blob, Id_data_idd: id_data_idd,
+						Status: "memory"}
+					mem_contents_map[ix] = &p
 				} else {
 					data.Status = "db"
 					mem_contents_map[ix] = data
@@ -161,11 +158,11 @@ func CreateMemContents(db_aggregate *DBAggregate,
 }
 
 func CreateMemMetaDir(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[CompMetaDir]MetaDirRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[CompMetaDir]*MetaDirRecordMem {
 
 	// meta_dir from memory
 	//Printf("CreateMemMetaDir\n")
-	mem_meta_dir_map := make(map[CompMetaDir]MetaDirRecordMem)
+	mem_meta_dir_map := make(map[CompMetaDir]*MetaDirRecordMem)
 	for snap_id, blob_set := range repositoryData.meta_dir_map {
 		for meta_blob := range blob_set {
 			ix := CompMetaDir{snap_id: snap_id.Str(),
@@ -180,7 +177,7 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 				}
 				if id_idd.Id == 0 {
 					Printf("CreateMemMetaDir: underlying meta_blob=%s row=%+v\n", the_meta_blob.String()[:12], id_idd)
-					panic("CreateMemMetaDir no Id_idd assined!")
+					panic("CreateMemMetaDir no Id_idd assigned!")
 				}
 
 				the_snap_id := (*snap_id).Str()
@@ -189,9 +186,9 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 					Printf("snap_id should be %s\n", the_snap_id)
 					return nil
 				}
-				mem_meta_dir_map[ix] = MetaDirRecordMem{MetaDirRecordDB:
-					MetaDirRecordDB{Id_snap_id: id_snap_id.Id, Id_idd: id_idd.Id},
+				p := MetaDirRecordMem{Id_snap_id: id_snap_id.Id, Id_idd: id_idd.Id,
 					Status: "memory"}
+				mem_meta_dir_map[ix] = &p
 			} else {
 				data.Status = "db"
 				mem_meta_dir_map[ix] = data
@@ -202,10 +199,10 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 }
 
 func CreateMemIddFile(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[CompIddFile]IddFileRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[CompIddFile]*IddFileRecordMem {
 
 	//Printf("CreateMemIddFile\n")
-	mem_idd_file_map := make(map[CompIddFile]IddFileRecordMem)
+	mem_idd_file_map := make(map[CompIddFile]*IddFileRecordMem)
 	for meta_blob_int, file_list := range repositoryData.directory_map {
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
@@ -221,11 +218,11 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 						Printf("CreateMemIddFile .id_name name=%s\n", meta.name)
 						return nil
 					}
-					mem_idd_file_map[ix] = IddFileRecordMem{IddFileRecordDB:
-						IddFileRecordDB{Size: int(meta.size),
+					// this row is lacking 'Id_blob' which will be inserted later
+					p := IddFileRecordMem{Size: int(meta.size),
 							Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1],
-							Id_name: row_name.Id},
-						name: meta.name, Status: "memory"}
+							Id_name: row_name.Id, Position: position, Status: "memory"}
+					mem_idd_file_map[ix] = &p
 				} else {
 					data.Status = "db"
 					mem_idd_file_map[ix] = data
@@ -237,7 +234,7 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 }
 
 func CreateMemNamesV2(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) {
-	mem_names := make(map[string]NamesRecordMem)
+	mem_names := make(map[string]*NamesRecordMem)
 	//Printf("CreateMemNamesV2\n")
 	for _, file_list := range repositoryData.directory_map {
 		for _, meta := range file_list {
@@ -245,7 +242,8 @@ func CreateMemNamesV2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			case "file", "dir":
 				data, ok := db_aggregate.Table_names[meta.name]
 				if !ok {
-					mem_names[meta.name] = NamesRecordMem{Status: "memory"}
+					p := NamesRecordMem{Status: "memory"}
+					mem_names[meta.name] = &p
 				} else {
 					data.Status = "db"
 					mem_names[meta.name] = data

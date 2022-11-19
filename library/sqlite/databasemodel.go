@@ -153,6 +153,11 @@ type DBDescriptor struct {
 	table_names_map map[string]struct{}
 }
 
+type TableIndex struct {
+	Name     string
+	Tbl_name string
+}
+
 var db_descriptor *DBDescriptor
 
 // Printf writes the message to the configured stdout stream.
@@ -200,6 +205,12 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
 			Printf("error in build_index %v\n", err)
 			return nil, err
 		}
+	}
+
+	err = build_triggers(echo)
+	if err != nil {
+		Printf("error in build_triggers %v\n", err)
+		return nil, err
 	}
 	return db, nil
 }
@@ -251,15 +262,12 @@ type ListIndexMaps struct {
 }
 
 func build_index(echo bool) error {
-	type TableIndex struct {
-		Name     string
-		Tbl_name string
-	}
+
 	result := make([]TableIndex, 0)
-	sql := "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
-	err := db_descriptor.DB_ptr.Select(&result, sql)
+	sql1 := "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
+	err := db_descriptor.DB_ptr.Select(&result, sql1)
 	if err != nil {
-		Printf("Select error on %s %v\n", sql, err)
+		Printf("Select error on %s %v\n", sql1, err)
 		return err
 	}
 
@@ -295,13 +303,13 @@ func build_index(echo bool) error {
 			if indices_have.Contains(entry.ixname) {
 				continue
 			}
-			sql = fmt.Sprintf("CREATE %-6s INDEX %s ON %s(%s)", entry.unique,
+			sql1 = fmt.Sprintf("CREATE %-6s INDEX %s ON %s(%s)", entry.unique,
 				entry.ixname, table_name, entry.on)
 			if db_descriptor.verbose > 0 || echo {
-				Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), sql)
+				Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), sql1)
 			}
 
-			_, err := db_descriptor.DB_ptr.Exec(sql)
+			_, err := db_descriptor.DB_ptr.Exec(sql1)
 			if err != nil {
 				Printf("failed to CREATE INDEX. Error is %v\n", err)
 				return err
@@ -348,4 +356,73 @@ func Get_high_id(tbl_name string) int {
 		panic("Get_high_id invalid table_name!")
 	}
 	return value
+}
+
+var SQLITE_TRIGGERS = map[string]string {
+"tr_snapshots_i": `CREATE TRIGGER tr_snapshots_i AFTER INSERT ON snapshots
+	BEGIN
+    INSERT INTO snapshots_history (timestamp, action, id_history,
+                snap_id, snap_time, snap_host, snap_fsys, id_snap_root)
+    VALUES (datetime('now','localtime'), 'INSERT', new.id, new.snap_id,
+    new.snap_time, new.snap_host, new.snap_fsys, new.id_snap_root
+        );
+	END;`,
+
+"tr_snapshots_d": `CREATE TRIGGER tr_snapshots_d AFTER DELETE ON snapshots
+	BEGIN
+    INSERT INTO snapshots_history (timestamp, action, id_history,
+                snap_id, snap_time, snap_host, snap_fsys, id_snap_root)
+    VALUES (datetime('now','localtime'), 'DELETE', old.id, old.snap_id,
+        old.snap_time, old.snap_host, old.snap_fsys, old.id_snap_root);
+	END;`,
+
+"tr_timestamp_i": `CREATE TRIGGER tr_timestamp_i AFTER INSERT ON timestamp
+	BEGIN
+    INSERT INTO timestamp_history (timestamp, action, id_history,
+                restic_updated, database_updated, ts_created)
+    VALUES (datetime('now','localtime'), 'INSERT', new.id, new.restic_updated,
+        new.database_updated, new.ts_created);
+	END;`,
+
+"tr_timestamp_u": `CREATE TRIGGER tr_timestamp_u AFTER UPDATE ON timestamp
+	BEGIN
+    INSERT INTO timestamp_history (timestamp, action, id_history,
+                restic_updated, database_updated, ts_created)
+    VALUES (datetime('now','localtime'), 'UPDATE', new.id, new.restic_updated,
+        new.database_updated, new.ts_created);
+	END;`}
+func build_triggers(echo bool) error {
+	// read from sqlite_master the existing triggers
+	result := make([]string, 0)
+	sql1 := "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+	err := db_descriptor.DB_ptr.Select(&result, sql1)
+	if err != nil {
+		Printf("Select error on %s %v\n", sql1, err)
+		return err
+	}
+
+	// convert 'result' into a Set
+	trigger_names := mapset.NewSet[string]()
+	for _, trigger_name := range result {
+		trigger_names.Add(trigger_name)
+	}
+
+	// compare against list of all triggers
+	for trigger_name, trigger_action := range SQLITE_TRIGGERS {
+		if trigger_names.Contains(trigger_name) {
+			continue
+		}
+
+		// execute sql to CREATE TRIGGER
+		if db_descriptor.verbose > 0 || echo {
+			Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.999"), trigger_action)
+		}
+
+		_, err := db_descriptor.DB_ptr.Exec(trigger_action)
+		if err != nil {
+			Printf("failed to CREATE TRIGGER. Error is %v\n", err)
+			return err
+		}
+	}
+	return nil
 }

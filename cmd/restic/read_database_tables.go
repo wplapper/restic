@@ -45,7 +45,7 @@ type TableInfo struct {
 	Type       string
 	Notnull    int
 	Dflt_value sql.NullString
-	PK         int
+	PrimaryKey int
 }
 
 // GetColumnNames creates a slice of all column names per table in the database
@@ -87,9 +87,9 @@ func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
 // load the database rows for table snapshots into memory
 func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
-	db_snapshots := make(map[string]SnapshotRecordMem)
+	db_snapshots := make(map[string]*SnapshotRecordMem)
 	PK_snapshots := make(map[int]string)
-	rows, err 	 := db_conn.Queryx("SELECT * FROM snapshots")
+	rows, err := db_conn.Queryx("SELECT * FROM snapshots")
 	defer rows.Close()
 
 	/* SnapshotRecordDB
@@ -100,28 +100,19 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	Snap_fsys    string
 	Id_snap_root string
 	*/
-	var p SnapshotRecordDB
 	for rows.Next() {
+		var p SnapshotRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadSnapshotTable.StructScan failed %v\n", err)
 			return err
 		}
 
-		// convert id_snap_root to restic.ID
-		root, err := restic.ParseID(p.Id_snap_root)
-		if err != nil {
-			Printf("ReadSnapshotTable.ParseID failed %v\n", err)
-			return err
-		}
-
-		root_ptr := Ptr2ID(root, db_aggregate.repositoryData) // ReadSnapshotTable
-		m := SnapshotRecordMem{SnapshotRecordDB: p, root: root_ptr, Status: "db"}
-		db_snapshots[p.Snap_id] = m
-		//Printf("ReadSnapshotTable db[%s]=%+v\n", p.Snap_id, m)
-		// map snapshot PK to db_snapshots
+		p.Status = "db"
+		db_snapshots[p.Snap_id] = &p
 		PK_snapshots[p.Id] = p.Snap_id
 	}
+
 	rows.Close()
 	db_aggregate.Table_snapshots = db_snapshots
 	db_aggregate.pk_snapshots = PK_snapshots
@@ -132,13 +123,14 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	db_index_repo := make(map[restic.ID]IndexRepoRecordMem)
+	db_index_repo := make(map[restic.ID]*IndexRepoRecordMem)
 	PK_index_repo := make(map[int]restic.ID)
 	rows, err := db_conn.Queryx("SELECT * FROM index_repo")
 	defer rows.Close()
 
-	var p IndexRepoRecordDB
+	//print_count := 0
 	for rows.Next() {
+		var p IndexRepoRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadIndexRepoTable:StructScan failed %v\n", err)
@@ -152,8 +144,6 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			return err
 		}
 
-		repositoryData := db_aggregate.repositoryData
-		ptr_packfile   := &repositoryData.index_to_blob[repositoryData.blob_to_index[idd_as_ID]]
 		/* IndexRepoRecordDB:
 		Id         int
 		Idd        string
@@ -161,15 +151,15 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Index_type string
 		Id_pack_id int
 		*/
-		db_index_repo[idd_as_ID] = IndexRepoRecordMem{IndexRepoRecordDB: p,
-			Status: "db", packfile: ptr_packfile}
+		p.Status = "db"
+		db_index_repo[idd_as_ID] = &p
 
 		// need a mapping from p.Id to db_index_repo
 		PK_index_repo[p.Id] = idd_as_ID
 	}
 	rows.Close()
 	db_aggregate.Table_index_repo = db_index_repo
-	db_aggregate.pk_index_repo    = PK_index_repo
+	db_aggregate.pk_index_repo = PK_index_repo
 	return nil
 }
 
@@ -177,13 +167,13 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	ptr_snapshot 		:= db_aggregate.pk_snapshots
-	ptr_index_repo 	:= db_aggregate.pk_index_repo
-	db_meta_dir 		:= make(map[CompMetaDir]MetaDirRecordMem)
-	rows, err 			:= db_conn.Queryx("SELECT * FROM meta_dir")
+	ptr_snapshot := db_aggregate.pk_snapshots
+	ptr_index_repo := db_aggregate.pk_index_repo
+	db_meta_dir := make(map[CompMetaDir]*MetaDirRecordMem)
+	rows, err := db_conn.Queryx("SELECT * FROM meta_dir")
 
-	var p MetaDirRecordDB
 	for rows.Next() {
+		var p MetaDirRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadMetaDirTable.StructScan failed %v\n", err)
@@ -192,15 +182,15 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
-		snap_id   := ptr_snapshot[p.Id_snap_id]
+		snap_id := ptr_snapshot[p.Id_snap_id]
 		meta_blob := ptr_index_repo[p.Id_idd]
 		/* MetaDirRecordDB:
-			Id         int
-			Id_snap_id int // map back to snapshots
-			Id_idd     int // map back to index_repo
-		 */
-		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = MetaDirRecordMem{
-			MetaDirRecordDB: p, Status: "db"}
+		Id         int
+		Id_snap_id int // map back to snapshots
+		Id_idd     int // map back to index_repo
+		*/
+		p.Status = "db"
+		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_meta_dir = db_meta_dir
@@ -210,13 +200,12 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 // load the database rows for table index_repo into memory
 func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	// we need the back pointers
-	ptr_index_repo 	:= db_aggregate.pk_index_repo
-	ptr_name 				:= db_aggregate.pk_names
-	db_idd_file 		:= make(map[CompIddFile]IddFileRecordMem)
-	rows, err 			:= db_conn.Queryx("SELECT * FROM idd_file")
+	ptr_index_repo := db_aggregate.pk_index_repo
+	db_idd_file := make(map[CompIddFile]*IddFileRecordMem)
+	rows, err := db_conn.Queryx("SELECT * FROM idd_file")
 
-	var p IddFileRecordDB
 	for rows.Next() {
+		var p IddFileRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadIddFileTable.StructScan failed %v\n", err)
@@ -227,8 +216,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		// and a composite index
 		// meta_blob is a *restic.ID
 		meta_blob := ptr_index_repo[p.Id_blob]
-		name 			:= ptr_name[p.Id_name]
-		p.Mtime   = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
+		p.Mtime = strings.Replace(p.Mtime, "T", " ", 1) // replace T with " "
 		/* IddFileRecordDB:
 		Id       int
 		Id_blob  int // map back to index_repo
@@ -238,8 +226,8 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Inode    int64
 		Mtime    string
 		Type     string		 */
-		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = (
-			IddFileRecordMem{IddFileRecordDB : p, name: name, Status: "db"})
+		p.Status = "db"
+		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_idd_file = db_idd_file
@@ -249,12 +237,12 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 // load the database rows for table names into memory
 func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "names"
-	db_names 	 := make(map[string]NamesRecordMem)
-	PK_names 	 := make(map[int]string)
-	rows, err  := db_conn.Queryx("SELECT * FROM " + table_name)
+	db_names := make(map[string]*NamesRecordMem)
+	PK_names := make(map[int]string)
+	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
-	var p NamesRecordDB
 	for rows.Next() {
+		var p NamesRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadNamesTable.StructScan failed %v\n", err)
@@ -264,8 +252,9 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Id        int
 		Name      string
 		Name_type string
-		 */
-		db_names[p.Name] = NamesRecordMem{NamesRecordDB: p, Status: "db"}
+		*/
+		p.Status = "db"
+		db_names[p.Name] = &p
 		PK_names[p.Id] = p.Name
 	}
 	rows.Close()
@@ -276,13 +265,13 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 // load the database rows for table packfiles into memory
 func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
-	table_name 	 := "packfiles"
-	db_packfiles := make(map[*restic.ID]PackfilesRecordMem)
+	table_name := "packfiles"
+	db_packfiles := make(map[*restic.ID]*PackfilesRecordMem)
 	PK_packfiles := make(map[int]*restic.ID)
-	rows, err    := db_conn.Queryx("SELECT * FROM " + table_name)
+	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
-	var p PackfilesRecordDB
 	for rows.Next() {
+		var p PackfilesRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadPackfilesTable.StructScan %v\n", err)
@@ -298,7 +287,8 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 		id_ptr := Ptr2ID(id, db_aggregate.repositoryData) // ReadPackfilesTable
 		/* Id          int Packfile_id string */
-		db_packfiles[id_ptr] = PackfilesRecordMem{PackfilesRecordDB : p, Status: "db"}
+		p.Status = "db"
+		db_packfiles[id_ptr] = &p
 		PK_packfiles[p.Id] = id_ptr
 	}
 	rows.Close()
@@ -309,14 +299,14 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 // load the database rows for table packfiles into memory
 func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
-	table_name 			:= "contents"
-	ptr_index_repo 	:= db_aggregate.pk_index_repo
-	db_contents 		:= make(map[CompContents]ContentsRecordMem)
-	rows, err 			:= db_conn.Queryx("SELECT * FROM " + table_name)
+	table_name := "contents"
+	ptr_index_repo := db_aggregate.pk_index_repo
+	db_contents := make(map[CompContents]*ContentsRecordMem)
+	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 	defer rows.Close()
 
-	var p ContentsRecordDB
 	for rows.Next() {
+		var p ContentsRecordMem
 		err = rows.StructScan(&p)
 		if err != nil {
 			Printf("ReadContentsTable.StructScan failed %v\n", err)
@@ -344,7 +334,8 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Position    int
 		Offset      int
 		Id_fullpath int // deadbeef		 */
-		db_contents[ix] = ContentsRecordMem{ContentsRecordDB: p, Status: "db"}
+		p.Status = "db"
+		db_contents[ix] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_contents = db_contents
