@@ -46,7 +46,7 @@ import (
 var db_aggregate DBAggregate
 var dbOptions DBOptions
 var newComers *Newcomers
-var repositoryData *RepositoryData
+//var repositoryData *RepositoryData
 
 // map repo to database - really a const, but not according to the Go gospel
 var DATABASE_NAMES = map[string]string{

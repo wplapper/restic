@@ -191,7 +191,8 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Id_idd     int // map back to index_repo
 		*/
 		p.Status = "db"
-		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = &p
+		db_meta_dir[CompMetaDir{snap_id: snap_id,
+			meta_blob: repositoryData.blob_to_index[meta_blob]}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_meta_dir = db_meta_dir
@@ -228,7 +229,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Mtime    string
 		Type     string		 */
 		p.Status = "db"
-		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = &p
+		db_idd_file[CompIddFile{meta_blob: repositoryData.blob_to_index[meta_blob], position: p.Position}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_idd_file = db_idd_file
@@ -321,7 +322,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			panic("ReadContentsTable.index_repo incomplete data")
 		}
 
-		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
+		ix := CompContents{meta_blob: repositoryData.blob_to_index[meta_blob], position: p.Position, offset: p.Offset}
 		/* ContentsRecordDB:
 		Id          int
 		Id_data_idd int // map back to index_repo

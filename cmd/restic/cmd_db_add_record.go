@@ -28,6 +28,7 @@ import (
 	"github.com/wplapper/restic/library/sqlite"
 )
 
+var repositoryData *RepositoryData
 var cmdDBAdd = &cobra.Command{
 	Use:   "db_add_record [flags]",
 	Short: "add records to SQLite database",
@@ -76,7 +77,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	// step 0: setup global stuff
 	Printf("Usage START\n")
 	PrintMemUsage()
-	repositoryData := init_repositoryData() // is a *RepositoryData
+	repositoryData = init_repositoryData() // is a *RepositoryData
 	newComers := InitNewcomers()
 	db_aggregate.repositoryData = repositoryData
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
@@ -177,7 +178,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	Printf("Usage after reading all database tables\n")
 	PrintMemUsage()
-  ConfirmStdin()
+  //ConfirmStdin()
 
 	// the first three tables can be compared in parallel, since they dont depend on one another
 	//Printf("Start first wg\n")
@@ -206,7 +207,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	Printf("Usage after comparing all database tables\n")
 	PrintMemUsage()
-	ConfirmStdin()
+	//ConfirmStdin()
 	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
 	// finale: INSERT new records
@@ -496,15 +497,15 @@ func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		row := newComers.mem_idd_file[comp_ix]
 		row.Status = "new"
 		row.Id = high_idd
-		row.Id_blob = newComers.mem_index_repo[meta_blob].Id // extra
+		row.Id_blob = newComers.mem_index_repo[repositoryData.index_to_blob[meta_blob]].Id // extra
 		newComers.mem_idd_file[comp_ix] = row
 
 		high_idd++
 
 		// consistency check
 		if row.Id_blob == 0 {
-			Printf("Logic error for blob pointer %s in idd_file\n",
-				meta_blob.String()[:12])
+			Printf("Logic error for blob pointer %6d in idd_file\n",
+				meta_blob)
 			panic("CompareIddFile:Logic error -- new idd_file 1")
 		}
 	}
@@ -538,7 +539,7 @@ func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		}
 		if row.Id_idd == 0 {
 			Printf("Logic error for meta_dir.blob %s %#v\n",
-				snap_id, newComers.mem_index_repo[meta_blob])
+				snap_id, newComers.mem_index_repo[repositoryData.index_to_blob[meta_blob]])
 			panic("CompareMetaDir:Logic error -- meta_dir 2")
 		}
 	}
@@ -565,8 +566,8 @@ func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 
 		// check consistency
 		if row.Id_blob == 0 {
-			Printf("Logic error for meta_dir.blob %s %#v\n",
-				p_meta_blob.String()[:12], newComers.mem_index_repo[p_meta_blob])
+			Printf("Logic error for meta_dir.blob %6d %#v\n",
+				p_meta_blob, newComers.mem_index_repo[repositoryData.index_to_blob[p_meta_blob]])
 			panic("CompareContents:Logic error -- contents 1")
 		}
 	}

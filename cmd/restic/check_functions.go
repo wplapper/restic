@@ -171,7 +171,7 @@ newComers *Newcomers) bool {
 		count := 0
 		for comp_ix := range diff.Iter() {
 			meta_blob := comp_ix.meta_blob
-			Printf("missing %s %3d %3d\n", meta_blob.String()[:12], comp_ix.position,
+			Printf("missing %6d.%3d.%3d\n", meta_blob, comp_ix.position,
 				comp_ix.offset)
 			count++
 			if count > 20 {
@@ -254,7 +254,7 @@ newComers *Newcomers) bool {
 		count := 0
 		count_empty_node := 0
 		for comp_ix := range diff.Iter() {
-			if comp_ix.meta_blob == EMPTY_NODE_ID {
+			if comp_ix.meta_blob == EMPTY_NODE_ID_TRANSLATED {
 				count_empty_node++
 				continue
 			}
@@ -296,7 +296,7 @@ newComers *Newcomers) bool {
 		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
 			mem_value.Mtime  != db_value.Mtime || mem_value.Type != db_value.Type {
 			equal = false
-			Printf("key %s.%3d\n", db_key.meta_blob.String()[:12], db_key.position)
+			Printf("key %6d.%3d\n", db_key.meta_blob, db_key.position)
 			Printf("  db   %8d %7d %s %-4s\n", db_value.Inode, db_value.Size,
 				db_value.Mtime, db_value.Type)
 			Printf("  mem  %8d %7d %s %-4s\n", mem_value.Inode, mem_value.Size,

@@ -131,16 +131,16 @@ type TimeStamp struct {
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
 	snap_id   string // consider pointers
-	meta_blob restic.ID
+	meta_blob restic.IntID
 }
 
 type CompIddFile struct {
-	meta_blob restic.ID
+	meta_blob restic.IntID
 	position  int
 }
 
 type CompContents struct {
-	meta_blob restic.ID
+	meta_blob restic.IntID
 	position  int
 	offset    int
 }
@@ -208,6 +208,4 @@ type DBAggregate struct {
 	// other tables reference these tables via FOREIGN KEY
 	pk_snapshots     map[int]string     // meta_dir
 	pk_index_repo    map[int]restic.ID  // meta_dir, idd_file, contents
-	//pk_names         map[int]string     // idd_file
-	//pk_packfiles     map[int]*restic.ID // index_repo
 }

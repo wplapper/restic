@@ -122,8 +122,7 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 		len(repositoryData.meta_dir_map))
 	for snap_id, blob_set := range repositoryData.meta_dir_map {
 		for meta_blob := range blob_set {
-			ix := CompMetaDir{snap_id: snap_id.Str(),
-				meta_blob: repositoryData.index_to_blob[meta_blob]}
+			ix := CompMetaDir{snap_id: snap_id.Str(), meta_blob: meta_blob}
 			data, ok := (db_aggregate.Table_meta_dir)[ix]
 			if !ok {
 				the_meta_blob := repositoryData.index_to_blob[meta_blob]
@@ -160,12 +159,12 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 
 	mem_idd_file_map := make(map[CompIddFile]*IddFileRecordMem, len(repositoryData.directory_map))
 	for meta_blob_int, file_list := range repositoryData.directory_map {
-		meta_blob := repositoryData.index_to_blob[meta_blob_int]
+		//meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
 				mtime := meta.mtime.String()[:19]
-				ix := CompIddFile{meta_blob: meta_blob, position: position}
+				ix := CompIddFile{meta_blob: meta_blob_int, position: position}
 				data, ok := (db_aggregate.Table_idd_file)[ix]
 				if !ok {
 					// compute Id_name
@@ -198,7 +197,7 @@ func CreateMemContents(db_aggregate *DBAggregate,
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
 			for offset, data_blob := range meta.content {
-				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
+				ix := CompContents{meta_blob: meta_blob_int, position: position, offset: offset}
 				data, ok := db_aggregate.Table_contents[ix]
 				if !ok {
 					// get id_blob and id_data
