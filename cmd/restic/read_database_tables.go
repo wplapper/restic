@@ -40,12 +40,13 @@ func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts map[string]int) error
 type TableInfo struct {
 	// from sqlite3 header ouputs
 	// cid|name|type|notnull|dflt_value|pk
+	// cid|name|type|notnull|dflt_value|pk
 	Cid        int
 	Name       string
 	Type       string
 	Notnull    int
 	Dflt_value sql.NullString
-	PrimaryKey int
+	Pk         int
 }
 
 // GetColumnNames creates a slice of all column names per table in the database
@@ -61,7 +62,6 @@ func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
 		return nil, err
 	}
 
-	var result TableInfo
 	for _, tbl_name := range Table_names {
 		column_names := make([]string, 0)
 		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('" + tbl_name + "')")
@@ -71,9 +71,10 @@ func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
 		}
 
 		for rows.Next() {
+			var result TableInfo
 			err = rows.StructScan(&result)
 			if err != nil {
-				Printf("GetColumnNames.StructScan failed %v\n", err)
+				Printf("GetColumnNames.StructScan failed %s %v\n", tbl_name, err)
 				return nil, err
 			}
 			column_names = append(column_names, result.Name)
@@ -238,7 +239,6 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "names"
 	db_names := make(map[string]*NamesRecordMem)
-	PK_names := make(map[int]string)
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
 	for rows.Next() {
@@ -255,11 +255,9 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		*/
 		p.Status = "db"
 		db_names[p.Name] = &p
-		PK_names[p.Id] = p.Name
 	}
 	rows.Close()
 	db_aggregate.Table_names = db_names
-	db_aggregate.pk_names = PK_names
 	return nil
 }
 
@@ -267,7 +265,6 @@ func ReadNamesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 	table_name := "packfiles"
 	db_packfiles := make(map[*restic.ID]*PackfilesRecordMem)
-	PK_packfiles := make(map[int]*restic.ID)
 	rows, err := db_conn.Queryx("SELECT * FROM " + table_name)
 
 	for rows.Next() {
@@ -289,11 +286,9 @@ func ReadPackfilesTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		/* Id          int Packfile_id string */
 		p.Status = "db"
 		db_packfiles[id_ptr] = &p
-		PK_packfiles[p.Id] = id_ptr
 	}
 	rows.Close()
 	db_aggregate.Table_packfiles = db_packfiles
-	db_aggregate.pk_packfiles = PK_packfiles
 	return nil
 }
 

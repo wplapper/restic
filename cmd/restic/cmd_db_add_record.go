@@ -114,8 +114,9 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	// step 3: collect all snapshot related information
 	start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
-	Printf("Usage after all data gatered\n")
+	Printf("Usage after all data gathered\n")
 	PrintMemUsage()
+	//ConfirmStdin()
 
 	// step 4.1: get database name
 	if dbOptions.altDB != "" {
@@ -135,7 +136,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	db_aggregate.db_conn = db_conn
-	Printf("Usage after database Ooen\n")
+	Printf("Usage after database Open\n")
 	PrintMemUsage()
 
 	// get the the highest id for each TABLE
@@ -144,6 +145,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
 		return err
 	}
+	//ConfirmStdin()
 
 	// step 5 with multiple substeps: read the various tables:
 	// the first three tables can go parallel
@@ -175,6 +177,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	Printf("Usage after reading all database tables\n")
 	PrintMemUsage()
+  ConfirmStdin()
 
 	// the first three tables can be compared in parallel, since they dont depend on one another
 	//Printf("Start first wg\n")
@@ -189,6 +192,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	// sync
 	CompareIndexRepo(&db_aggregate, repositoryData, newComers)
+	Printf("after CompareIndexRepo\n")
 
 	// compare the rest in paralel
 	wg1, _ = errgroup.WithContext(gopts.ctx)
@@ -202,6 +206,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	Printf("Usage after comparing all database tables\n")
 	PrintMemUsage()
+	ConfirmStdin()
 	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
 	// finale: INSERT new records
@@ -230,7 +235,9 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		Printf("Cant start transaction. Error is %v\n", err)
 		return err
 	}
+
 	Printf("BEGIN TRANSACTION\n")
+	//ConfirmStdin()
 	changes_made := false
 
 	// all INSERTs can be done in parallel
@@ -238,19 +245,13 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	PrintMemUsage()
 
 	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error {
-		return InsertATable("snapshots", newComers.mem_snapshots, tx, column_names, &changes_made)
-	})
-	wg.Go(func() error {
-		return InsertATable("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
-	})
-	wg.Go(func() error {
-		return InsertATable("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made)
-	})
-	wg.Go(func() error { return InsertATable("names", newComers.mem_names, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsertATable("meta_dir", newComers.mem_meta_dir, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsertATable("idd_file", newComers.mem_idd_file, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsertATable("contents", newComers.mem_contents, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("snapshots", newComers.mem_snapshots, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("names", newComers.mem_names, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("meta_dir", newComers.mem_meta_dir, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("idd_file", newComers.mem_idd_file, tx, column_names, &changes_made) })
+	wg.Go(func() error { return InsTab("contents", newComers.mem_contents, tx, column_names, &changes_made) })
 	res := wg.Wait()
 	if res != nil {
 		Printf("Error processing INSERT INTO tables Error is %v\n", res)
@@ -258,6 +259,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 	Printf("Usage after INSERT\n")
 	PrintMemUsage()
+	//ConfirmStdin()
 
 	// update timestamp
 	if len(db_aggregate.Table_snapshots) > 0 {
@@ -368,111 +370,8 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	Printf("\tHeap = %4d MiB\n", bToMb(m4 .HeapInuse))
 	return nil
 }
-
-// ShowBlobsPerSnap maps the new meta and data blobs to one of the new
-// snapshots
-func ShowBlobsPerSnap(repositoryData *RepositoryData, newComers *Newcomers) {
-	// create a set of the new blobs
-	// new_blob_set is the Set of al new blobs
-	new_blob_set := mapset.NewSet[restic.ID]()
-	for key := range newComers.mem_index_repo {
-		new_blob_set.Add(key)
-	}
-
-	// assign all the new blobs to one or more snapshots
-	allocate_map := make(map[restic.ID]mapset.Set[string])
-	for snap_id := range newComers.new_snapshots.Iter() {
-		//row := newComers.mem_snapshots[snap_id]
-		// we need access to the full *restic.ID of the snap
-		// reference and dereference the pointer properly
-		sn_full:= repositoryData.snap_map[snap_id].ID()
-		ptr_snap_id := &(repositoryData.index_to_blob[repositoryData.blob_to_index[*sn_full]])
-
-		// all meta blobs of this snap
-		for int_blob := range repositoryData.meta_dir_map[ptr_snap_id] { // IntSet()
-			meta_blob := repositoryData.index_to_blob[int_blob]
-
-			// access the data blobs
-			for _, meta := range repositoryData.directory_map[int_blob] {
-				for _, cont_int := range meta.content {
-					cont := repositoryData.index_to_blob[cont_int]
-					if new_blob_set.Contains(cont) {
-						_, ok := allocate_map[cont]
-						if !ok {
-							allocate_map[cont] = mapset.NewSet[string]()
-						}
-						allocate_map[cont].Add(snap_id)
-					}
-				}
-			}
-
-			// insert meta blob if found
-			if new_blob_set.Contains(meta_blob) {
-				_, ok := allocate_map[meta_blob]
-				if !ok {
-					allocate_map[meta_blob] = mapset.NewSet[string]()
-				}
-				allocate_map[meta_blob].Add(snap_id)
-			}
-		}
-	}
-
-	map_snap_to_blobs := make(map[string]mapset.Set[restic.ID])
-	for meta_blob, snap_set := range allocate_map {
-		// we need to go over all members of 'snap_set'
-		for snap_id := range snap_set.Iter() {
-			_, ok := map_snap_to_blobs[snap_id]
-			if !ok {
-				// initialze Set for new snap_id
-				map_snap_to_blobs[snap_id] = mapset.NewSet[restic.ID]()
-			}
-			// finally assign blob to a snap
-			map_snap_to_blobs[snap_id].Add(meta_blob)
-			// stop here after first element
-			break
-		}
-	}
-
-	for snap_id, blob_set := range map_snap_to_blobs {
-		sum_data_blobs := uint64(0)
-		sum_meta_blobs := uint64(0)
-		count_meta_blobs := 0
-		count_data_blobs := 0
-		for blob := range blob_set.Iter() {
-			ih := repositoryData.index_handle[blob]
-			typ := ih.Type.String()[0:1]
-			if typ == "t" {
-				sum_meta_blobs += uint64(ih.size)
-				count_meta_blobs++
-			} else if typ == "d" {
-				sum_data_blobs += uint64(ih.size)
-				count_data_blobs++
-			}
-		}
-		row := newComers.mem_snapshots[snap_id]
-		Printf("\n*** snap %s %s %s:%s ***\n", snap_id, row.Snap_time, row.Snap_host, row.Snap_fsys)
-		Printf("meta %5d %10.3f MiB\n", count_meta_blobs, float64(sum_meta_blobs)/ONE_MEG)
-		Printf("data %5d %10.3f MiB\n", count_data_blobs, float64(sum_data_blobs)/ONE_MEG)
-		Printf("sum  %5d %10.3f MiB\n", count_data_blobs+count_meta_blobs,
-			float64(sum_data_blobs+sum_meta_blobs)/ONE_MEG)
-	}
-	Printf("\n")
-}
-
 // this is generic comparision function
 type MemBuildFunc func(*DBAggregate, *RepositoryData, *Newcomers)
-
-func CalcuateNewEntries[K comparable, V1 any, V2 any](
-	db_map map[K]V1, mem_map map[K]V2, repositoryData *RepositoryData,
-	db_aggregate *DBAggregate, mem_build MemBuildFunc, new_set *mapset.Set[K],
-	new_comers *Newcomers) {
-
-	// build memory map
-	mem_build(db_aggregate, repositoryData, new_comers)
-	//compare the two maps
-	*new_set = NewMemoryKeys(db_map, mem_map)
-	return
-}
 
 // generic function using 'reflect' to access the status field
 // for removal of all rows which do not have a status of xxx
@@ -486,7 +385,7 @@ func filter_new[K comparable, V any](mem_map map[K]V, status string) {
 }
 
 // generic funtion to INSERT new data into the database
-func InsertATable[K comparable, V any](table_name string, mem_map map[K]V,
+func InsTab[K comparable, V any](table_name string, mem_map map[K]V,
 	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
 	filter_new(mem_map, "new")
 	err := InsertTable(table_name, mem_map, tx, column_names, changes_made)
@@ -593,20 +492,16 @@ func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	high_idd := sqlite.Get_high_id("idd_file")
 	for comp_ix := range newComers.new_idd_file.Iter() {
 		meta_blob := comp_ix.meta_blob
-		//position := comp_ix.position
-		// get memory row
 
 		row := newComers.mem_idd_file[comp_ix]
 		row.Status = "new"
 		row.Id = high_idd
-		row.Id_blob = newComers.mem_index_repo[meta_blob].Id
+		row.Id_blob = newComers.mem_index_repo[meta_blob].Id // extra
 		newComers.mem_idd_file[comp_ix] = row
 
 		high_idd++
 
 		// consistency check
-		//meta := repositoryData.directory_map[repositoryData.blob_to_index[meta_blob]][position]
-		//name := meta.name
 		if row.Id_blob == 0 {
 			Printf("Logic error for blob pointer %s in idd_file\n",
 				meta_blob.String()[:12])
@@ -706,13 +601,9 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	Printf("%s %7d %10.3f MiB\n", "sum ", count_data_blobs+count_meta_blobs,
 		float64(sum_data_blobs+sum_meta_blobs)/ONE_MEG)
 	Printf("\n")
-
-	ShowBlobsPerSnap(repositoryData, newComers)
-	CalcuateNewEntries(db_aggregate.Table_names, newComers.mem_names,
-		repositoryData, db_aggregate, CreateMemNamesV2, &newComers.new_names, newComers)
 }
 
-// manae timestamp table (with one row)
+// manage timestamp table (with one row)
 func db_update_timestamp(Table_snapshots map[string]*SnapshotRecordMem, tx *sqlx.Tx) error {
 	max_time := ""
 	for _, data := range Table_snapshots {

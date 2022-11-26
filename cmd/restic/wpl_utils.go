@@ -65,15 +65,18 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 	//Printf("HandleIndexRecords start\n")
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
-	//start := time.Now()
+	start := time.Now()
 	if err := repo.LoadIndex(gopts.ctx); err != nil {
 		return err
 	}
 	// about 0.9 seconds
-	//timeMessage("  %-30s %10.1f seconds\n", "LoadIndex",
-	//	time.Now().Sub(start).Seconds())
+	timeMessage("  %-30s %10.1f seconds\n", "LoadIndex",
+		time.Now().Sub(start).Seconds())
 
+	start = time.Now()
 	Convert_to_IntSet(gopts, repo, repositoryData)
+	timeMessage("  %-30s %10.1f seconds\n", "Conv2IntSet",
+		time.Now().Sub(start).Seconds())
 	return nil
 }
 
@@ -128,10 +131,7 @@ func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 
 	PTR_EMPTY_NODE_ID = &(repositoryData.index_to_blob[ix])
 	EMPTY_NODE_ID_TRANSLATED = repositoryData.blob_to_index[EMPTY_NODE_ID]
-
-	// about .5 seconds
-	//timeMessage("  %-30s %10.1f seconds\n", "building repositoryData.index_handle, blob_to_index, index_to_blob",
-	//	time.Now().Sub(start).Seconds())
+	Printf("length of blob_to_index %6d\n", len(repositoryData.blob_to_index))
 }
 
 // FindChildren steps through the directory_map and finds subdirectories
@@ -178,8 +178,7 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 			to_be_processed.PushBack(child_dir)
 
 			// manage fullpath
-			_, ok := repositoryData.fullpath[child_dir]
-			if ok {
+			if _, ok := repositoryData.fullpath[child_dir]; ok {
 				continue
 			}
 
@@ -192,8 +191,7 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 			}
 		}
 	}
-	// remove reference to the empty directory node
-	//seen.Delete(EMPTY_NODE_ID_TRANSLATED)
+
 	// at the end of the loop, 'seen' contains all directories
 	// referenced in the snapshot
 	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
@@ -256,7 +254,7 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 		time_diff  time.Duration // int64 nanosecond count
 	}
 	//p_start := time.Now()
-	perf_records := make([]PerfRecord, 0)
+	//perf_records := make([]PerfRecord, 0)
 	wg, ctx := errgroup.WithContext(gopts.ctx)
 	ch := make(chan restic.ID)
 	//Printf("%-26s ForAllMyTrees start\n", time.Now().Format("2006-01-02 15:04:05.999999"))
@@ -278,10 +276,10 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 	// a worker receives an snapshot ID from ch, loads the snapshot
 	// and runs fn with id, the snapshot and the error
 	worker := func() error {
-		count_file := 0
-		count_dirs := 0
+		//count_file := 0
+		//count_dirs := 0
 		for id := range ch {
-			start := time.Now()
+			//start := time.Now()
 			//Printf("%-26s START %s\n", start.Format("2006-01-02 15:04:05.999999"), id.Str())
 			tree, err := restic.LoadTree(gopts.ctx, repo, id)
 			if err != nil {
@@ -289,14 +287,14 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 				return err
 			}
 			idd_file_list := make([]BlobFile2, len(tree.Nodes))
-			count_file = 0
-			count_dirs = 0
+			//count_file = 0
+			//count_dirs = 0
 
 			// do the work on the tree ust received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
 				content := make([]restic.IntID, 0)
-				subtree_ID := EMPTY_NODE_ID_TRANSLATED
+				subt_ID := EMPTY_NODE_ID_TRANSLATED
 
 				ok := false
 				switch node.Type {
@@ -309,22 +307,22 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 							panic("error during content processing")
 						}
 						content = append(content, ix_data)
-						count_file++
+						//count_file++
 					}
 				case "dir":
 					// get the index for our restic.ID storage
-					subtree_ID, ok = repositoryData.blob_to_index[*node.Subtree]
+					subt_ID, ok = repositoryData.blob_to_index[*node.Subtree]
 					if !ok {
 						Printf("Fatal: %v not in blob_to_index\n", *node.Subtree)
 						panic("error during sub directory processing")
 					}
 					// if *node.Subtree is nil: this is harmless since the entry
 					// is replaced with EMPTY_NODE_ID_TRANSLATED
-					count_dirs++
+					//count_dirs++
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
 					Type: node.Type, size: node.Size, inode: node.Inode,
-					mtime: node.ModTime, content: content, subtree_ID: subtree_ID}
+					mtime: node.ModTime, content: content, subtree_ID: subt_ID}
 			}
 
 			// get the index for our restic.ID storage
@@ -334,12 +332,12 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 				panic("error in GetAllNodes - storing idd_file_list")
 			}
 			// insert directory_map, this is the critical region, so lock it
-			ende := time.Now()
+			//ende := time.Now()
 			m.Lock()
 			repositoryData.directory_map[position] = idd_file_list
 			// perormance record
-			perf_records = append(perf_records, PerfRecord{id: id,
-				count_file: count_file, count_dirs: count_dirs, time_diff: ende.Sub(start)})
+			//perf_records = append(perf_records, PerfRecord{id: id,
+			//	count_file: count_file, count_dirs: count_dirs, time_diff: ende.Sub(start)})
 			m.Unlock()
 			//Printf("%-26s FINIS %s\n", ende.Format("2006-01-02 15:04:05.999999"), id.Str())
 		}
@@ -357,6 +355,7 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 	//Printf("%-26s Waited\n", time.Now().Format("2006-01-02 15:04:05.999999"))
 	//p_end := time.Now()
 
+	/*
 	max_file := -1
 	max_dirs := -1
 	max_time := int64(-1)
@@ -378,12 +377,11 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 		sum_time += time_diff
 	}
 
-	/*
-		Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
-		Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
-			len(perf_records),
-			float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
-			float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
+	Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
+	Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
+		len(perf_records),
+		float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
+		float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
 	*/
 	return res
 }
@@ -425,6 +423,15 @@ func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
 		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
 		// be aware: length just changed during last 'append'
-		return &(repositoryData.index_to_blob[restic.IntID(len(repositoryData.index_to_blob)-1)])
+		return &(repositoryData.index_to_blob[restic.IntID(
+			len(repositoryData.index_to_blob) - 1)])
 	}
+}
+
+// stop at terminal
+func ConfirmStdin() {
+	fmt.Print("Confirm ")
+	var input string
+	fmt.Scanln(&input)
+	return
 }

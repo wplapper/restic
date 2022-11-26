@@ -374,7 +374,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 	delete_selected_rows(&t_delete, tx, "packfiles", &changes_made)
 
 	// add to packfiles
-	err = InsertATable("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
+	err = InsTab("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
 	if err != nil {
 		return err
 	}

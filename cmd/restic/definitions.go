@@ -161,6 +161,7 @@ type RepositoryData struct {
 
 	// the last two entries manage the restic.ID to *restic.ID relationships
 	blob_to_index map[restic.ID]restic.IntID
+	// we use &index_to_blob to create a *restid.ID pointer
 	index_to_blob []restic.ID
 }
 
@@ -207,6 +208,6 @@ type DBAggregate struct {
 	// other tables reference these tables via FOREIGN KEY
 	pk_snapshots     map[int]string     // meta_dir
 	pk_index_repo    map[int]restic.ID  // meta_dir, idd_file, contents
-	pk_names         map[int]string     // idd_file
-	pk_packfiles     map[int]*restic.ID // index_repo
+	//pk_names         map[int]string     // idd_file
+	//pk_packfiles     map[int]*restic.ID // index_repo
 }

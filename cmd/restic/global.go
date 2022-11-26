@@ -82,8 +82,8 @@ type GlobalOptions struct {
 	//  2 means: print more messages, report minor things, this is used when --verbose is specified
 	//  3 means: print very detailed debug messages, this is used when --verbose=2 is specified
 	verbosity uint
-	cpuprofile string
-	memprofile string
+	//cpuprofile string
+	//memprofile string
 	Options []string
 
 	extended options.Options
@@ -130,8 +130,8 @@ func init() {
 	f.IntVar(&globalOptions.Limits.DownloadKb, "limit-download", 0, "limits downloads to a maximum rate in KiB/s. (default: unlimited)")
 	f.UintVar(&globalOptions.PackSize, "pack-size", uint(targetPackSize), "set target pack size in MiB, created pack files may be larger (default: $RESTIC_PACK_SIZE)")
 	f.StringSliceVarP(&globalOptions.Options, "option", "o", []string{}, "set extended option (`key=value`, can be specified multiple times)")
-	f.StringVarP(&globalOptions.cpuprofile, "cpuprofile", "C", "", "enable cpuprofiling")
-	f.StringVarP(&globalOptions.memprofile, "memprofile", "M", "", "enable memprofiling")
+	//f.StringVarP(&globalOptions.cpuprofile, "cpuprofile", "C", "", "enable cpuprofiling")
+	//f.StringVarP(&globalOptions.memprofile, "memprofile", "M", "", "enable memprofiling")
 	// Use our "generate" command instead of the cobra provided "completion" command
 	cmdRoot.CompletionOptions.DisableDefaultCmd = true
 

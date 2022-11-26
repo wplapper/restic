@@ -11,12 +11,11 @@ import (
 
 func CreateMemSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) map[string]*SnapshotRecordMem {
-	snaps := repositoryData.snaps
-	//Printf("CreateMemSnapshots\n")
-	mem_snapshots := make(map[string]*SnapshotRecordMem, len(snaps))
-	for _, sn := range snaps {
+
+	mem_snapshots := make(map[string]*SnapshotRecordMem, len(repositoryData.snaps))
+	for _, sn := range repositoryData.snaps {
 		key := sn.ID().Str()
-		data, ok := (db_aggregate.Table_snapshots)[key]
+		data, ok := db_aggregate.Table_snapshots[key]
 		if !ok {
 			p := SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
 				Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
@@ -27,21 +26,22 @@ newComers *Newcomers) map[string]*SnapshotRecordMem {
 			mem_snapshots[key] = data
 		}
 	}
-	newComers.mem_snapshots = mem_snapshots
+	//newComers.mem_snapshots = mem_snapshots
 	return mem_snapshots
 }
 
 func CreateMemIndexRepo(db_aggregate *DBAggregate,
 	repositoryData *RepositoryData, newComers *Newcomers) map[restic.ID]*IndexRepoRecordMem {
+
 	// make a new map for all entries stored in memory
-	//Printf("CreateMemIndexRepo\n")
 	mem_repo_index_map := make(map[restic.ID]*IndexRepoRecordMem,
-		db_aggregate.table_counts["index_repo"])
+		len(repositoryData.index_handle))
 
 	var index_type string
 	for id, data := range repositoryData.index_handle {
 		data2, ok := db_aggregate.Table_index_repo[id]
 		if ok {
+			data2.Status = "db"
 			mem_repo_index_map[id] = data2
 		} else {
 			pack_index := data.pack_index
@@ -69,8 +69,8 @@ func CreateMemIndexRepo(db_aggregate *DBAggregate,
 
 func CreateMemNames(db_aggregate *DBAggregate,
 	repositoryData *RepositoryData, newComers *Newcomers) map[string]*NamesRecordMem {
-	//Printf("CreateMemNames\n")
-	mem_names_map := make(map[string]*NamesRecordMem)
+
+	mem_names_map := make(map[string]*NamesRecordMem, len(repositoryData.directory_map))
 	for _, file_list := range repositoryData.directory_map {
 		for _, meta := range file_list {
 			switch meta.Type {
@@ -93,7 +93,6 @@ func CreateMemPackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryDat
 newComers *Newcomers) map[*restic.ID]*PackfilesRecordMem {
 
 	// collect all packfiles from the index_handle
-	//Printf("CreateMemPackfiles\n")
 	pack_intIDs := mapset.NewSet[restic.IntID]()
 	for _, handle := range repositoryData.index_handle {
 		pack_intIDs.Add(handle.pack_index)
@@ -115,54 +114,12 @@ newComers *Newcomers) map[*restic.ID]*PackfilesRecordMem {
 	return mem_packfiles_map
 }
 
-func CreateMemContents(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[CompContents]*ContentsRecordMem {
-
-	// contents data in memory
-	//Printf("CreateMemContents\n")
-	mem_contents_map := make(map[CompContents]*ContentsRecordMem)
-	for meta_blob_int, file_list := range repositoryData.directory_map {
-		meta_blob := repositoryData.index_to_blob[meta_blob_int]
-		for position, meta := range file_list {
-			for offset, data_blob := range meta.content {
-				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
-				data, ok := db_aggregate.Table_contents[ix]
-				if !ok {
-					// get id_blob and id_data
-					data2, ok2 := newComers.mem_index_repo[meta_blob]
-					if !ok2 {
-						Printf("CreateMemContents meta_blob %s\n", meta_blob.String()[:12])
-						return nil
-					}
-					id_blob := data2.Id
-
-					data2, ok2 = newComers.mem_index_repo[repositoryData.index_to_blob[data_blob]]
-					if !ok2 {
-						Printf("CreateMemContents data_blob %s\n",
-							repositoryData.index_to_blob[data_blob].String()[:12])
-						return nil
-					}
-					id_data_idd := data2.Id
-					p := ContentsRecordMem{Position: position, Offset: offset,
-							Id_fullpath: 0, Id_blob: id_blob, Id_data_idd: id_data_idd,
-						Status: "memory"}
-					mem_contents_map[ix] = &p
-				} else {
-					data.Status = "db"
-					mem_contents_map[ix] = data
-				}
-			}
-		}
-	}
-	return mem_contents_map
-}
-
 func CreateMemMetaDir(db_aggregate *DBAggregate,
 	repositoryData *RepositoryData, newComers *Newcomers) map[CompMetaDir]*MetaDirRecordMem {
 
 	// meta_dir from memory
-	//Printf("CreateMemMetaDir\n")
-	mem_meta_dir_map := make(map[CompMetaDir]*MetaDirRecordMem)
+	mem_meta_dir_map := make(map[CompMetaDir]*MetaDirRecordMem,
+		len(repositoryData.meta_dir_map))
 	for snap_id, blob_set := range repositoryData.meta_dir_map {
 		for meta_blob := range blob_set {
 			ix := CompMetaDir{snap_id: snap_id.Str(),
@@ -201,8 +158,7 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 func CreateMemIddFile(db_aggregate *DBAggregate,
 	repositoryData *RepositoryData, newComers *Newcomers) map[CompIddFile]*IddFileRecordMem {
 
-	//Printf("CreateMemIddFile\n")
-	mem_idd_file_map := make(map[CompIddFile]*IddFileRecordMem)
+	mem_idd_file_map := make(map[CompIddFile]*IddFileRecordMem, len(repositoryData.directory_map))
 	for meta_blob_int, file_list := range repositoryData.directory_map {
 		meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
@@ -233,22 +189,42 @@ func CreateMemIddFile(db_aggregate *DBAggregate,
 	return mem_idd_file_map
 }
 
-func CreateMemNamesV2(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) {
-	mem_names := make(map[string]*NamesRecordMem)
-	//Printf("CreateMemNamesV2\n")
-	for _, file_list := range repositoryData.directory_map {
-		for _, meta := range file_list {
-			switch meta.Type {
-			case "file", "dir":
-				data, ok := db_aggregate.Table_names[meta.name]
+func CreateMemContents(db_aggregate *DBAggregate,
+	repositoryData *RepositoryData, newComers *Newcomers) map[CompContents]*ContentsRecordMem {
+
+	// contents data in memory
+	mem_contents_map := make(map[CompContents]*ContentsRecordMem, len(repositoryData.directory_map))
+	for meta_blob_int, file_list := range repositoryData.directory_map {
+		meta_blob := repositoryData.index_to_blob[meta_blob_int]
+		for position, meta := range file_list {
+			for offset, data_blob := range meta.content {
+				ix := CompContents{meta_blob: meta_blob, position: position, offset: offset}
+				data, ok := db_aggregate.Table_contents[ix]
 				if !ok {
-					p := NamesRecordMem{Status: "memory"}
-					mem_names[meta.name] = &p
+					// get id_blob and id_data
+					data2, ok2 := newComers.mem_index_repo[meta_blob]
+					if !ok2 {
+						Printf("CreateMemContents meta_blob %s\n", meta_blob.String()[:12])
+						return nil
+					}
+					id_blob := data2.Id
+
+					data2, ok2 = newComers.mem_index_repo[repositoryData.index_to_blob[data_blob]]
+					if !ok2 {
+						Printf("CreateMemContents data_blob %s\n",
+							repositoryData.index_to_blob[data_blob].String()[:12])
+						return nil
+					}
+					id_data_idd := data2.Id
+					p := ContentsRecordMem{Position: position, Offset: offset,
+						Id_blob: id_blob, Id_data_idd: id_data_idd, Status: "memory"}
+					mem_contents_map[ix] = &p
 				} else {
 					data.Status = "db"
-					mem_names[meta.name] = data
+					mem_contents_map[ix] = data
 				}
 			}
 		}
 	}
+	return mem_contents_map
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/wplapper/restic/library/debug"
 
 	// mapset
-	//"github.com/deckarep/golang-set"
 	"github.com/wplapper/restic/library/mapset"
 )
 
@@ -40,9 +39,10 @@ const ONE_MEG = float64(1024.0 * 1024.0)
 
 var cmdTRemove = &cobra.Command{
 	Use:   "tremove [flags]",
-	Short: "test temove one or more snampshots from the repo",
+	Short: "test temove one or more snapshots from the repo",
 	Long: `
-test temove one or more snampshots from the repo.
+test temove one or more snapshots from the repo.
+Print repackaging information.
 
 EXIT STATUS
 ===========
@@ -58,7 +58,7 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
 	cmdRoot.AddCommand(cmdTRemove)
 	flags := cmdTRemove.Flags()
-	flags.IntVarP(&tremoveOptions.cutoff, "cutoff", "U", 182, "cutoff snaps which are older than <cutoff> days")
+	flags.IntVarP(&tremoveOptions.cutoff, "cutoff", "C", 182, "cutoff snaps which are older than <cutoff> days")
 	flags.BoolVarP(&tremoveOptions.detail, "detail", "D", false, "print dir/file details")
 }
 
@@ -80,31 +80,31 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
-	debug.Log("repo open")
+	//debug.Log("repo open")
 
 	// step 2: gather all snapshots
 	start = time.Now()
-	snaps := make([]*restic.Snapshot, 0, 10)
+	repositoryData.snaps = make([]*restic.Snapshot, 0, 10)
 	// snaps is []*restic.Snapshot
-	snaps, err = GatherAllSnapshots(gopts, repo)
+	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
 			return err
 	}
-	repositoryData. snaps = snaps
 
 	// make a master snap dictionary (a map)
-	snaps_from_cli := make(map[string]struct{}, len(snaps))
+	// this looks very much like a Set
+	snaps_from_cli := mapset.NewSet[string]()
 	for _, snap_id := range args {
-		snaps_from_cli[snap_id] = struct{}{}
+		snaps_from_cli.Add(snap_id)
 	}
 
 	// step 3: compare against cutoff date
 	now := time.Now()
 	snaps_to_be_deleted := make([]*restic.Snapshot, 0, 10)
 	Printf("snapshots selected for deletion\n")
-	for _, sn := range snaps {
+	for _, sn := range repositoryData.snaps {
 			days := int(now.Sub(sn.Time).Seconds() / 86400)
-			_, ok := snaps_from_cli[sn.ID().Str()]
+		  ok := snaps_from_cli.Contains(sn.ID().Str())
 			if  days >= cutoff || ok {
 					Printf("snap_ID %s %d days old %s:%s at %s\n", sn.ID().Str(),
 						days, sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
@@ -131,14 +131,17 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 	timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData", time.Now().Sub(start).Seconds())
 
 	// step 5: gather size info for each blob
+	// collect all blobs which belong to the same pack
 	start = time.Now()
-	blobs_from_ix    := make(map[restic.IntID]Pack_and_size)
+	blobs_from_ix := make(map[restic.IntID]Pack_and_size,
+		len(repositoryData.index_handle))
 	blobs_per_packID := make(map[restic.IntID]restic.IntSet)
 	for _, data := range repositoryData.index_handle {
 		blobs_from_ix[data.blob_index] = Pack_and_size{Size: data.size,
 				PackID: data.pack_index}
 		if len(blobs_per_packID[data.pack_index]) == 0 {
-				blobs_per_packID[data.pack_index] = restic.NewIntSet()
+			// create empty Set[int]
+			blobs_per_packID[data.pack_index] = restic.NewIntSet()
 		}
 		blobs_per_packID[data.pack_index].Insert(data.blob_index)
 	}
@@ -147,13 +150,13 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 	// step 6.1: loop over the snap_id's to be removed individually
 	selected := make([]*restic.Snapshot, 1, 1)
 	for _, sn := range snaps_to_be_deleted {
-			selected[0] = sn
-			Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
-					sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-			if err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
-				blobs_per_packID, repositoryData, detail); err != nil {
-					return err
-			}
+		selected[0] = sn
+		Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
+				sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
+		if err = CalculatePruneSize(gopts, repo, selected, blobs_from_ix,
+			blobs_per_packID, repositoryData, detail); err != nil {
+				return err
+		}
 	}
 
 	// select all the snapshots for the summary record
@@ -181,7 +184,7 @@ repositoryData *RepositoryData, detail bool) error {
 		// get the meta blobs
 		data, ok := repositoryData.meta_dir_map[id_ptr]
 		if !ok {
-			Printf("not in repo %v\n", sn.ID())
+			Printf("CalculatePruneSize: snap_id not in repo %v\n", sn.ID())
 			return  nil
 		}
 
@@ -196,7 +199,7 @@ repositoryData *RepositoryData, detail bool) error {
 		}
 	}
 
-	// step 6: build the tree list for al other snapshots
+	// step 6: build the tree list for all other snapshots
 	rest_tree_list := make([]*restic.Snapshot, 0, len(repositoryData.snaps))
 	for _, sn := range repositoryData.snaps {
 		found := false
