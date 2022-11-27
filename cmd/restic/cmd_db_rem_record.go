@@ -108,12 +108,12 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
 	res := wg.Wait()
 	if res != nil {
-		Printf("error processing group 1\n")
+		Printf("cmd_db_rem_record: error processing group 1\n")
 		return res
 	}
 	db_aggregate.table_counts = names_and_counts
 
-	// te rest is sequential
+	// the rest is sequential
 	err = ReadIndexRepoTable(db_conn, &db_aggregate)
 	if err != nil {
 		return err
@@ -282,8 +282,9 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	count_updates := 0
 	// update index_repo.id_pack_id, packfiles.id is master here!s
 	for id, ih := range repositoryData.index_handle {
+		id_int := repositoryData.blob_to_index[id]
 		pack_index := ih.pack_index
-		db_index_repo, ok := (db_aggregate.Table_index_repo)[id]
+		db_index_repo, ok := (db_aggregate.Table_index_repo)[id_int]
 		if !ok {
 			panic("update_index_repo: index_repo row not found in database")
 		}
@@ -298,7 +299,7 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 		if db_index_repo.Id_pack_id != pack_row.Id {
 			db_index_repo.Status = "update"
 			db_index_repo.Id_pack_id = pack_row.Id
-			(db_aggregate.Table_index_repo)[id] = db_index_repo
+			(db_aggregate.Table_index_repo)[id_int] = db_index_repo
 			count_updates++
 		}
 	}

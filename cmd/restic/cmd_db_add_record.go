@@ -28,7 +28,6 @@ import (
 	"github.com/wplapper/restic/library/sqlite"
 )
 
-var repositoryData *RepositoryData
 var cmdDBAdd = &cobra.Command{
 	Use:   "db_add_record [flags]",
 	Short: "add records to SQLite database",
@@ -48,7 +47,7 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func InitNewcomers() *Newcomers {
 	var new_comers Newcomers
 	new_comers.mem_snapshots = make(map[string]*SnapshotRecordMem)
-	new_comers.mem_index_repo = make(map[restic.ID]*IndexRepoRecordMem)
+	new_comers.mem_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
 	new_comers.mem_names = make(map[string]*NamesRecordMem)
 	new_comers.mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
 	new_comers.mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
@@ -56,7 +55,7 @@ func InitNewcomers() *Newcomers {
 	new_comers.mem_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
 
 	new_comers.new_snapshots = mapset.NewSet[string]()
-	new_comers.new_index_repo = mapset.NewSet[restic.ID]()
+	new_comers.new_index_repo = mapset.NewSet[restic.IntID]()
 	new_comers.new_names = mapset.NewSet[string]()
 	new_comers.new_idd_file = mapset.NewSet[CompIddFile]()
 	new_comers.new_meta_dir = mapset.NewSet[CompMetaDir]()
@@ -497,7 +496,7 @@ func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		row := newComers.mem_idd_file[comp_ix]
 		row.Status = "new"
 		row.Id = high_idd
-		row.Id_blob = newComers.mem_index_repo[repositoryData.index_to_blob[meta_blob]].Id // extra
+		row.Id_blob = newComers.mem_index_repo[meta_blob].Id // extra
 		newComers.mem_idd_file[comp_ix] = row
 
 		high_idd++
@@ -539,7 +538,7 @@ func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		}
 		if row.Id_idd == 0 {
 			Printf("Logic error for meta_dir.blob %s %#v\n",
-				snap_id, newComers.mem_index_repo[repositoryData.index_to_blob[meta_blob]])
+				snap_id, newComers.mem_index_repo[meta_blob])
 			panic("CompareMetaDir:Logic error -- meta_dir 2")
 		}
 	}
@@ -567,7 +566,7 @@ func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		// check consistency
 		if row.Id_blob == 0 {
 			Printf("Logic error for meta_dir.blob %6d %#v\n",
-				p_meta_blob, newComers.mem_index_repo[repositoryData.index_to_blob[p_meta_blob]])
+				p_meta_blob, newComers.mem_index_repo[p_meta_blob])
 			panic("CompareContents:Logic error -- contents 1")
 		}
 	}
@@ -585,7 +584,8 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	sum_meta_blobs := uint64(0)
 	count_meta_blobs := 0
 	count_data_blobs := 0
-	for blob := range newComers.mem_index_repo {
+	for blob_int := range newComers.mem_index_repo {
+		blob := repositoryData.index_to_blob[blob_int]
 		ih := repositoryData.index_handle[blob]
 		typ := ih.Type.String()[0:1]
 		if typ == "t" {

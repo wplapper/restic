@@ -168,7 +168,7 @@ type RepositoryData struct {
 type Newcomers struct {
 	// the contanets of various meory tables
 	mem_snapshots  map[string]*SnapshotRecordMem
-	mem_index_repo map[restic.ID]*IndexRepoRecordMem
+	mem_index_repo map[restic.IntID]*IndexRepoRecordMem
 	mem_names      map[string]*NamesRecordMem
 	mem_idd_file   map[CompIddFile]*IddFileRecordMem
 	mem_meta_dir   map[CompMetaDir]*MetaDirRecordMem
@@ -177,7 +177,7 @@ type Newcomers struct {
 
 	// we aso need sets for easy manipulation
 	new_snapshots  mapset.Set[string]
-	new_index_repo mapset.Set[restic.ID]
+	new_index_repo mapset.Set[restic.IntID]
 	new_names      mapset.Set[string]
 	new_idd_file   mapset.Set[CompIddFile]
 	new_meta_dir   mapset.Set[CompMetaDir]
@@ -185,7 +185,7 @@ type Newcomers struct {
 	new_packfiles  mapset.Set[*restic.ID]
 
 	old_snapshots  mapset.Set[string]
-	old_index_repo mapset.Set[restic.ID]
+	old_index_repo mapset.Set[restic.IntID]
 	old_names      mapset.Set[string]
 	old_idd_file   mapset.Set[CompIddFile]
 	old_packfiles  mapset.Set[*restic.ID]
@@ -198,7 +198,7 @@ type DBAggregate struct {
 
 	// the database tables - memory representation
 	Table_snapshots  map[string]*SnapshotRecordMem
-	Table_index_repo map[restic.ID]*IndexRepoRecordMem
+	Table_index_repo map[restic.IntID]*IndexRepoRecordMem
 	Table_meta_dir   map[CompMetaDir]*MetaDirRecordMem
 	Table_packfiles  map[*restic.ID]*PackfilesRecordMem
 	Table_idd_file   map[CompIddFile]*IddFileRecordMem
@@ -207,5 +207,5 @@ type DBAggregate struct {
 
 	// other tables reference these tables via FOREIGN KEY
 	pk_snapshots     map[int]string     // meta_dir
-	pk_index_repo    map[int]restic.ID  // meta_dir, idd_file, contents
+	pk_index_repo    map[int]restic.IntID  // meta_dir, idd_file, contents
 }

@@ -31,18 +31,19 @@ newComers *Newcomers) map[string]*SnapshotRecordMem {
 }
 
 func CreateMemIndexRepo(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[restic.ID]*IndexRepoRecordMem {
+	repositoryData *RepositoryData, newComers *Newcomers) map[restic.IntID]*IndexRepoRecordMem {
 
 	// make a new map for all entries stored in memory
-	mem_repo_index_map := make(map[restic.ID]*IndexRepoRecordMem,
+	mem_repo_index_map := make(map[restic.IntID]*IndexRepoRecordMem,
 		len(repositoryData.index_handle))
 
 	var index_type string
 	for id, data := range repositoryData.index_handle {
-		data2, ok := db_aggregate.Table_index_repo[id]
+		id_int := repositoryData.blob_to_index[id]
+		data2, ok := db_aggregate.Table_index_repo[id_int]
 		if ok {
 			data2.Status = "db"
-			mem_repo_index_map[id] = data2
+			mem_repo_index_map[id_int] = data2
 		} else {
 			pack_index := data.pack_index
 			if data.Type == restic.TreeBlob {
@@ -61,7 +62,7 @@ func CreateMemIndexRepo(db_aggregate *DBAggregate,
 			p := IndexRepoRecordMem{Idd_size: int(data.size),
 				Index_type: index_type,	Id_pack_id: id_pack_id_mem, Idd: id.String(),
 				Status: "memory"}
-			mem_repo_index_map[id] = &p
+			mem_repo_index_map[id_int] = &p
 		}
 	}
 	return mem_repo_index_map
@@ -125,14 +126,15 @@ func CreateMemMetaDir(db_aggregate *DBAggregate,
 			ix := CompMetaDir{snap_id: snap_id.Str(), meta_blob: meta_blob}
 			data, ok := (db_aggregate.Table_meta_dir)[ix]
 			if !ok {
-				the_meta_blob := repositoryData.index_to_blob[meta_blob]
+				the_meta_blob := meta_blob
 				id_idd, ok := newComers.mem_index_repo[the_meta_blob]
 				if !ok {
-					Printf("CreateMemMetaDir No restic.ID for %s\n", the_meta_blob.String()[:12])
+					Printf("CreateMemMetaDir No restic.ID for %6d\n", the_meta_blob)
 					return nil
 				}
 				if id_idd.Id == 0 {
-					Printf("CreateMemMetaDir: underlying meta_blob=%s row=%+v\n", the_meta_blob.String()[:12], id_idd)
+					Printf("CreateMemMetaDir: underlying meta_blob=%6d row=%+v\n",
+						the_meta_blob, id_idd)
 					panic("CreateMemMetaDir no Id_idd assigned!")
 				}
 
@@ -194,24 +196,23 @@ func CreateMemContents(db_aggregate *DBAggregate,
 	// contents data in memory
 	mem_contents_map := make(map[CompContents]*ContentsRecordMem, len(repositoryData.directory_map))
 	for meta_blob_int, file_list := range repositoryData.directory_map {
-		meta_blob := repositoryData.index_to_blob[meta_blob_int]
+		//meta_blob := repositoryData.index_to_blob[meta_blob_int]
 		for position, meta := range file_list {
 			for offset, data_blob := range meta.content {
 				ix := CompContents{meta_blob: meta_blob_int, position: position, offset: offset}
 				data, ok := db_aggregate.Table_contents[ix]
 				if !ok {
 					// get id_blob and id_data
-					data2, ok2 := newComers.mem_index_repo[meta_blob]
+					data2, ok2 := newComers.mem_index_repo[meta_blob_int]
 					if !ok2 {
-						Printf("CreateMemContents meta_blob %s\n", meta_blob.String()[:12])
+						Printf("CreateMemContents meta_blob %6d\n", meta_blob_int)
 						return nil
 					}
 					id_blob := data2.Id
 
-					data2, ok2 = newComers.mem_index_repo[repositoryData.index_to_blob[data_blob]]
+					data2, ok2 = newComers.mem_index_repo[data_blob]
 					if !ok2 {
-						Printf("CreateMemContents data_blob %s\n",
-							repositoryData.index_to_blob[data_blob].String()[:12])
+						Printf("CreateMemContents data_blob %6d\n", data_blob)
 						return nil
 					}
 					id_data_idd := data2.Id

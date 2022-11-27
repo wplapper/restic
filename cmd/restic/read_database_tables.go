@@ -124,8 +124,9 @@ func ReadSnapshotTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 
 	// store results in db_index_repo
-	db_index_repo := make(map[restic.ID]*IndexRepoRecordMem)
-	PK_index_repo := make(map[int]restic.ID)
+	db_index_repo := make(map[restic.IntID]*IndexRepoRecordMem)
+	PK_index_repo := make(map[int]restic.IntID)
+	repositoryData := db_aggregate.repositoryData
 	rows, err := db_conn.Queryx("SELECT * FROM index_repo")
 	defer rows.Close()
 
@@ -137,6 +138,7 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			Printf("ReadIndexRepoTable:StructScan failed %v\n", err)
 			return err
 		}
+		//Printf("row ix_repo %+v\n", p)
 
 		// convert idd to ID
 		idd_as_ID, err := restic.ParseID(p.Idd)
@@ -144,6 +146,8 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			Printf("Parse failed for %s %v\n", p.Idd, err)
 			return err
 		}
+		Ptr2ID(idd_as_ID, repositoryData)
+		idd_as_IntID := repositoryData.blob_to_index[idd_as_ID]
 
 		/* IndexRepoRecordDB:
 		Id         int
@@ -153,10 +157,10 @@ func ReadIndexRepoTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Id_pack_id int
 		*/
 		p.Status = "db"
-		db_index_repo[idd_as_ID] = &p
+		db_index_repo[idd_as_IntID] = &p
 
 		// need a mapping from p.Id to db_index_repo
-		PK_index_repo[p.Id] = idd_as_ID
+		PK_index_repo[p.Id] = idd_as_IntID
 	}
 	rows.Close()
 	db_aggregate.Table_index_repo = db_index_repo
@@ -191,8 +195,7 @@ func ReadMetaDirTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Id_idd     int // map back to index_repo
 		*/
 		p.Status = "db"
-		db_meta_dir[CompMetaDir{snap_id: snap_id,
-			meta_blob: repositoryData.blob_to_index[meta_blob]}] = &p
+		db_meta_dir[CompMetaDir{snap_id: snap_id, meta_blob: meta_blob}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_meta_dir = db_meta_dir
@@ -229,7 +232,7 @@ func ReadIddFileTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 		Mtime    string
 		Type     string		 */
 		p.Status = "db"
-		db_idd_file[CompIddFile{meta_blob: repositoryData.blob_to_index[meta_blob], position: p.Position}] = &p
+		db_idd_file[CompIddFile{meta_blob: meta_blob, position: p.Position}] = &p
 	}
 	rows.Close()
 	db_aggregate.Table_idd_file = db_idd_file
@@ -322,7 +325,7 @@ func ReadContentsTable(db_conn *sqlx.DB, db_aggregate *DBAggregate) error {
 			panic("ReadContentsTable.index_repo incomplete data")
 		}
 
-		ix := CompContents{meta_blob: repositoryData.blob_to_index[meta_blob], position: p.Position, offset: p.Offset}
+		ix := CompContents{meta_blob: meta_blob, position: p.Position, offset: p.Offset}
 		/* ContentsRecordDB:
 		Id          int
 		Id_data_idd int // map back to index_repo
