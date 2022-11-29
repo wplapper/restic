@@ -9,16 +9,17 @@ package main
  * relationship between the restic repository and the SQLite database.
  * db_add_record adds new records to the database, whereas db_rem_record removes
  * old stale records which cannot be longer found in the repository.
- * db_verify makes sure that the two systems are in sync nad indicates
+ * db_verify makes sure that the two systems are in sync and indicates
  * differences but does not make any changes on its own.
  *
- * The developed code tries to use mnay concepts of Go to minimise repeating
+ * The developed code tries to use many concepts of Go to minimise repeating
  * bits of code all over the place. The database has seven major tables which
- * look very similar, but represent different parts of the repository
+ * look very similar, but represent different parts of the repository.
  *
- * So the following more recnt Go concepts have been used:
+ * So the following more recent Go concepts have been used:
  * Reflection and Generics.
  */
+
 import (
 	// system
 	"errors"
@@ -56,10 +57,6 @@ var DATABASE_NAMES = map[string]string{
 
 	// onedrive
 	"rclone:onedrive:restic_backups": "/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
-
-	// most
-	"/media/mount-points/Backup-ext4-Mate/restic_most":  "/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
-	"/media/mount-points/Backup-ext4-Mate/restic_most/": "/media/mount-points/home/wplapper/restic/db/restic-most_nfs.db",
 
 	// data
 	"/media/wplapper/internal-fast/restic_Data":  "/home/wplapper/restic/db/XPS-restic-data_nfs.db",
@@ -156,14 +153,13 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 
 	// gather counts for all tables in database
 	names_and_counts := make(map[string]int)
-	err = readAllTablesAndCounts(db_conn, names_and_counts)
-	if err != nil {
+	if err = readAllTablesAndCounts(db_conn, names_and_counts); err != nil {
 		Printf("readAllTablesAndCounts error is %v\n", err)
 		return err
 	}
 	db_aggregate.table_counts = names_and_counts
 
-	// sort names
+	// sort table names
 	tbl_names_sorted := make([]string, len(names_and_counts))
 	ix := 0
 	for tbl_name := range names_and_counts {
@@ -174,11 +170,14 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 
 	// print table counts
 	for _, tbl_name := range tbl_names_sorted {
+		if len(tbl_name) >= 9 && tbl_name[:9] == "timestamp" {
+			continue
+		}
 		count := names_and_counts[tbl_name]
 		Printf("%-25s %8d\n", tbl_name, count)
 	}
 
-	// the first three tables can go parallel
+	// READ database tables: the first three tables can be read parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go(func() error { return ReadSnapshotTable(db_conn, &db_aggregate) })
 	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
@@ -196,18 +195,16 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 
 	// the last three tables can be read in parallel, since they dont depend on one another
-	wg1, _ := errgroup.WithContext(gopts.ctx)
-	wg1.Go(func() error { return ReadMetaDirTable(db_conn, &db_aggregate) })
-	wg1.Go(func() error { return ReadIddFileTable(db_conn, &db_aggregate) })
-	wg1.Go(func() error { return ReadContentsTable(db_conn, &db_aggregate) })
-	res = wg1.Wait()
+	wg, _ = errgroup.WithContext(gopts.ctx)
+	wg.Go(func() error { return ReadMetaDirTable(db_conn, &db_aggregate) })
+	wg.Go(func() error { return ReadIddFileTable(db_conn, &db_aggregate) })
+	wg.Go(func() error { return ReadContentsTable(db_conn, &db_aggregate) })
+	res = wg.Wait()
 	if res != nil {
 		Printf("Error processing group 2. Error is %v\n", res)
 		return res
 	}
 
-	wg, _ = errgroup.WithContext(gopts.ctx)
-	//_ = wg
 	var r1 bool
 	var r2 bool
 	var r3 bool
@@ -217,7 +214,6 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	var r7 bool
 	GenericCompare("snapshots", &db_aggregate, check_db_snapshots, repositoryData, newComers, &r1)
 	if !r1 {
-		Printf("Snapshots mismatch!\n")
 		return errors.New("Snapshots mismatch!")
 	}
 
@@ -306,10 +302,10 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 		iter := dyna_table.FieldByName("Table_" + entry.check_table).MapRange()
 		print_count := 0
 		for iter.Next() {
-			raw_data := iter.Value()
+			//raw_data :=
 
 			// empty interface, knows about Type of the data in the interface
-			raw_interface := raw_data.Interface()
+			raw_interface := iter.Value().Interface()
 			switch typ := raw_interface.(type) {
 			// same raw data, but with Type assertion
 			case IndexRepoRecordMem:

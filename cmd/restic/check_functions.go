@@ -4,10 +4,13 @@ import (
 	// sets
 	"github.com/wplapper/restic/library/mapset"
 
-	// restic library
-	//"github.com/wplapper/restic/library/restic"
-
+	"strings"
 )
+
+/*
+ * All check functions are used in command db_verify to compare Database tables
+ * with the equivalent memory tables built by reading in repository data
+ */
 
 func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
 	// compare snapshots from repo with snapshots stored in the database
@@ -26,27 +29,38 @@ func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryDat
 			set_mem_keys.Add(key)
 		}
 
-		len_db  := set_db_keys.Cardinality()
-		len_mem := set_mem_keys.Cardinality()
+		diff_db :=  set_db_keys.Difference(set_mem_keys)
+		diff_mem := set_mem_keys.Difference(set_db_keys)
+
+		len_db  := diff_db.Cardinality()
+		len_mem := diff_mem.Cardinality()
 
 		var diff mapset.Set[string]
-		var which string
-		if len_db > len_mem {
-			diff = set_db_keys.Difference(set_mem_keys)
-			which = "mem"
-		} else {
-			diff = set_mem_keys.Difference(set_db_keys)
-			which = "db "
+		if len_mem > 0 {
+			Printf("\nSnapshots are  missing from the database.\n")
+			diff = diff_mem
+		} else if len_db > 0 {
+			Printf("\nThere are more snapshots in the database.\n")
+			diff = diff_db
 		}
 
-		count := 0
-		for comp_ix := range diff.Iter() {
-			Printf("check_db_snapshots key %s %s\n", which, comp_ix)
-			count++
-			if count > 20 {
+		len_diff := diff.Cardinality()
+		var add string = ""
+		if len_diff > 5 {
+			len_diff = 6
+			add = "..."
+		}
+		snap_ids := make([]string, len_diff)
+		ix := 0
+		for snap_id := range diff.Iter() {
+			snap_ids[ix] = snap_id
+			if ix >= len_diff - 2 && add != "" {
+				snap_ids[ix + 1] = add
 				break
 			}
+			ix++
 		}
+		Printf("%s\n", strings.Join(snap_ids, ", "))
 		return equal
 	}
 
@@ -163,7 +177,7 @@ newComers *Newcomers) bool {
 		for key := range db_aggregate.Table_contents {
 			set_db_keys.Add(key)
 		}
-		for key := range db_aggregate.Table_contents {
+		for key := range mem_contents_map {
 			set_mem_keys.Add(key)
 		}
 		diff := set_db_keys.Difference(set_mem_keys)
@@ -180,42 +194,6 @@ newComers *Newcomers) bool {
 		}
 		return equal
 	}
-
-	// loop over data_blobs
-	equal = true
-	//count := 0
-	/*
-	for db_key, _ := range db_aggregate.Table_contents {
-		mem_value := mem_contents_map[db_key]
-		// db_value.id_data_idd is not stored, it needs to be calculated
-		db_value_id_data_idd_blob := db_aggregate.pk_index_repo[mem_value.Id_data_idd]
-		ix := int(repositoryData.blob_to_index[db_value_id_data_idd_blob])
-		if ix != mem_value.Id_data_idd {
-			equal = false
-			count++
-		}
-	}
-	if count == 0 {
-		return equal
-	}
-
-	count = 0
-	Printf("*** Check contents FAIL ***\n")
-	for db_key, db_value := range db_aggregate.Table_contents {
-		mem_value := mem_contents_map[db_key]
-		mem_value_id_data := db_aggregate.pk_index_repo[mem_value.Id_data_idd]
-		ix := int(repositoryData.blob_to_index[mem_value_id_data])
-		if ix != db_value.Id_data_idd {
-			Printf("key db  %s %3d %3d\n", db_key.meta_blob.String()[:12], db_key.position,
-				db_key.offset)
-			Printf("  db  %6d %+v\n", db_value.Id_data_idd, db_value)
-			Printf("  mem %6d %+v\n", ix, mem_value)
-			count++
-			if count > 20 {
-				break
-			}
-		}
-	}*/
 	return equal
 }
 

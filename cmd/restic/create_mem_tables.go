@@ -26,7 +26,6 @@ newComers *Newcomers) map[string]*SnapshotRecordMem {
 			mem_snapshots[key] = data
 		}
 	}
-	//newComers.mem_snapshots = mem_snapshots
 	return mem_snapshots
 }
 

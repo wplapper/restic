@@ -4,7 +4,6 @@ import (
 	// system
 	"fmt"
 	"golang.org/x/sync/errgroup"
-	_ "math"
 	"runtime"
 	"sort"
 	"sync"
@@ -21,7 +20,7 @@ import (
 var gOptions GlobalOptions
 
 var EMPTY_NODE_ID restic.ID
-var PTR_EMPTY_NODE_ID *restic.ID
+//var PTR_EMPTY_NODE_ID *restic.ID
 var EMPTY_NODE_ID_TRANSLATED restic.IntID
 
 func init_repositoryData() *RepositoryData {
@@ -65,18 +64,18 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 	//Printf("HandleIndexRecords start\n")
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
-	start := time.Now()
+	//start := time.Now()
 	if err := repo.LoadIndex(gopts.ctx); err != nil {
 		return err
 	}
 	// about 0.9 seconds
-	timeMessage("  %-30s %10.1f seconds\n", "LoadIndex",
-		time.Now().Sub(start).Seconds())
+	//timeMessage("  %-30s %10.1f seconds\n", "LoadIndex",
+	//	time.Now().Sub(start).Seconds())
 
-	start = time.Now()
+	//start = time.Now()
 	Convert_to_IntSet(gopts, repo, repositoryData)
-	timeMessage("  %-30s %10.1f seconds\n", "Conv2IntSet",
-		time.Now().Sub(start).Seconds())
+	//timeMessage("  %-30s %10.1f seconds\n", "Conv2IntSet",
+	//	time.Now().Sub(start).Seconds())
 	return nil
 }
 
@@ -84,11 +83,11 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 // It also correlates bobs and pack IDs
 func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 	repositoryData *RepositoryData) {
-	//Printf("Convert_to_IntSet start\n")
 
-	//start := time.Now()
 	// blob is a 'restic.PackedBlob' which contains
 	// ID,  PackID, Type, Length and Offset
+	// build 'blob_to_index' and 'blob_to_index' for all known restic.ID(s)
+	// sources are the index files, packfiles and snapshot records
 	pos := restic.IntID(0)
 	for blob := range repo.Index().Each(gopts.ctx) {
 		_, ok := repositoryData.blob_to_index[blob.ID]
@@ -123,21 +122,20 @@ func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 		}
 	}
 
-	// we need to set PTR_EMPTY_NODE_ID and EMPTY_NODE_ID_TRANSLATED
-	ix, ok := repositoryData.blob_to_index[EMPTY_NODE_ID]
+	// we need to set EMPTY_NODE_ID_TRANSLATED
+	ok := false
+	EMPTY_NODE_ID_TRANSLATED, ok = repositoryData.blob_to_index[EMPTY_NODE_ID]
 	if !ok {
-		panic("No EMPTY_NODE_ID!")
+		panic("No EMPTY_NODE_ID in repositoryData.blob_to_index!")
 	}
-
-	PTR_EMPTY_NODE_ID = &(repositoryData.index_to_blob[ix])
-	EMPTY_NODE_ID_TRANSLATED = repositoryData.blob_to_index[EMPTY_NODE_ID]
-	Printf("length of blob_to_index %6d\n", len(repositoryData.blob_to_index))
+	//Printf("length of blob_to_index %6d\n", len(repositoryData.blob_to_index))
 }
 
-// FindChildren steps through the directory_map and finds subdirectories
-// these get attached their (current) parent
+// FindChildren steps through the directory_map and finds subdirectories.
+// The children get attached their parent
 func FindChildren(repositoryData *RepositoryData) {
 	//Printf("FindChildren start\n")
+	// 1. collect the chidren
 	for parent, idd_file_list := range repositoryData.directory_map {
 		for _, node := range idd_file_list {
 			if node.Type == "dir" {
@@ -151,43 +149,72 @@ func FindChildren(repositoryData *RepositoryData) {
 			}
 		}
 	}
+
+	// 2. create tree roots for fullpath
+	for _, sn := range repositoryData.snaps {
+		tree_root := repositoryData.blob_to_index[*sn.Tree]
+		repositoryData.fullpath[tree_root] = "/"
+	}
+
+	// 3. create name tree for all meta_blobs
+	//Printf("*** create name tree ***\n")
+	fail := true
+	//count := 0
+	for fail {
+		//count++
+		//Printf("*Iteration %2d\n", count)
+		fail = false
+		for parent, children := range repositoryData.children {
+			// if parent is not set yet, ignore and try again later
+			if _, ok := repositoryData.fullpath[parent]; !ok {
+				fail = true
+				continue
+			}
+
+			for child := range children {
+				// if already done, don't repeat
+				if _, ok := repositoryData.fullpath[child]; ok {
+					continue
+				}
+
+				// construct name of child directory
+				if repositoryData.fullpath[parent] != "/" {
+					repositoryData.fullpath[child] = repositoryData.fullpath[parent] +
+						"/" + repositoryData.names[child]
+				} else {
+					repositoryData.fullpath[child] = "/" + repositoryData.names[child]
+				}
+				//Printf("%s\n", repositoryData.fullpath[child])
+			}
+		}
+	}
+	//Print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
 }
 
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
 func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
-	//Printf("topology_structure start\n")
+
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
-
 	tree_root := repositoryData.blob_to_index[*sn.Tree]
 	seen := restic.NewIntSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
-	repositoryData.fullpath[tree_root] = "/"
 
-	// to_be_processed is the list of new meta_blobs, not yet handled
+	// 'to_be_processed' is the list of new meta_blobs, not yet handled
 	// use deque as a FIFO queue
 	to_be_processed := deque.New[restic.IntID](100, 100)
 	// prime the process loop
 	to_be_processed.PushBack(tree_root)
 
 	for to_be_processed.Len() > 0 {
-		//take off the oldest one
-		meta_blob := to_be_processed.PopFront()
-		for child_dir := range repositoryData.children[meta_blob].Sub(seen) {
-			seen.Insert(child_dir)
-			to_be_processed.PushBack(child_dir)
-
-			// manage fullpath
-			if _, ok := repositoryData.fullpath[child_dir]; ok {
+		//take off the oldest one, the one at the front of the queuen and
+		// process te children of it.
+		for child := range repositoryData.children[to_be_processed.PopFront()] {
+			if seen.Has(child) {
 				continue
-			}
-
-			// construct name of child directory
-			if repositoryData.fullpath[meta_blob] != "/" {
-				repositoryData.fullpath[child_dir] = (repositoryData.fullpath[meta_blob] +
-					"/" + repositoryData.names[child_dir])
 			} else {
-				repositoryData.fullpath[child_dir] = "/" + repositoryData.names[child_dir]
+				seen.Insert(child)
+				to_be_processed.PushBack(child)
 			}
 		}
 	}
@@ -211,8 +238,7 @@ func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 
 	// build a slice of all meta_blob IDs in the repo
 	start = time.Now()
-	err = ForAllMyTrees(gopts, repo, repositoryData)
-	if err != nil {
+	if err = ForAllMyTrees(gopts, repo, repositoryData); err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
 		return err
 	}
@@ -222,11 +248,9 @@ func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 	FindChildren(repositoryData)
 
 	// step 4: build topology for each snapshot in repository
-	//start = time.Now()
 	for _, sn := range repositoryData.snaps {
 		topology_structure(*sn, repositoryData)
 	}
-	//end := time.Now() ())) // about 65-70 msec later
 	return nil
 }
 
@@ -242,19 +266,13 @@ func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) erro
 }
 
 // home built parallel call to restic.LoadTree. All trees are accessed by the
-// method 'DeliverTreeBlobs' which accesses 'meta_blobs'
+// method 'DeliverTreeBlobs' which accesses 'repositoryData.index_handle'
 // which has been built beforehand
-func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *RepositoryData) error {
+func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository,
+repositoryData *RepositoryData) error {
 
 	var m sync.Mutex
-	type PerfRecord struct {
-		id         restic.ID
-		count_file int
-		count_dirs int
-		time_diff  time.Duration // int64 nanosecond count
-	}
-	//p_start := time.Now()
-	//perf_records := make([]PerfRecord, 0)
+
 	wg, ctx := errgroup.WithContext(gopts.ctx)
 	ch := make(chan restic.ID)
 	//Printf("%-26s ForAllMyTrees start\n", time.Now().Format("2006-01-02 15:04:05.999999"))
@@ -271,26 +289,19 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 			return nil
 		})
 	})
-	//Printf("%-26s ForAllMyTrees filled chan\n", time.Now().Format("2006-01-02 15:04:05.999999"))
 
 	// a worker receives an snapshot ID from ch, loads the snapshot
 	// and runs fn with id, the snapshot and the error
 	worker := func() error {
-		//count_file := 0
-		//count_dirs := 0
 		for id := range ch {
-			//start := time.Now()
-			//Printf("%-26s START %s\n", start.Format("2006-01-02 15:04:05.999999"), id.Str())
 			tree, err := restic.LoadTree(gopts.ctx, repo, id)
 			if err != nil {
 				Printf("LoadTree returned %v\n", err)
 				return err
 			}
-			idd_file_list := make([]BlobFile2, len(tree.Nodes))
-			//count_file = 0
-			//count_dirs = 0
 
-			// do the work on the tree ust received
+			idd_file_list := make([]BlobFile2, len(tree.Nodes))
+			// do the work on the tree just received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
 				content := make([]restic.IntID, 0)
@@ -307,7 +318,6 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 							panic("error during content processing")
 						}
 						content = append(content, ix_data)
-						//count_file++
 					}
 				case "dir":
 					// get the index for our restic.ID storage
@@ -316,9 +326,6 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 						Printf("Fatal: %v not in blob_to_index\n", *node.Subtree)
 						panic("error during sub directory processing")
 					}
-					// if *node.Subtree is nil: this is harmless since the entry
-					// is replaced with EMPTY_NODE_ID_TRANSLATED
-					//count_dirs++
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
 					Type: node.Type, size: node.Size, inode: node.Inode,
@@ -331,15 +338,11 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 				Printf("request for missing ID %v\n", id)
 				panic("error in GetAllNodes - storing idd_file_list")
 			}
+
 			// insert directory_map, this is the critical region, so lock it
-			//ende := time.Now()
 			m.Lock()
 			repositoryData.directory_map[position] = idd_file_list
-			// perormance record
-			//perf_records = append(perf_records, PerfRecord{id: id,
-			//	count_file: count_file, count_dirs: count_dirs, time_diff: ende.Sub(start)})
 			m.Unlock()
-			//Printf("%-26s FINIS %s\n", ende.Format("2006-01-02 15:04:05.999999"), id.Str())
 		}
 		return nil
 	}
@@ -350,39 +353,9 @@ func ForAllMyTrees(gopts GlobalOptions, repo restic.Repository, repositoryData *
 	for i := 0; i < max_parallel; i++ {
 		wg.Go(worker)
 	}
+
 	// and wait for them all to finish
 	res := wg.Wait()
-	//Printf("%-26s Waited\n", time.Now().Format("2006-01-02 15:04:05.999999"))
-	//p_end := time.Now()
-
-	/*
-	max_file := -1
-	max_dirs := -1
-	max_time := int64(-1)
-	sum_time := int64(0)
-	for _, perf_record := range perf_records {
-		time_diff := int64(perf_record.time_diff) / 1000
-		//Printf("pf %s %5d %5d %8d\n", perf_record.id.Str(),
-		//  perf_record.count_file, perf_record.count_dirs, time_diff)
-
-		if perf_record.count_file > max_file {
-			max_file = perf_record.count_file
-		}
-		if perf_record.count_dirs > max_dirs {
-			max_dirs = perf_record.count_dirs
-		}
-		if time_diff > max_time {
-			max_time = time_diff
-		}
-		sum_time += time_diff
-	}
-
-	Printf("max_file = %5d max_dirs = %5d max_time %8d μs\n", max_file, max_dirs, max_time)
-	Printf("# records %5d cpu_time %6.2f elapsed time %6.2f seconds accelerator %4.1f\n",
-		len(perf_records),
-		float64(sum_time) / 1.0e6, p_end.Sub(p_start).Seconds(),
-		float64(sum_time) / 1.0e6 / p_end.Sub(p_start).Seconds())
-	*/
 	return res
 }
 
@@ -412,14 +385,18 @@ func timeMessage(format string, args ...interface{}) {
 	}
 }
 
-// return the pointer to a given ID
 func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
+	return Ptr2ID3(id, repositoryData, "??")
+}
+
+// return the pointer to a given ID
+func Ptr2ID3(id restic.ID, repositoryData *RepositoryData, where string) *restic.ID {
 	ix, ok := repositoryData.blob_to_index[id]
 	if ok {
 		return &(repositoryData.index_to_blob[ix])
 	} else {
 		// allocate new slot
-		//Printf("Ptr2ID.allocate new %s\n", id.String()[:12])
+		//Printf("Ptr2ID.allocate new %s %s\n", where, id.String()[:12])
 		repositoryData.blob_to_index[id] = restic.IntID(len(repositoryData.index_to_blob))
 		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
 		// be aware: length just changed during last 'append'

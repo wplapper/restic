@@ -47,7 +47,7 @@ func (s IntSet) Equals(other IntSet) bool {
 	return true
 }
 
-// Merge adds the blobs in other to the current set.
+// Merge adds the blobs in 'other' to the current set. (Union)
 func (s IntSet) Merge(other IntSet) {
 	for id := range other {
 		s.Insert(id)

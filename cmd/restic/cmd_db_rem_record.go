@@ -16,6 +16,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	//"database/sql"
 
+	// sets
+	"github.com/wplapper/restic/library/mapset"
+
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
@@ -205,6 +208,24 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// clear memory tables
+	newComers.mem_snapshots = make(map[string]*SnapshotRecordMem)
+	newComers.mem_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
+	newComers.mem_names = make(map[string]*NamesRecordMem)
+	newComers.mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
+	newComers.mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
+	newComers.mem_contents = make(map[CompContents]*ContentsRecordMem)
+	newComers.mem_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
+
+	// and the Sets
+	newComers.new_snapshots = mapset.NewSet[string]()
+	newComers.new_index_repo = mapset.NewSet[restic.IntID]()
+	newComers.new_names = mapset.NewSet[string]()
+	newComers.new_idd_file = mapset.NewSet[CompIddFile]()
+	newComers.new_meta_dir = mapset.NewSet[CompMetaDir]()
+	newComers.new_contents = mapset.NewSet[CompContents]()
+	newComers.new_packfiles = mapset.NewSet[*restic.ID]()
 
 	// modify database tables
 	modify_database_tables(&db_aggregate, repositoryData, newComers)
@@ -415,6 +436,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 				Printf("error UPDATE index_repo: %v\n", err)
 				return err
 			}
+
 			count, _ := r.RowsAffected()
 			if count == 1 {
 				continue
@@ -427,8 +449,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 	}
 
 	// update timestamp
-	err = db_update_timestamp(db_aggregate.Table_snapshots, tx)
-	if err != nil {
+	if err = db_update_timestamp(db_aggregate.Table_snapshots, tx); err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
 	}
 
@@ -467,8 +488,7 @@ func delete_selected_rows(t_del *[]RemoveTable, db *sqlx.Tx, table_name string,
 
 	// fill - bulk INSERT works
 	sql := "INSERT INTO delete_table(id) VALUES(:id)"
-	_, err = db.NamedExec(sql, *t_del)
-	if err != nil {
+	if _, err = db.NamedExec(sql, *t_del); err != nil {
 		Printf("error INSERTing into TEMP TABLE delete_table: %v\n", err)
 		return err
 	}

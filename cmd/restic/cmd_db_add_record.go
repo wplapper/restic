@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"reflect"
 	"strings"
-	"runtime"
+	//"runtime"
 	"time"
 
 	//argparse
@@ -145,10 +145,8 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
 		return err
 	}
-	//ConfirmStdin()
 
-	// step 5 with multiple substeps: read the various tables:
-	// the first three tables can go parallel
+	// read database tables
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go(func() error { return ReadSnapshotTable(db_conn, &db_aggregate) })
 	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
@@ -158,12 +156,14 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("Error processing group 1. Error is %v\n", res)
 		return res
 	}
+
 	// no parallelism ...
 	err = ReadIndexRepoTable(db_conn, &db_aggregate)
 	if err != nil {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
 	}
+
 
 	// the next three tables can be read in parallel, since they dont depend on one another
 	wg1, _ := errgroup.WithContext(gopts.ctx)
@@ -179,31 +179,27 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	PrintMemUsage()
   //ConfirmStdin()
 
-	// the first three tables can be compared in parallel, since they dont depend on one another
-	//Printf("Start first wg\n")
-	wg, _ = errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return CompareSnapshots(&db_aggregate, repositoryData, newComers) })
-	wg.Go(func() error { return CompareNames(&db_aggregate, repositoryData, newComers) })
-	wg.Go(func() error { return ComparePackfiles(&db_aggregate, repositoryData, newComers) })
-	res = wg.Wait()
-	if res != nil {
-		Printf("Error processing Compare group 1. Error is %v\n", res)
-		return res
-	}
-	// sync
-	CompareIndexRepo(&db_aggregate, repositoryData, newComers)
-	Printf("after CompareIndexRepo\n")
+	method2(gopts, repositoryData, &db_aggregate, newComers)
+
 
 	// compare the rest in paralel
 	wg1, _ = errgroup.WithContext(gopts.ctx)
-	wg1.Go(func() error { return CompareIddFile(&db_aggregate, repositoryData, newComers) })
-	wg1.Go(func() error { return CompareMetaDir(&db_aggregate, repositoryData, newComers) })
-	wg1.Go(func() error { return CompareContents(&db_aggregate, repositoryData, newComers) })
+	wg1.Go(func() error { return ForAllIddFile(gopts, repositoryData,
+												&db_aggregate, newComers) })
+	wg1.Go(func() error { return ForAllMetaDir(gopts, repositoryData,
+												&db_aggregate, newComers) })
+	wg1.Go(func() error { return ForAllContents(gopts, repositoryData,
+												&db_aggregate, newComers) })
 	res = wg1.Wait()
 	if res != nil {
 		Printf("Error processing Compare group 2. Error is %v\n", res)
 		return res
 	}
+
+	db_aggregate.Table_snapshots = make(map[string]*SnapshotRecordMem)
+	db_aggregate.Table_names = make(map[string]*NamesRecordMem)
+	db_aggregate.Table_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
+	db_aggregate.Table_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
 	Printf("Usage after comparing all database tables\n")
 	PrintMemUsage()
 	//ConfirmStdin()
@@ -215,6 +211,49 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	return nil
+}
+
+func method1(gopts GlobalOptions, repositoryData *RepositoryData,
+db_aggregate *DBAggregate, newComers *Newcomers) {
+	// the first three tables can be compared in parallel, since they dont depend on one another
+	//Printf("Start first wg\n")
+	Printf("repositoryData %p\n", repositoryData)
+	Printf("db_aggregate   %p\n", db_aggregate)
+	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go(func() error { return CompareSnapshots(db_aggregate, repositoryData, newComers) })
+	wg.Go(func() error { return CompareNames(db_aggregate, repositoryData, newComers) })
+	wg.Go(func() error { return ComparePackfiles(db_aggregate, repositoryData, newComers) })
+	res := wg.Wait()
+	if res != nil {
+		Printf("Error processing Compare group 1. Error is %v\n", res)
+		return
+	}
+	// sync
+	CompareIndexRepo(db_aggregate, repositoryData, newComers)
+	Printf("after CompareIndexRepo\n")
+}
+
+func method2(gopts GlobalOptions, repositoryData *RepositoryData,
+db_aggregate *DBAggregate, newComers *Newcomers) {
+	wg, _ := errgroup.WithContext(gopts.ctx)
+	wg.Go(func() error { return ForAllSnapShots(gopts, repositoryData,
+												db_aggregate, newComers) })
+	wg.Go(func() error { return ForAllPackfiles(gopts, repositoryData,
+												db_aggregate, newComers) })
+	wg.Go(func() error { return ForAllNames(gopts, repositoryData,
+												db_aggregate, newComers) })
+
+	res := wg.Wait()
+	if res != nil {
+		Printf("Error processing method2. Error is %v\n", res)
+		return
+	}
+
+	err := ForAllIndexRepo(gopts, repositoryData, db_aggregate, newComers)
+	if err != nil {
+		Printf("Error ForAllIndexRepo. Error is %v\n", res)
+		return
+	}
 }
 
 // CommitNewRecords goes over all the Sets created before and INSERTs the
@@ -294,9 +333,6 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		return nil
 	}
 
-	var m2 runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&m2)
 	// build INSERT statement - bulk INSERT is the only SQL statement which
 	// does not need a loop over all new rows
 	column_list := column_names[tbl_name]
@@ -345,29 +381,6 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 		}
 	}
 	Printf("%7d rows inserted into table %s\n", len(t_insert), tbl_name)
-	var m3 runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&m3)
-	// use reflect to calculate m3 - m2
-	var m4 runtime.MemStats
-	ref_m2 := reflect.ValueOf(&m2).Elem()
-	ref_m3 := reflect.ValueOf(&m3).Elem()
-	ref_m4 := reflect.ValueOf(&m4).Elem()
-	for i := 0; i < ref_m3.NumField(); i++ {
-		if ref_m3.Field(i).Kind() == reflect.Uint64 {
-			diff := ref_m3.Field(i).Uint() - ref_m2.Field(i).Uint()
-			if diff < 0 {
-				diff = -diff
-			}
-			ref_m4.Field(i).SetUint(uint64(diff))
-		}
-	}
-
-	Printf("Inserting table %-14s ", tbl_name)
-	Printf("Alloc = %4d MiB", bToMb(m4 .Alloc))
-	Printf("\tTotalAlloc = %4d MiB", bToMb(m4 .TotalAlloc))
-	Printf("\tSys = %4d MiB", bToMb(m4 .Sys))
-	Printf("\tHeap = %4d MiB\n", bToMb(m4 .HeapInuse))
 	return nil
 }
 // this is generic comparision function
@@ -398,6 +411,10 @@ func InsTab[K comparable, V any](table_name string, mem_map map[K]V,
 func CompareSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	newComers *Newcomers) error {
 	// compare snapshots in memory with snapshots in the database
+
+	Printf("repositoryData %p\n", repositoryData)
+	Printf("db_aggregate   %p\n", db_aggregate)
+
 	newComers.mem_snapshots = CreateMemSnapshots(db_aggregate, repositoryData, newComers)
 	if newComers.mem_snapshots == nil {
 		Printf("Alarm CreateMemSnapshots\n")
@@ -508,6 +525,7 @@ func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			panic("CompareIddFile:Logic error -- new idd_file 1")
 		}
 	}
+	db_aggregate.Table_idd_file = make(map[CompIddFile]*IddFileRecordMem)
 	return nil
 }
 
@@ -542,6 +560,7 @@ func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			panic("CompareMetaDir:Logic error -- meta_dir 2")
 		}
 	}
+	db_aggregate.Table_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
 	return nil
 }
 
@@ -570,6 +589,7 @@ func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			panic("CompareContents:Logic error -- contents 1")
 		}
 	}
+	db_aggregate.Table_contents = make(map[CompContents]*ContentsRecordMem)
 	return nil
 }
 
@@ -655,3 +675,22 @@ func db_update_timestamp(Table_snapshots map[string]*SnapshotRecordMem, tx *sqlx
 	}
 	return nil
 }
+
+func new_compare_process(table_name string, db_conn *sqlx.DB, db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) error {
+	// compare database tables withj memory version, create difference and
+	// allocate rows for new stuff
+	ReadSnapshotTable(db_conn, db_aggregate)
+	// result delivered in db_aggregate.Table_snapshots
+
+	/*
+	 * What I would like to do is to fire up the function which generates the
+	 * memory version of snapshots CreateMemSnapshots(), but not as a map, instead
+	 * a channel with the relevant information
+	 * Here the other thread reads the information generated by CreateMemSnapshots
+	 * and works through it
+	 * key identidy means no work needs to be done, and missing database records
+	 * generates rows with Status "new"
+	 */
+	return nil
+}
+
