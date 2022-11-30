@@ -2,14 +2,15 @@ package main
 
 import (
 	// system
-	"fmt"
-	"sort"
-	"time"
+	//"fmt"
+	//"sort"
+	//"time"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 )
 
+/*
 // example: list the directory names of the first snapshot
 func service1 (repositoryData *RepositoryData) {
 	sn := repositoryData.snaps[0]
@@ -60,9 +61,9 @@ func service3 (repositoryData *RepositoryData) {
 	Printf("*** list of all files and directories for above snapshot ***\n")
 	for _, d_and_b := range directory_names {
 		meta_blob := d_and_b.meta_blob
-		/*if d_and_b.dir_name == "" {
+		if d_and_b.dir_name == "" {
 			continue
-		}*/
+		}
 		Printf("%s\n", d_and_b.dir_name)
 		for _, meta := range repositoryData.directory_map[meta_blob] {
 			name := meta.name
@@ -146,6 +147,7 @@ func service2 (repositoryData *RepositoryData) {
 	Printf("total count is %7d sz %7.1f MiB\n", count_meta + count_data,
 		float64(size_meta + size_data) / ONE_MEG)
 }
+*/
 
 func service4 (repositoryData *RepositoryData) {
 	Printf("\n*** service 4 ***\n")

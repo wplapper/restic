@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"reflect"
 	"strings"
-	//"runtime"
 	"time"
 
 	//argparse
@@ -72,10 +71,13 @@ func init() {
 	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
+type StdForAll func(GlobalOptions, *RepositoryData, *DBAggregate, *Newcomers) error
+type StdDbRead func(*sqlx.DB, *DBAggregate) error
+
 func runDBAdd(gopts GlobalOptions, args []string) error {
 	// step 0: setup global stuff
-	Printf("Usage START\n")
-	PrintMemUsage()
+	//Printf("Usage START\n")
+	//PrintMemUsage()
 	repositoryData = init_repositoryData() // is a *RepositoryData
 	newComers := InitNewcomers()
 	db_aggregate.repositoryData = repositoryData
@@ -91,7 +93,6 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	Printf("Repository is %s\n", gopts.Repo)
-	PrintMemUsage()
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
@@ -136,8 +137,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	db_aggregate.db_conn = db_conn
-	Printf("Usage after database Open\n")
-	PrintMemUsage()
+	//Printf("Usage after database Open\n")
 
 	// get the the highest id for each TABLE
 	err = sqlite.Get_all_high_ids()
@@ -146,63 +146,101 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
-	// read database tables
+	// read three database tables in parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go(func() error { return ReadSnapshotTable(db_conn, &db_aggregate) })
 	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
 	wg.Go(func() error { return ReadPackfilesTable(db_conn, &db_aggregate) })
 	res := wg.Wait()
 	if res != nil {
-		Printf("Error processing group 1. Error is %v\n", res)
+		Printf("READ error processing group 1. Error is %v\n", res)
 		return res
 	}
 
-	// no parallelism ...
+	// Index Repo needs to run by itself
 	err = ReadIndexRepoTable(db_conn, &db_aggregate)
 	if err != nil {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
 	}
 
-
-	// the next three tables can be read in parallel, since they dont depend on one another
-	wg1, _ := errgroup.WithContext(gopts.ctx)
-	wg1.Go(func() error { return ReadMetaDirTable(db_conn, &db_aggregate) })
-	wg1.Go(func() error { return ReadIddFileTable(db_conn, &db_aggregate) })
-	wg1.Go(func() error { return ReadContentsTable(db_conn, &db_aggregate) })
-	res = wg1.Wait()
-	if res != nil {
-		Printf("Error processing group 2. Error is %v\n", res)
-		return res
-	}
-	Printf("Usage after reading all database tables\n")
+	Printf("Usage after reading four database tables\n")
 	PrintMemUsage()
   //ConfirmStdin()
 
-	method2(gopts, repositoryData, &db_aggregate, newComers)
+	// find new rows for these tables
+	wg, _ = errgroup.WithContext(gopts.ctx)
+	wg.Go(func() error { return ForAllSnapShots(gopts, repositoryData, &db_aggregate, newComers) })
+	wg.Go(func() error { return ForAllPackfiles(gopts, repositoryData, &db_aggregate, newComers) })
+	wg.Go(func() error { return ForAllNames(gopts, repositoryData, &db_aggregate, newComers) })
 
-
-	// compare the rest in paralel
-	wg1, _ = errgroup.WithContext(gopts.ctx)
-	wg1.Go(func() error { return ForAllIddFile(gopts, repositoryData,
-												&db_aggregate, newComers) })
-	wg1.Go(func() error { return ForAllMetaDir(gopts, repositoryData,
-												&db_aggregate, newComers) })
-	wg1.Go(func() error { return ForAllContents(gopts, repositoryData,
-												&db_aggregate, newComers) })
-	res = wg1.Wait()
+	res = wg.Wait()
 	if res != nil {
-		Printf("Error processing Compare group 2. Error is %v\n", res)
-		return res
+		Printf("INSERT Error processing group 1. Error is %v\n", res)
+		return err
+	}
+
+	// we need ForAllIndexRepo by itself
+	err = ForAllIndexRepo(gopts, repositoryData, &db_aggregate, newComers)
+	if err != nil {
+		Printf("INSERT error ForAllIndexRepo. Error is %v\n", res)
+		return err
+	}
+
+	Printf("Usage after finding new rows for four database tables\n")
+	PrintMemUsage()
+  //ConfirmStdin()
+
+	type process_functions struct {
+		read_func    StdDbRead
+		for_all_func StdForAll
+		a_map        string
+	}
+
+	// the main reason for sequential processinf is the amount of memory these
+	// functions create, henceforce sequential process and resetting the
+	// database tables afterwards
+	var process_list = []process_functions{
+		{ReadMetaDirTable,  ForAllMetaDir,  "meta_dir"},
+		{ReadIddFileTable,  ForAllIddFile,  "idd_file"},
+		{ReadContentsTable, ForAllContents, "contents"},
+	}
+	for _, actual := range process_list {
+		read_func := actual.read_func
+		for_all_func := actual.for_all_func
+		a_map := actual.a_map
+
+		// read database table
+		err := read_func(db_conn, &db_aggregate)
+		if err != nil {
+			return err
+		}
+
+		// find new rows
+		err = for_all_func(gopts, repositoryData, &db_aggregate, newComers)
+		if err != nil {
+			return err
+		}
+
+		// empty the database table just processed
+		switch a_map {
+		case "meta_dir":
+			db_aggregate.Table_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
+		case "idd_file":
+			db_aggregate.Table_idd_file = make(map[CompIddFile]*IddFileRecordMem)
+		case "contents":
+			db_aggregate.Table_contents = make(map[CompContents]*ContentsRecordMem)
+		}
 	}
 
 	db_aggregate.Table_snapshots = make(map[string]*SnapshotRecordMem)
 	db_aggregate.Table_names = make(map[string]*NamesRecordMem)
 	db_aggregate.Table_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
 	db_aggregate.Table_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
-	Printf("Usage after comparing all database tables\n")
+	Printf("Usage after all new rows\n")
 	PrintMemUsage()
 	//ConfirmStdin()
+
 	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
 	// finale: INSERT new records
@@ -213,48 +251,6 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	return nil
 }
 
-func method1(gopts GlobalOptions, repositoryData *RepositoryData,
-db_aggregate *DBAggregate, newComers *Newcomers) {
-	// the first three tables can be compared in parallel, since they dont depend on one another
-	//Printf("Start first wg\n")
-	Printf("repositoryData %p\n", repositoryData)
-	Printf("db_aggregate   %p\n", db_aggregate)
-	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return CompareSnapshots(db_aggregate, repositoryData, newComers) })
-	wg.Go(func() error { return CompareNames(db_aggregate, repositoryData, newComers) })
-	wg.Go(func() error { return ComparePackfiles(db_aggregate, repositoryData, newComers) })
-	res := wg.Wait()
-	if res != nil {
-		Printf("Error processing Compare group 1. Error is %v\n", res)
-		return
-	}
-	// sync
-	CompareIndexRepo(db_aggregate, repositoryData, newComers)
-	Printf("after CompareIndexRepo\n")
-}
-
-func method2(gopts GlobalOptions, repositoryData *RepositoryData,
-db_aggregate *DBAggregate, newComers *Newcomers) {
-	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return ForAllSnapShots(gopts, repositoryData,
-												db_aggregate, newComers) })
-	wg.Go(func() error { return ForAllPackfiles(gopts, repositoryData,
-												db_aggregate, newComers) })
-	wg.Go(func() error { return ForAllNames(gopts, repositoryData,
-												db_aggregate, newComers) })
-
-	res := wg.Wait()
-	if res != nil {
-		Printf("Error processing method2. Error is %v\n", res)
-		return
-	}
-
-	err := ForAllIndexRepo(gopts, repositoryData, db_aggregate, newComers)
-	if err != nil {
-		Printf("Error ForAllIndexRepo. Error is %v\n", res)
-		return
-	}
-}
 
 // CommitNewRecords goes over all the Sets created before and INSERTs the
 // newly found data into the database
@@ -276,7 +272,6 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	}
 
 	Printf("BEGIN TRANSACTION\n")
-	//ConfirmStdin()
 	changes_made := false
 
 	// all INSERTs can be done in parallel
@@ -293,7 +288,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	wg.Go(func() error { return InsTab("contents", newComers.mem_contents, tx, column_names, &changes_made) })
 	res := wg.Wait()
 	if res != nil {
-		Printf("Error processing INSERT INTO tables Error is %v\n", res)
+		Printf("Error parallel INSERT INTO tables. Error is %v\n", res)
 		return res
 	}
 	Printf("Usage after INSERT\n")
@@ -361,7 +356,6 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	// the splitting into segments could a bit more dynamic
 	// its is limited by the product of number-of-columns * rows_inserted
 	const OFFSET = 4000 // max 8 columns * 4000 = 32000 < 32k
-	//Printf("INSERT %-15s #rows %6d #columns %2d\n", tbl_name, len(t_insert), len(value_list))
 	for offset := 0; offset < len(t_insert); offset += OFFSET {
 		max := len(t_insert)
 		if max > OFFSET {
@@ -383,6 +377,7 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	Printf("%7d rows inserted into table %s\n", len(t_insert), tbl_name)
 	return nil
 }
+
 // this is generic comparision function
 type MemBuildFunc func(*DBAggregate, *RepositoryData, *Newcomers)
 
@@ -400,59 +395,8 @@ func filter_new[K comparable, V any](mem_map map[K]V, status string) {
 // generic funtion to INSERT new data into the database
 func InsTab[K comparable, V any](table_name string, mem_map map[K]V,
 	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
-	filter_new(mem_map, "new")
-	err := InsertTable(table_name, mem_map, tx, column_names, changes_made)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func CompareSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare snapshots in memory with snapshots in the database
-
-	Printf("repositoryData %p\n", repositoryData)
-	Printf("db_aggregate   %p\n", db_aggregate)
-
-	newComers.mem_snapshots = CreateMemSnapshots(db_aggregate, repositoryData, newComers)
-	if newComers.mem_snapshots == nil {
-		Printf("Alarm CreateMemSnapshots\n")
-		return nil
-	}
-	newComers.new_snapshots = NewMemoryKeys(db_aggregate.Table_snapshots, newComers.mem_snapshots)
-	high_snap := sqlite.Get_high_id("snapshots")
-	for snap_id := range newComers.new_snapshots.Iter() {
-
-		row := newComers.mem_snapshots[snap_id]
-		row.Status = "new"
-		row.Id = high_snap
-		newComers.mem_snapshots[snap_id] = row
-
-		high_snap++
-	}
-	Printf("%7d new records in new_snapshots\n", newComers.new_snapshots.Cardinality())
-	return nil
-}
-
-func CompareNames(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare names with its DB counterpart
-	newComers.mem_names = CreateMemNames(db_aggregate, repositoryData, newComers)
-	newComers.new_names = NewMemoryKeys(db_aggregate.Table_names, newComers.mem_names)
-	Printf("%7d new records in new_names\n", newComers.new_names.Cardinality())
-
-	high_names := sqlite.Get_high_id("names")
-	for name := range newComers.new_names.Iter() {
-
-		row := newComers.mem_names[name]
-		row.Status = "new"
-		row.Id = high_names
-		newComers.mem_names[name] = row
-
-		high_names++
-	}
-	return nil
+	//filter_new(mem_map, "new")
+	return InsertTable(table_name, mem_map, tx, column_names, changes_made)
 }
 
 func ComparePackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
@@ -472,124 +416,6 @@ func ComparePackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 
 		high_pack++
 	}
-	return nil
-}
-
-func CompareIndexRepo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare index_repo with its DB counterpart
-	newComers.mem_index_repo = CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
-	if newComers.mem_index_repo == nil {
-		Printf("Alarm CompareIndexRepo\n")
-		return nil
-	}
-	newComers.new_index_repo = NewMemoryKeys(db_aggregate.Table_index_repo, newComers.mem_index_repo)
-	Printf("%7d new records in new_index_repo\n", newComers.new_index_repo.Cardinality())
-
-	high_repo := sqlite.Get_high_id("index_repo")
-	for blob := range newComers.new_index_repo.Iter() {
-
-		row := newComers.mem_index_repo[blob]
-		row.Status = "new"
-		row.Id = high_repo
-		newComers.mem_index_repo[blob] = row
-
-		high_repo++
-	}
-	return nil
-}
-
-func CompareIddFile(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare idd_file with its DB counterpart
-	newComers.mem_idd_file = CreateMemIddFile(db_aggregate, repositoryData, newComers)
-	newComers.new_idd_file = NewMemoryKeys(db_aggregate.Table_idd_file, newComers.mem_idd_file)
-	Printf("%7d new records in new_idd_file\n", newComers.new_idd_file.Cardinality())
-
-	high_idd := sqlite.Get_high_id("idd_file")
-	for comp_ix := range newComers.new_idd_file.Iter() {
-		meta_blob := comp_ix.meta_blob
-
-		row := newComers.mem_idd_file[comp_ix]
-		row.Status = "new"
-		row.Id = high_idd
-		row.Id_blob = newComers.mem_index_repo[meta_blob].Id // extra
-		newComers.mem_idd_file[comp_ix] = row
-
-		high_idd++
-
-		// consistency check
-		if row.Id_blob == 0 {
-			Printf("Logic error for blob pointer %6d in idd_file\n",
-				meta_blob)
-			panic("CompareIddFile:Logic error -- new idd_file 1")
-		}
-	}
-	db_aggregate.Table_idd_file = make(map[CompIddFile]*IddFileRecordMem)
-	return nil
-}
-
-func CompareMetaDir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare meta_dir with its DB counterpart
-	newComers.mem_meta_dir = CreateMemMetaDir(db_aggregate, repositoryData, newComers)
-	newComers.new_meta_dir = NewMemoryKeys(db_aggregate.Table_meta_dir, newComers.mem_meta_dir)
-	Printf("%7d new records in new_meta_dir\n", newComers.new_meta_dir.Cardinality())
-
-	high_mdir := sqlite.Get_high_id("meta_dir")
-	for comp_ix := range newComers.new_meta_dir.Iter() {
-		snap_id := comp_ix.snap_id
-		meta_blob := comp_ix.meta_blob
-
-		row := newComers.mem_meta_dir[comp_ix]
-		row.Status = "new"
-		row.Id = high_mdir
-		newComers.mem_meta_dir[comp_ix] = row
-
-		high_mdir++
-
-		//  consistency check
-		if row.Id_snap_id == 0 {
-			Printf("Logic error for meta_dir.snap_idd %s %#v\n",
-				snap_id, newComers.mem_snapshots[snap_id])
-			panic("CompareMetaDir:Logic error -- meta_dir 1")
-		}
-		if row.Id_idd == 0 {
-			Printf("Logic error for meta_dir.blob %s %#v\n",
-				snap_id, newComers.mem_index_repo[meta_blob])
-			panic("CompareMetaDir:Logic error -- meta_dir 2")
-		}
-	}
-	db_aggregate.Table_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
-	return nil
-}
-
-func CompareContents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare contents with its DB counterpart
-	newComers.mem_contents = CreateMemContents(db_aggregate, repositoryData, newComers)
-	newComers.new_contents = NewMemoryKeys(db_aggregate.Table_contents, newComers.mem_contents)
-	Printf("%7d new records in new_contents\n", newComers.new_contents.Cardinality())
-
-	high_cont := sqlite.Get_high_id("contents")
-	for comp_ix := range newComers.new_contents.Iter() {
-		p_meta_blob := comp_ix.meta_blob
-
-		row := newComers.mem_contents[comp_ix]
-		row.Status = "new"
-		row.Id = high_cont
-		newComers.mem_contents[comp_ix] = row
-
-		high_cont++
-
-		// check consistency
-		if row.Id_blob == 0 {
-			Printf("Logic error for meta_dir.blob %6d %#v\n",
-				p_meta_blob, newComers.mem_index_repo[p_meta_blob])
-			panic("CompareContents:Logic error -- contents 1")
-		}
-	}
-	db_aggregate.Table_contents = make(map[CompContents]*ContentsRecordMem)
 	return nil
 }
 
@@ -675,22 +501,3 @@ func db_update_timestamp(Table_snapshots map[string]*SnapshotRecordMem, tx *sqlx
 	}
 	return nil
 }
-
-func new_compare_process(table_name string, db_conn *sqlx.DB, db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) error {
-	// compare database tables withj memory version, create difference and
-	// allocate rows for new stuff
-	ReadSnapshotTable(db_conn, db_aggregate)
-	// result delivered in db_aggregate.Table_snapshots
-
-	/*
-	 * What I would like to do is to fire up the function which generates the
-	 * memory version of snapshots CreateMemSnapshots(), but not as a map, instead
-	 * a channel with the relevant information
-	 * Here the other thread reads the information generated by CreateMemSnapshots
-	 * and works through it
-	 * key identidy means no work needs to be done, and missing database records
-	 * generates rows with Status "new"
-	 */
-	return nil
-}
-

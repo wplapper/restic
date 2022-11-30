@@ -99,10 +99,6 @@ func runTopology(gopts GlobalOptions, args []string) error {
 	}
 
 	// demo functions
-	//service1(repositoryData)
-	service2(repositoryData)
-	//service3(repositoryData)
-	//PrintMemUsage()
 	service4(repositoryData)
 	return nil
 }
