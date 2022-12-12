@@ -9,6 +9,13 @@ import (
 	"github.com/wplapper/restic/library/mapset"
 )
 
+/*
+ * The combination of the two corresponding functions Deliver...IDs and
+ * ForAll... pick up dat from the repository and create a correctly filled
+ * row for the table in question.
+ * ! Important: Only missing entries are created !
+ */
+
 func DeliverSnapShotsIDs(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 fn func(id string) error) error {
 	for _, sn := range repositoryData.snaps {
@@ -56,11 +63,9 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			data := SnapshotRecordMem{Id: high_id, Snap_id: snap_id,
 				Snap_time: mem.Time.String()[:19], Snap_host: mem.Hostname, Snap_fsys: mem.Paths[0],
 				Id_snap_root: mem.Tree.String(), Status: "new"}
-			newComers.mem_snapshots[snap_id] = &data
+			newComers.Mem_snapshots[snap_id] = data
 			high_id++
-			//count++
 		}
-		//Printf("Table snapshots  %6d new rows\n", count)
 		return nil
 	})
 
@@ -127,7 +132,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 
 				pack_index := mem.pack_index
 				ptr_packID := &(repositoryData.index_to_blob[pack_index])
-				data3, ok3 := newComers.mem_packfiles[ptr_packID]
+				data3, ok3 := newComers.Mem_packfiles[ptr_packID]
 				if !ok3 {
 					// that will not do!
 					panic("ForAllIndexRepo: invalid packfile pointer!")
@@ -140,7 +145,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			} else {
 				mem_ix_repo = *(db_aggregate.Table_index_repo[id_int])
 			}
-			newComers.mem_index_repo[id_int] = &mem_ix_repo
+			newComers.Mem_index_repo[id_int] = &mem_ix_repo
 			high_id++
 			//count++
 		}
@@ -171,6 +176,7 @@ fn func(id restic.IntID) error) error {
 		seen.Add(pack_intID)
 		fn(pack_intID)
 	}
+	seen = nil
 	return nil
 }
 
@@ -205,7 +211,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			target := &repositoryData.index_to_blob[id_int]
 			p := PackfilesRecordMem{Id: high_id, Packfile_id: (*target).String(),
 				Status: "new"}
-			newComers.mem_packfiles[target] = &p
+			newComers.Mem_packfiles[target] = &p
 			high_id++
 		}
 		return nil
@@ -267,7 +273,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			snap_id := ix.snap_id
 			meta_blob := ix.meta_blob
 			// access snap back pointer
-			mem_snap, ok := newComers.mem_snapshots[snap_id]
+			mem_snap, ok := newComers.Mem_snapshots[snap_id]
 			if !ok {
 				// might be an existin snapshot
 				data_snap, ok2 := db_aggregate.Table_snapshots[snap_id]
@@ -281,7 +287,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			}
 
 			// access Idd back pointer
-			mem_ix_repo, ok := newComers.mem_index_repo[meta_blob]
+			mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
 			if !ok {
 				// might be an existin index_repo
 				data_ix_repo, ok2 := db_aggregate.Table_index_repo[meta_blob]
@@ -296,7 +302,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 
 			mem := MetaDirRecordMem{Id: high_id, Id_snap_id: id_snap_id,
 				Id_idd: id_idd, Status: "new"}
-			newComers.mem_meta_dir[ix] = &mem
+			newComers.Mem_meta_dir[ix] = &mem
 			high_id++
 			//count++
 		}
@@ -331,6 +337,7 @@ fn func(string) error) error {
 			}
 		}
 	}
+	seen = nil
 	return nil
 }
 
@@ -364,7 +371,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 		high_id := sqlite.Get_high_id("names")
 		for name := range ch_names {
 			mem := NamesRecordMem{Id: high_id, Name: name, Status: "new"}
-			newComers.mem_names[name] = &mem
+			newComers.Mem_names[name] = &mem
 			high_id++
 			//count++
 		}
@@ -443,17 +450,17 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 					// name found, has Id
 					id_name = db_names.Id
 				} else {
-					mem_names, ok2 := newComers.mem_names[name]
+					Mem_names, ok2 := newComers.Mem_names[name]
 					if !ok2 {
 						Printf("ForAllIddFile: No name back pointer for %s\n", name)
 						panic("No name back pointer!")
 					} else {
-						id_name = mem_names.Id
+						id_name = Mem_names.Id
 					}
 				}
 
 				// we need back pointer to Id_blob
-				mem_ix_repo, ok := newComers.mem_index_repo[meta_blob]
+				mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
 				if !ok {
 					Printf("ForAllIddFile: No ndex_repo back pointer for meta_blob %6d\n",
 						meta_blob)
@@ -469,7 +476,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 				mem.Status = "new"
 			}
 			mem.Id = high_id
-			newComers.mem_idd_file[ix] = &mem
+			newComers.Mem_idd_file[ix] = &mem
 			high_id++
 			count++
 		}
@@ -541,7 +548,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 				// we have to build new row
 
 				// we need back pointer to Id_blob
-				mem_ix_repo, ok := newComers.mem_index_repo[meta_blob]
+				mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
 				if !ok {
 					Printf("ForAllContents: No ndex_repo back pointer for meta_blob %6d\n",
 						meta_blob)
@@ -551,7 +558,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 
 				meta := repositoryData.directory_map[meta_blob][position]
 				data_blob := meta.content[offset]
-				row_ix_repo, ok :=  newComers.mem_index_repo[data_blob]
+				row_ix_repo, ok :=  newComers.Mem_index_repo[data_blob]
 				if !ok {
 					db_ix_repo, ok2 := db_aggregate.Table_index_repo[data_blob]
 					if !ok2 {
@@ -573,7 +580,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 				mem.Status = "new"
 			}
 			mem.Id = high_id
-			newComers.mem_contents[ix] = &mem
+			newComers.Mem_contents[ix] = &mem
 			high_id++
 			count++
 		}

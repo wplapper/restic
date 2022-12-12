@@ -43,11 +43,6 @@ type UpdateTable_index_repo struct {
 	Id_pack_id int
 }
 
-type RemoveSqLTable struct {
-	sql        string
-	table_name string
-}
-
 type DBOptions struct {
 	echo               bool
 	print_count_tables bool
@@ -74,14 +69,13 @@ type IndexRepoRecordMem struct {
 	Idd        string
 	Idd_size   int
 	Index_type string
-	Id_pack_id int
+	Id_pack_id int			// back pointer to packfiles
 	Status   	 string
 }
 
 type NamesRecordMem struct {
 	Id        int
 	Name      string
-	Name_type string
 	Status    string
 }
 
@@ -98,13 +92,12 @@ type ContentsRecordMem struct {
 	Id_blob     int // map back to index_repo.id
 	Position    int
 	Offset      int
-	Id_fullpath int // not used any more - deadbeef
 	Status      string
 }
 
 type IddFileRecordMem struct {
 	Id       int
-	Id_blob  int // map back to index_repo
+	Id_blob  int // back pointer to index_repo
 	Position int
 	Id_name  int
 	Size     int
@@ -120,6 +113,14 @@ type PackfilesRecordMem struct {
 	Status      string
 }
 
+type DbData interface {
+	SnapshotRecordMem | IndexRepoRecordMem | NamesRecordMem | PackfilesRecordMem | MetaDirRecordMem | IddFileRecordMem | ContentsRecordMem
+}
+
+type DbKeys interface {
+	string | restic.IntID | *restic.ID | CompMetaDir | CompIddFile | CompContents
+}
+
 type TimeStamp struct {
 	Id               int
 	Restic_updated   time.Time
@@ -130,7 +131,7 @@ type TimeStamp struct {
 // Composite indices for maps
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
-	snap_id   string // consider pointers
+	snap_id   string // consider restic.IntID
 	meta_blob restic.IntID
 }
 
@@ -166,38 +167,31 @@ type RepositoryData struct {
 }
 
 type Newcomers struct {
-	// the contanets of various meory tables
-	mem_snapshots  map[string]*SnapshotRecordMem
-	mem_index_repo map[restic.IntID]*IndexRepoRecordMem
-	mem_names      map[string]*NamesRecordMem
-	mem_idd_file   map[CompIddFile]*IddFileRecordMem
-	mem_meta_dir   map[CompMetaDir]*MetaDirRecordMem
-	mem_contents   map[CompContents]*ContentsRecordMem
-	mem_packfiles  map[*restic.ID]*PackfilesRecordMem
+	// the containers of various memory tables
+	Mem_snapshots  map[string]SnapshotRecordMem
+	Mem_index_repo map[restic.IntID]*IndexRepoRecordMem
+	Mem_names      map[string]*NamesRecordMem
+	Mem_idd_file   map[CompIddFile]*IddFileRecordMem
+	Mem_meta_dir   map[CompMetaDir]*MetaDirRecordMem
+	Mem_contents   map[CompContents]*ContentsRecordMem
+	Mem_packfiles  map[*restic.ID]*PackfilesRecordMem
 
 	// we aso need sets for easy manipulation
-	new_snapshots  mapset.Set[string]
-	new_index_repo mapset.Set[restic.IntID]
-	new_names      mapset.Set[string]
-	new_idd_file   mapset.Set[CompIddFile]
-	new_meta_dir   mapset.Set[CompMetaDir]
-	new_contents   mapset.Set[CompContents]
-	new_packfiles  mapset.Set[*restic.ID]
-
 	old_snapshots  mapset.Set[string]
 	old_index_repo mapset.Set[restic.IntID]
 	old_names      mapset.Set[string]
-	old_idd_file   mapset.Set[CompIddFile]
+	//old_idd_file   mapset.Set[CompIddFile]
 	old_packfiles  mapset.Set[*restic.ID]
 }
 
 type DBAggregate struct {
 	repositoryData   *RepositoryData
 	db_conn          *sqlx.DB
+	tx               *sqlx.Tx
 	table_counts     map[string]int // count of all tables
 
 	// the database tables - memory representation
-	Table_snapshots  map[string]*SnapshotRecordMem
+	Table_snapshots  map[string]SnapshotRecordMem
 	Table_index_repo map[restic.IntID]*IndexRepoRecordMem
 	Table_meta_dir   map[CompMetaDir]*MetaDirRecordMem
 	Table_packfiles  map[*restic.ID]*PackfilesRecordMem
@@ -206,6 +200,24 @@ type DBAggregate struct {
 	Table_contents   map[CompContents]*ContentsRecordMem
 
 	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots     map[int]string     // meta_dir
+	pk_snapshots     map[int]string        // meta_dir
 	pk_index_repo    map[int]restic.IntID  // meta_dir, idd_file, contents
+}
+
+// map repo to database - really a const, but not according to the Go gospel
+var DATABASE_NAMES = map[string]string{
+	// master
+	"/media/mount-points/Backup-ext4-Mate/restic_master":  "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
+	"/media/mount-points/Backup-ext4-Mate/restic_master/": "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",
+
+	// onedrive
+	"rclone:onedrive:restic_backups": "/media/mount-points/home/wplapper/restic/db/restic-onedrive.db",
+
+	// data
+	"/media/wplapper/internal-fast/restic_Data":  "/home/wplapper/restic/db/XPS-restic-data_nfs.db",
+	"/media/wplapper/internal-fast/restic_Data/": "/home/wplapper/restic/db/XPS-restic-data_nfs.db",
+
+	// test
+	"/media/wplapper/internal-fast/restic_test":  "/home/wplapper/restic/db/XPS-restic-test.db",
+	"/media/wplapper/internal-fast/restic_test/": "/home/wplapper/restic/db/XPS-restic-test.db",
 }

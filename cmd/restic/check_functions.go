@@ -3,6 +3,7 @@ package main
 import (
 	// sets
 	"github.com/wplapper/restic/library/mapset"
+	"github.com/wplapper/restic/library/restic"
 
 	"strings"
 )
@@ -11,279 +12,335 @@ import (
  * All check functions are used in command db_verify to compare Database tables
  * with the equivalent memory tables built by reading in repository data
  */
-
-func check_db_snapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
+func check_db_snapshots_row(snap_id string, repositoryData *RepositoryData) SnapshotRecordMem {
 	// compare snapshots from repo with snapshots stored in the database
 	// step 1: build memory table to allow the comparison
-	mem_snapshots := CreateMemSnapshots(db_aggregate, repositoryData, newComers)
-
-	// compare snapshot keys
-	equal := CompareKeys("snapshots", db_aggregate.Table_snapshots, mem_snapshots)
-	if !equal {
-		set_db_keys  := mapset.NewSet[string]()
-		set_mem_keys := mapset.NewSet[string]()
-		for key := range db_aggregate.Table_snapshots {
-			set_db_keys.Add(key)
-		}
-		for key := range mem_snapshots {
-			set_mem_keys.Add(key)
-		}
-
-		diff_db :=  set_db_keys.Difference(set_mem_keys)
-		diff_mem := set_mem_keys.Difference(set_db_keys)
-
-		len_db  := diff_db.Cardinality()
-		len_mem := diff_mem.Cardinality()
-
-		var diff mapset.Set[string]
-		if len_mem > 0 {
-			Printf("\nSnapshots are  missing from the database.\n")
-			diff = diff_mem
-		} else if len_db > 0 {
-			Printf("\nThere are more snapshots in the database.\n")
-			diff = diff_db
-		}
-
-		len_diff := diff.Cardinality()
-		var add string = ""
-		if len_diff > 5 {
-			len_diff = 6
-			add = "..."
-		}
-		snap_ids := make([]string, len_diff)
-		ix := 0
-		for snap_id := range diff.Iter() {
-			snap_ids[ix] = snap_id
-			if ix >= len_diff - 2 && add != "" {
-				snap_ids[ix + 1] = add
-				break
-			}
-			ix++
-		}
-		Printf("%s\n", strings.Join(snap_ids, ", "))
-		return equal
-	}
-
-	// compare snapshot values
-	compare_equals := true
-	for db_key, db_value := range db_aggregate.Table_snapshots {
-		mem_value := mem_snapshots[db_key]
-		if db_value.Snap_host != mem_value.Snap_host || db_value.Snap_time != mem_value.Snap_time {
-			Printf("db  %s %s %s\n", db_value.Snap_time, db_value.Snap_host, db_value.Snap_fsys)
-			Printf("mem %s %s %s\n", mem_value.Snap_time, mem_value.Snap_host, mem_value.Snap_fsys)
-			compare_equals = false
-		}
-	}
-	return compare_equals
-}
-
-func check_db_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) bool {
-
-	mem_repo_index_map := CreateMemIndexRepo(db_aggregate, repositoryData, newComers)
-	if mem_repo_index_map == nil {
-		Printf("Cannot create CreateMemIndexRepo\n")
-		return false
-	}
-	equal := CompareKeys("index_repo", db_aggregate.Table_index_repo, mem_repo_index_map)
-	if !equal {
-		return equal
-	}
-
-	// compare table values
-	compare_equals := true
-	for db_key, db_value := range db_aggregate.Table_index_repo {
-		mem_value := mem_repo_index_map[db_key]
-		if db_value.Idd_size != mem_value.Idd_size || db_value.Index_type != mem_value.Index_type {
-			Printf("v db  %7d\n", db_value.Idd_size)
-			Printf("v mem %7d\n", mem_value.Idd_size)
-			compare_equals = false
-		}
-	}
-	return compare_equals
-}
-
-func check_db_names(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) bool {
-	// build a memory map of the names, whic come from three(3) different sources
-	table_name := "names"
-	mem_names_map := CreateMemNames(db_aggregate, repositoryData, newComers)
-	equal := CompareKeys(table_name, db_aggregate.Table_names, mem_names_map)
-	if equal {
-		return equal
-	}
-
-	set_db_keys  := mapset.NewSet[string]()
-	set_mem_keys := mapset.NewSet[string]()
-	for key := range db_aggregate.Table_names {
-		set_db_keys.Add(key)
-	}
-	for key := range mem_names_map {
-		set_mem_keys.Add(key)
-	}
-
-	len_db  := set_db_keys.Cardinality()
-	len_mem := set_mem_keys.Cardinality()
-
-	var diff mapset.Set[string]
-	var which string
-	if len_db > len_mem {
-		diff = set_db_keys.Difference(set_mem_keys)
-		which = "mem"
+	if sn, ok := repositoryData.snap_map[snap_id]; ok {
+		return SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
+			Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
+			Snap_fsys: sn.Paths[0], Snap_id: snap_id, Id: 1, Status: ""}
 	} else {
-		diff = set_mem_keys.Difference(set_db_keys)
-		which = "db "
+		return SnapshotRecordMem{}
 	}
-
-	count := 0
-	for comp_ix := range diff.Iter() {
-		Printf("%s %s\n", which, comp_ix)
-		count++
-		if count > 20 {
-			break
-		}
-	}
-	return equal
 }
 
-func check_db_packfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) bool {
-	//table_name := "packfiles"
-	// build a memory map of the packfiles
-	mem_packfiles_map := CreateMemPackfiles(db_aggregate, repositoryData, newComers)
-	if mem_packfiles_map == nil {
-		return false
-	}
-	// compare keys
-	return CompareKeys("packfiles", db_aggregate.Table_packfiles, mem_packfiles_map)
-}
+func check_db_snapshots_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) bool {
+	// compare snapshots from repo with snapshots stored in the database
+	// compare snapshot values
 
-// check_db_contents
-func check_db_contents(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) bool {
-	//table_name := "contents"
-	// build a memory map of the contents
-	mem_contents_map := CreateMemContents(db_aggregate, repositoryData, newComers)
-	if mem_contents_map == nil {
-		return false
-	}
-
-	// compare keys
-	equal := CompareKeys("contents", db_aggregate.Table_contents, mem_contents_map)
-	if !equal {
-		Printf("**** Key mismatch for contents ***\n")
-		set_db_keys  := mapset.NewSet[CompContents]()
-		set_mem_keys := mapset.NewSet[CompContents]()
-		for key := range db_aggregate.Table_contents {
-			set_db_keys.Add(key)
-		}
-		for key := range mem_contents_map {
-			set_mem_keys.Add(key)
-		}
-		diff := set_db_keys.Difference(set_mem_keys)
-		Printf("missing from memory %d keys\n", diff.Cardinality())
-		count := 0
-		for comp_ix := range diff.Iter() {
-			meta_blob := comp_ix.meta_blob
-			Printf("missing %6d.%3d.%3d\n", meta_blob, comp_ix.position,
-				comp_ix.offset)
-			count++
-			if count > 20 {
-				break
-			}
-		}
-		return equal
-	}
-	return equal
-}
-
-func check_db_meta_dir(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) bool {
-	mem_meta_dir_map := CreateMemMetaDir(db_aggregate, repositoryData, newComers)
-	if mem_meta_dir_map == nil {
-		return false
-	}
-
-	// compare keys
-	equal := CompareKeys("meta_dir", db_aggregate.Table_meta_dir, mem_meta_dir_map)
-	if !equal {
-		set_db_keys  := mapset.NewSet[CompMetaDir]()
-		set_mem_keys := mapset.NewSet[CompMetaDir]()
-		for key := range db_aggregate.Table_meta_dir {
-			set_db_keys.Add(key)
-		}
-		for key := range mem_meta_dir_map {
-			set_mem_keys.Add(key)
-		}
-
-		len_db  := set_db_keys.Cardinality()
-		len_mem := set_mem_keys.Cardinality()
-
-		var diff mapset.Set[CompMetaDir]
-		var which string
-		if len_db > len_mem {
-			diff = set_db_keys.Difference(set_mem_keys)
-			which = "mem"
-		} else {
-			diff = set_mem_keys.Difference(set_db_keys)
-			which = "db "
-		}
-
-		count := 0
-		count_empty_node := 0
-		for comp_ix := range diff.Iter() {
-			if comp_ix.meta_blob == EMPTY_NODE_ID_TRANSLATED {
-				count_empty_node++
+	compare_equals := true
+	count_print := 0
+	empty_snapshot := SnapshotRecordMem{}
+	// first check - are database snapshots still in  repository
+	for db_key, db_value := range db_aggregate.Table_snapshots {
+		mem_value := 	check_db_snapshots_row(db_key, repositoryData)
+		if mem_value == empty_snapshot {
+			if count_print < 10 {
+				count_print++
+				Printf("snapshot %s only in database\n", db_key)
 				continue
 			}
-			Printf("%s %s %s\n", which, comp_ix.snap_id, comp_ix.meta_blob)
-			count++
-			if count > 10 {
-				break
-			}
 		}
-		if count_empty_node == diff.Cardinality() {
-			equal = true
+
+		db_value.Id = 1
+		db_value.Status = ""
+		if mem_value != db_value {
+			compare_equals = false
+			if count_print < 10 {
+				count_print++
+				Printf("snapshot mismatch for %s\n", db_key)
+				Printf("db  %+v\n", db_value)
+				Printf("mem %+v\n", mem_value)
+			}
 		}
 	}
 
-	if !equal {
-		Printf("mismatch keys for table %s\n", "meta_dir")
+	// second check if there are more snapshots in the repository
+	// compared to the database!!
+	count_print = 0
+	for _, sn := range repositoryData.snaps {
+		snap_id := sn.ID().Str()
+		_, ok := db_aggregate.Table_snapshots[snap_id]
+		if !ok {
+			compare_equals = false
+			if count_print < 10 {
+				count_print++
+				Printf("snapshot %s missing from database\n", snap_id)
+			}
+		}
+	}
+	return compare_equals
+}
+
+func check_db_names_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) bool {
+	// since all names are stored inside the directory_map, we have to extract them
+	// from there
+	all_names := mapset.NewSet[string]()
+	for _, file_list := range repositoryData.directory_map {
+		for _, meta := range file_list {
+			switch meta.Type {
+			case "file", "dir":
+				all_names.Add(meta.name)
+			}
+		}
+	}
+
+	equal := true
+	print_count := 0
+	for _, row := range db_aggregate.Table_names {
+		if all_names.Contains(row.Name) {
+			continue
+		}
+		equal = false
+		if print_count < 10 {
+			print_count++
+			Printf("name %s missing\n", row.Name)
+		}
+	}
+	all_names = nil
+	return equal
+}
+
+func check_db_idd_file_row(db_key CompIddFile, repositoryData *RepositoryData,
+db_aggregate *DBAggregate) IddFileRecordMem {
+
+	// create new memory record from directory_map, given the input from 'db_key'
+	meta_blob := db_key.meta_blob
+	position  := db_key.position
+	meta := repositoryData.directory_map[meta_blob][position]
+	switch meta.Type {
+	case "file", "dir":
+		mtime := meta.mtime.String()[:19]
+		// compute Id_name, we need the back pointer to Table_names
+		row_name, ok := db_aggregate.Table_names[meta.name]
+		if !ok {
+			Printf("check_db_idd_file_row.id_name missing. Name=%s\n", meta.name)
+			// error return
+			return IddFileRecordMem{}
+		}
+		// this row is lacking 'Id_blob' which will be inserted later
+		row := IddFileRecordMem{Size: int(meta.size),
+				Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1],
+				Id_name: row_name.Id, Position: position, Status: "", Id: 1}
+		return row
+	}
+	// error return
+	return IddFileRecordMem{}
+}
+
+
+// this function reads the table idd_file by itself and generates an
+// incremental check for each memory row as it goes along. We therefore miss
+// a lot of large memory allocations
+func check_db_idd_file_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) bool {
+
+	// read table idd_file
+	ptr_index_repo := db_aggregate.pk_index_repo
+	rows, err := db_aggregate.tx.Queryx("SELECT * FROM idd_file")
+	defer rows.Close()
+
+	equal := true
+	print_count := 0
+	for rows.Next() {
+		var row IddFileRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("check_db_idd_file_v2.StructScan failed %v\n", err)
+			return false
+		}
+
+		row.Mtime = strings.Replace(row.Mtime, "T", " ", 1) // replace T with " "
+		row.Status = ""
+		row.Type = row.Type[0:1] // shorten type to one rune
+		row.Id = 1
+
+		// need the back mapping repo_index
+		meta_blob := ptr_index_repo[row.Id_blob]
+		db_key := CompIddFile{meta_blob: meta_blob, position: row.Position}
+		mem_value := check_db_idd_file_row(db_key, repositoryData, db_aggregate)
+		mem_value.Id_blob = row.Id_blob
+
+		if mem_value != row {
+			equal = false
+			Printf("idd_file.key %6d.%3d\n", meta_blob, row.Position)
+			Printf("  db   %+v\n", row)
+			Printf("  mem  %+v\n", mem_value)
+			print_count++
+			if print_count > 10 {
+				break
+			}
+		}
+	}
+	rows.Close()
+	return equal
+}
+
+func check_db_meta_dir_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) bool {
+	//Printf("check_db_meta_dir_v2\n")
+	ptr_snapshot := db_aggregate.pk_snapshots
+	ptr_index_repo := db_aggregate.pk_index_repo
+
+	// read tablr meta_dir
+	rows, err := db_aggregate.tx.Queryx("SELECT * FROM meta_dir")
+
+	print_count := 0
+	equal := true
+	for rows.Next() {
+		var row MetaDirRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("check_db_meta_dir_v2.StructScan failed %v\n", err)
+			return false
+		}
+
+		// need the back mapping to snapshots and repo_index
+		// and a composite index
+		snap_id := ptr_snapshot[row.Id_snap_id]
+		meta_blob := ptr_index_repo[row.Id_idd]
+		sn := repositoryData.snap_map[snap_id]
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+		set_data, ok := repositoryData.meta_dir_map[id_ptr]
+		if !ok {
+			equal = false
+			if print_count < 10 {
+				Printf("snap %s not in repositoryData.meta_dir_map\n", snap_id)
+			}
+			print_count++
+			continue
+		}
+
+		if !set_data.Has(meta_blob) {
+			if print_count < 10 {
+				Printf("meta_blob %6d not found in set\n", meta_blob)
+			}
+			equal = false
+			print_count++
+			continue
+		}
+	}
+	rows.Close()
+	return equal
+}
+
+func check_db_contents_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) bool {
+
+	//Printf("check_db_contents_v2\n")
+	equal := true
+	print_count := 0
+	ptr_index_repo := db_aggregate.pk_index_repo
+
+	// read table contents
+	rows, err := db_aggregate.tx.Queryx("SELECT * FROM contents")
+	defer rows.Close()
+
+	for rows.Next() {
+		var row ContentsRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("check_db_contents_v2.StructScan failed %v\n", err)
+			return false
+		}
+
+		// convert P.id_blob to meta_blob via back pointer in index_repo
+		meta_blob := ptr_index_repo[row.Id_blob]
+		data_blob := ptr_index_repo[row.Id_data_idd]
+		position := row.Position
+		offset := row.Offset
+
+		// access memory
+		meta := repositoryData.directory_map[meta_blob][position]
+		data_content_int := meta.content[offset]
+		if data_content_int != data_blob {
+			equal = false
+			if print_count < 10 {
+				Printf("contents data mismatch for %6d.%3d.%3d\n", meta_blob, position, offset)
+				Printf("db value %6d mem value %6d\n", data_blob, data_content_int)
+				print_count++
+			}
+		}
+	}
+	rows.Close()
+	return equal
+}
+
+func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) bool {
+	equal := true
+	print_count := 0
+
+	// loop over the contents of table index_repo
+	for ix, ptr_row := range db_aggregate.Table_index_repo {
+		// ix is a meta_blob_int (restic.IntID)
+		var index_type string
+		id := repositoryData.index_to_blob[ix]
+		data := repositoryData.index_handle[id]
+		pack_index := data.pack_index
+		if data.Type == restic.TreeBlob {
+			index_type = "tree"
+		} else {
+			index_type = "data"
+		}
+
+		// pack pointer to packfiles
+		ptr_packID := &(repositoryData.index_to_blob[pack_index])
+		data3, ok := db_aggregate.Table_packfiles[ptr_packID]
+		if !ok {
+			Printf("No matching packfile for %6d\n", pack_index)
+			return false
+		}
+		// create a new IndexRepoRecordMem
+		mem_value := IndexRepoRecordMem{Idd_size: int(data.size),
+			Index_type: index_type,	Id_pack_id: data3.Id, Idd: id.String(),
+			Status: "", Id: 1}
+
+		// prepare row:
+		row := *ptr_row
+		row.Status = ""
+		row.Id = 1
+
+		if row != mem_value {
+			equal = false
+			if print_count < 10 {
+				Printf("cmp_index_repo.blob = %s\n", mem_value.Idd[:12])
+				Printf("db  %+v\n", row)
+				Printf("mem %+v\n", mem_value)
+				print_count++
+			}
+		}
 	}
 	return equal
 }
 
-func check_db_idd_file(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+func check_db_packfiles_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 newComers *Newcomers) bool {
-	table_name := "idd_file"
-	// build a memory map of the packfiles
-	mem_idd_file_map := CreateMemIddFile(db_aggregate, repositoryData, newComers)
-	if mem_idd_file_map == nil {
-		return false
-	}
-	// compare keys
-	equal := CompareKeys(table_name, db_aggregate.Table_idd_file, mem_idd_file_map)
-	if !equal {
-		return equal
+	//Printf("check_db_packfiles_v2\n")
+	equal := true
+	print_count := 0
+
+	// we have to create a memory represenation of all current packfiles in memory
+	// collect all packfiles from the index_handle
+	pack_IDs := mapset.NewSet[*restic.ID]()
+	for _, handle := range repositoryData.index_handle {
+		pack_IDs.Add(&(repositoryData.index_to_blob[handle.pack_index]))
 	}
 
-	// check contents of idd_file
-	count_print := 0
-	for db_key, db_value := range db_aggregate.Table_idd_file {
-		mem_value := mem_idd_file_map[db_key]
-		if mem_value.Inode != db_value.Inode || mem_value.Size != db_value.Size ||
-			mem_value.Mtime  != db_value.Mtime || mem_value.Type != db_value.Type {
-			equal = false
-			Printf("key %6d.%3d\n", db_key.meta_blob, db_key.position)
-			Printf("  db   %8d %7d %s %-4s\n", db_value.Inode, db_value.Size,
-				db_value.Mtime, db_value.Type)
-			Printf("  mem  %8d %7d %s %-4s\n", mem_value.Inode, mem_value.Size,
-				mem_value.Mtime, mem_value.Type)
-			count_print++
-			if count_print > 20 {
-				break
-			}
+	// read data from table packfiles and check
+	for ix := range db_aggregate.Table_packfiles {
+		// ix is a *restic.ID
+		if pack_IDs.Contains(ix) {
+			continue
+		}
+
+		equal = false
+		if print_count < 10 {
+			Printf("packfile %s not found in repository\n", (*ix).String()[:12])
+			print_count++
 		}
 	}
+	pack_IDs = nil // reset Set
 	return equal
 }

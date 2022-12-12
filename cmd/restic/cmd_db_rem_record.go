@@ -3,7 +3,7 @@ package main
 // compile with "go run build.go -tags debug""
 // run with DEBUG_LOG=/home/wplapper/restic/debug.log fully-qualified-name/restic -r <repo> overview
 
-// ref to onedrive: rclone:onedrive:restic_backupss
+// ref to onedrive: rclone:onedrive:restic_backups
 
 import (
 	"golang.org/x/sync/errgroup"
@@ -17,12 +17,17 @@ import (
 	//"database/sql"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	//"github.com/wplapper/restic/library/mapset"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
 )
+
+type RemoveSqLTable struct {
+	table_name string
+	sql        string
+}
 
 var cmdDBRem = &cobra.Command{
 	Use:   "db_rem_record [flags]",
@@ -70,6 +75,10 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	if err != nil {
 		return err
 	}
+	repositoryData.snap_map = make(map[string]*restic.Snapshot)
+	for _, sn := range repositoryData.snaps {
+		repositoryData.snap_map[sn.ID().Str()] = sn
+	}
 
 	// step 2: manage Index Records
 	start := time.Now()
@@ -99,16 +108,25 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		Printf("db_add_record: OpenDatabase failed, error is %v\n", err)
 		return err
 	}
-
 	db_aggregate.db_conn = db_conn
+
+	tx, err := (db_aggregate).db_conn.Beginx()
+	if err != nil {
+		Printf("Cant start transaction. Error is %v\n", err)
+		return err
+	}
+	db_aggregate.tx = tx
+	Printf("BEGIN TRANSACTION\n")
+
 	names_and_counts := make(map[string]int)
 
 	// the first three tables can be read in paralel
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go(func() error { return sqlite.Get_all_high_ids() })
 	wg.Go(func() error { return readAllTablesAndCounts(db_conn, names_and_counts) })
-	wg.Go(func() error { return ReadSnapshotTable(db_conn, &db_aggregate) })
-	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
+	wg.Go(func() error { return ReadSnapshotTable(tx, &db_aggregate) })
+	wg.Go(func() error { return ReadNamesTable(tx, &db_aggregate) })
+	wg.Go(func() error { return ReadPackfilesTable(tx, &db_aggregate) })
 	res := wg.Wait()
 	if res != nil {
 		Printf("cmd_db_rem_record: error processing group 1\n")
@@ -116,116 +134,52 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 	db_aggregate.table_counts = names_and_counts
 
-	// the rest is sequential
-	err = ReadIndexRepoTable(db_conn, &db_aggregate)
+	// the last of the READs are sequential
+	err = ReadIndexRepoTable(tx, &db_aggregate)
 	if err != nil {
-		return err
-	}
-	err = ReadIddFileTable(db_conn, &db_aggregate)
-	if err != nil {
-		return err
-	}
-	err = ReadPackfilesTable(db_conn, &db_aggregate)
-	if err != nil {
-		Printf("Error processing ReadPackfilesTable. Error is %v\n", err)
+		Printf("ReadIndexRepoTable failed with error %v\n", err)
 		return err
 	}
 
-	// compare snapshots in memory with snapshots in the database
-	newComers.mem_snapshots = CreateMemSnapshots(&db_aggregate, repositoryData, newComers)
-	newComers.old_snapshots = OldDBKeys(db_aggregate.Table_snapshots, newComers.mem_snapshots)
-	Printf("%7d old records in old_snapshots\n", newComers.old_snapshots.Cardinality())
+	// TABLE snapshots
+	ProcessSnapshots(&db_aggregate, repositoryData, newComers)
 
-	// create TEMP TABLE remove_snaps
-	_, err = db_aggregate.db_conn.Exec("CREATE TEMP TABLE remove_snaps (id INTEGER)")
-	if err != nil {
-		Printf("error creating TEMP TABLE remove_snaps: %v\n", err)
-		return err
-	}
-
-	// fill TABLE remove_snaps
-	if newComers.old_snapshots.Cardinality() > 0 {
-		t_insert := make([]RemoveTable, 0, newComers.old_snapshots.Cardinality())
-		for snap_id := range newComers.old_snapshots.Iter() {
-			row := (db_aggregate.Table_snapshots)[snap_id]
-			row.Status = "delete"
-			(db_aggregate.Table_snapshots)[snap_id] = row
-			t_insert = append(t_insert, RemoveTable{Id: row.Id})
-		}
-
-		sql := "INSERT INTO remove_snaps(id) VALUES(:id)"
-		_, err := db_aggregate.db_conn.NamedExec(sql, t_insert)
-		if err != nil {
-			Printf("error INSERTing into TEMP TABLE remove_snaps: %v\n", err)
-			return err
-		}
-		Printf("INSERTED %d rows into TEMP TABLE remove_snaps\n", len(t_insert))
-	}
-
-	// compare packfiles with its DB counterpart
-	newComers.mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
-	newComers.old_packfiles = OldDBKeys(db_aggregate.Table_packfiles, newComers.mem_packfiles)
-	Printf("%7d old records in old_packfiles\n", newComers.old_packfiles.Cardinality())
+	// TABLE packfiles
+	newComers.Mem_packfiles = CreateMemPackfiles(&db_aggregate, repositoryData, newComers)
+	newComers.old_packfiles = OldDBKeys(db_aggregate.Table_packfiles, newComers.Mem_packfiles)
 	for packID := range newComers.old_packfiles.Iter() {
-		row := (db_aggregate.Table_packfiles)[packID]
+		row := db_aggregate.Table_packfiles[packID]
 		row.Status = "delete"
-		(db_aggregate.Table_packfiles)[packID] = row
+		db_aggregate.Table_packfiles[packID] = row
 	}
-	ComparePackfiles(&db_aggregate, repositoryData, newComers)
+	newComers.Mem_packfiles = nil
+	newComers.old_packfiles = nil
 
-	// compare index_repo with its DB counterpart
-	newComers.mem_index_repo = CreateMemIndexRepo(&db_aggregate, repositoryData, newComers)
-	newComers.old_index_repo = OldDBKeys(db_aggregate.Table_index_repo, newComers.mem_index_repo)
-	Printf("%7d old records in old_index_repo\n", newComers.old_index_repo.Cardinality())
-	for name := range newComers.old_index_repo.Iter() {
-		row := (db_aggregate.Table_index_repo)[name]
-		row.Status = "delete"
-		(db_aggregate.Table_index_repo)[name] = row
+	// TABLE index_repo
+	for ix, row := range db_aggregate.Table_index_repo {
+		blob := repositoryData.index_to_blob[ix]
+		if _, ok := repositoryData.index_handle[blob]; !ok {
+			row.Status = "delete"
+			db_aggregate.Table_index_repo[ix] = row
+		}
 	}
 
-	// compare names with its DB counterpart
-	newComers.mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
-	newComers.old_names = OldDBKeys(db_aggregate.Table_names, newComers.mem_names)
-	Printf("%7d old records in old_names\n", newComers.old_names.Cardinality())
+	// TABLE names
+	newComers.Mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
+	newComers.old_names = OldDBKeys(db_aggregate.Table_names, newComers.Mem_names)
 	for name := range newComers.old_names.Iter() {
 		row := db_aggregate.Table_names[name]
 		row.Status = "delete"
 		db_aggregate.Table_names[name] = row
 	}
-
-	// compare idd_file with its DB counterpart
-	newComers.mem_idd_file = CreateMemIddFile(&db_aggregate, repositoryData, newComers)
-	newComers.old_idd_file = OldDBKeys(db_aggregate.Table_idd_file, newComers.mem_idd_file)
-	Printf("%7d old records in old_idd_file\n", newComers.old_idd_file.Cardinality())
-	for comp_ix := range newComers.old_idd_file.Iter() {
-		row := (db_aggregate.Table_idd_file)[comp_ix]
-		row.Status = "delete"
-		(db_aggregate.Table_idd_file)[comp_ix] = row
-	}
+	newComers.Mem_names = nil
+	newComers.old_names = nil
 
 	// process index_repo changes
 	err = db_rem_index_repo(&db_aggregate, repositoryData, newComers)
 	if err != nil {
 		return err
 	}
-
-	// clear memory tables
-	newComers.mem_snapshots = make(map[string]*SnapshotRecordMem)
-	newComers.mem_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
-	newComers.mem_names = make(map[string]*NamesRecordMem)
-	newComers.mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
-	newComers.mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
-	newComers.mem_contents = make(map[CompContents]*ContentsRecordMem)
-	newComers.mem_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
-
-	// and the Sets
-	newComers.new_snapshots = mapset.NewSet[string]()
-	newComers.new_index_repo = mapset.NewSet[restic.IntID]()
-	newComers.new_names = mapset.NewSet[string]()
-	newComers.new_idd_file = mapset.NewSet[CompIddFile]()
-	newComers.new_meta_dir = mapset.NewSet[CompMetaDir]()
-	newComers.new_contents = mapset.NewSet[CompContents]()
-	newComers.new_packfiles = mapset.NewSet[*restic.ID]()
 
 	// modify database tables
 	modify_database_tables(&db_aggregate, repositoryData, newComers)
@@ -235,9 +189,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	newComers *Newcomers) error {
 
-	var temp_tables = []string{
-		// temp TABLE meta_blobs
-		`CREATE TEMP TABLE meta_blobs AS
+	var temp_table = `CREATE TEMP TABLE meta_blobs AS
     SELECT index_repo.id FROM remove_snaps
       JOIN meta_dir   ON meta_dir.id_snap_id = remove_snaps.id
       JOIN index_repo ON meta_dir.id_idd     = index_repo.id
@@ -245,59 +197,15 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
     SELECT index_repo.id FROM snapshots
       JOIN meta_dir   ON meta_dir.id_snap_id = snapshots.id
       JOIN index_repo ON meta_dir.id_idd     = index_repo.id
-      WHERE snapshots.id NOT IN (SELECT id FROM remove_snaps)`,
-		// temp TABLE data_blobs
-		`CREATE TEMP TABLE data_blobs AS
-    SELECT contents.id_data_idd FROM contents
-      JOIN idd_file
-      ON  contents.id_blob  = idd_file.id_blob
-      AND contents.position = idd_file.position
-      JOIN meta_blobs
-      ON meta_blobs.id = idd_file.id_blob
-    EXCEPT
-    SELECT contents.id_data_idd FROM contents
-      JOIN idd_file
-      ON  contents.id_blob  = idd_file.id_blob
-      AND contents.position = idd_file.position
-      JOIN index_repo ON index_repo.id
-        NOT IN (SELECT meta_blobs.id FROM meta_blobs)
-      WHERE index_repo.index_type = 'tree' AND idd_file.type = 'f'
-        AND idd_file.id_blob = index_repo.id`,
-		// TEMP TABLE touched_blobs, a UNION TABLE of 'meta_blobs'|'data_blobs'
-		// wih additional size and pack_id information
-		`CREATE TEMP TABLE touched_blobs AS
-     SELECT index_repo.id, index_repo.id_pack_id,index_repo.idd_size
-      FROM index_repo
-      JOIN meta_blobs
-      ON index_repo.id = meta_blobs.id
-     UNION
-     SELECT index_repo.id, index_repo.id_pack_id,index_repo.idd_size
-      FROM index_repo
-      JOIN data_blobs
-      ON index_repo.id = data_blobs.id_data_idd`}
+      WHERE snapshots.id NOT IN (SELECT id FROM remove_snaps)`
 
-	for _, sql := range temp_tables {
-		if dbOptions.echo {
-			Printf("%s\n", sql)
-		}
-		_, err := db_aggregate.db_conn.Exec(sql)
-		if err != nil {
-			Printf("error creating TEMP TABLE %s: %v\n", sql, err)
-			return err
-		}
+	if dbOptions.echo {
+		Printf("%s\n", temp_table)
 	}
-
-	if gOptions.verbosity > 1 {
-		var count int
-		for _, table_name := range []string{"meta_blobs", "data_blobs", "touched_blobs"} {
-			sql := "SELECT count(*) FROM " + table_name
-			err := db_aggregate.db_conn.Get(&count, sql)
-			if err != nil {
-				Printf("Query error for Get %s: %v\n", sql, err)
-				return err
-			}
-			Printf("TEMP TABLE %-15s has %5d entries.\n", table_name, count)
-		}
+	_, err := db_aggregate.tx.Exec(temp_table)
+	if err != nil {
+		Printf("error creating TEMP TABLE %s: %v\n", temp_table, err)
+		return err
 	}
 
 	count_updates := 0
@@ -324,39 +232,30 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 			count_updates++
 		}
 	}
-	Printf("number of updates to index_repo %5d\n", count_updates)
+	//Printf("number of updates to index_repo %5d\n", count_updates)
 	return nil
 }
 
 func modify_database_tables(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	newComers *Newcomers) error {
-	// et column names
-	column_names, err := GetColumnNames(db_aggregate.db_conn)
-	if err != nil {
-		return err
-	}
 
 	// start transaction
 	var changes_made = false
-	tx, err := (db_aggregate).db_conn.Beginx()
-	_ = tx
-	if err != nil {
-		Printf("Cant start transaction. Error is %v\n", err)
-		return err
-	}
-	Printf("BEGIN TRANSACTION\n")
+	var err error
+	tx := db_aggregate.tx
 
 	var sqls = []RemoveSqLTable{
-		RemoveSqLTable{table_name: "snapshots",
-			sql: `DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`},
-		RemoveSqLTable{table_name: "meta_dir",
-			sql: `DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`},
-		RemoveSqLTable{table_name: "contents",
-			sql: `DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
-		RemoveSqLTable{table_name: "idd_file",
-			sql: `DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
-		RemoveSqLTable{table_name: "index_repo",
-			sql: `DELETE FROM index_repo WHERE index_repo.id IN (SELECT id FROM meta_blobs)`}}
+		RemoveSqLTable{"snapshots",
+			`DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{"meta_dir",
+			`DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{"contents",
+			`DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"idd_file",
+			`DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
+		//RemoveSqLTable{"index_repo",
+		//	`DELETE FROM index_repo WHERE index_repo.id IN (SELECT id FROM meta_blobs)`},
+	}
 
 	for _, sql := range sqls {
 		if dbOptions.echo {
@@ -369,16 +268,15 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 			return err
 		}
 		count, _ := r.RowsAffected()
-		Printf("%-15s %5d rows deleted.\n", sql.table_name, count)
+		Printf("DELETE %-15s %5d rows deleted.\n", sql.table_name, count)
 		if count > 0 {
 			changes_made = true
 		}
 	}
 
 	// DELETE FROM names
-	t_delete := make([]RemoveTable, 0, newComers.old_names.Cardinality())
-	for name := range newComers.old_names.Iter() {
-		row := db_aggregate.Table_names[name]
+	t_delete := make([]RemoveTable, 0)
+	for _, row := range db_aggregate.Table_names {
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
@@ -386,25 +284,17 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 	delete_selected_rows(&t_delete, tx, "names", &changes_made)
 
 	// DELETE FROM packfiles
-	t_delete = make([]RemoveTable, 0, newComers.old_packfiles.Cardinality())
-	for key := range newComers.old_packfiles.Iter() {
-		row := (db_aggregate.Table_packfiles)[key]
+	t_delete = make([]RemoveTable, 0)
+	for _, row := range db_aggregate.Table_packfiles {
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
 	}
 	delete_selected_rows(&t_delete, tx, "packfiles", &changes_made)
 
-	// add to packfiles
-	err = InsTab("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made)
-	if err != nil {
-		return err
-	}
-
 	// DELETE FROM index_repo
-	t_delete = make([]RemoveTable, 0, newComers.old_index_repo.Cardinality())
-	for key := range newComers.old_index_repo.Iter() {
-		row := (db_aggregate.Table_index_repo)[key]
+	t_delete = make([]RemoveTable, 0)
+	for _, row := range db_aggregate.Table_index_repo {
 		if row.Status == "delete" {
 			t_delete = append(t_delete, RemoveTable{Id: row.Id})
 		}
@@ -419,6 +309,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 				Id_pack_id: row.Id_pack_id, Id: row.Id})
 		}
 	}
+
 	if len(update_table) > 0 {
 		sql := "UPDATE index_repo SET id_pack_id = :id_pack_id WHERE id = :id"
 		if dbOptions.echo {
@@ -429,6 +320,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 			Printf("error Prepare UPDATE index_repo: %v\n", err)
 			return err
 		}
+
 		// do one UPDATE at a time, loop over all changes
 		for _, slice := range update_table {
 			r, err := stmt.Exec(slice.Id_pack_id, slice.Id)
@@ -444,35 +336,43 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 				Printf("??? count=%d\n", count)
 			}
 		}
-		Printf("%5d rows of repo_index updated\n", len(update_table))
+		Printf("UPDATE repo_index %10d rows updated.\n", len(update_table))
 		changes_made = true
 	}
 
 	// update timestamp
-	if err = db_update_timestamp(db_aggregate.Table_snapshots, tx); err != nil {
+	if err := db_update_timestamp(db_aggregate.Table_snapshots, tx); err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
 	}
 
 	// COMMIT or ROLLBACK transaction
 	if !dbOptions.rollback && changes_made {
+		Printf("COMMIT\n")
 		err = tx.Commit()
 		if err != nil {
 			Printf("COMMIT error %v\n")
 			return err
 		}
-		Printf("COMMIT\n")
+
+		// now VACUUM
+		Printf("VACUUM\n")
+		_, err = db_aggregate.db_conn.Exec("VACUUM")
+		if err != nil {
+			Printf("VACUUM failed. Error is %v\n", err)
+		}
+		return err
 	} else {
-		tx.Rollback()
 		Printf("ROLLBACK\n")
+		tx.Rollback()
 	}
 	return nil
 }
 
-// this is an ugly fix, because sql / sqlx cannot do bulk DELETEs
+// this is an ugly fix, because sql / sqlx cannot do bulk DELETEs.
 // delete_selected_rows generates a bulk DELETE via subquery
 // DELETE FROM <table_name> WHERE id IN (SELECT id FROM delete_table)
 // but it can DELETE <table_name> WHERE id IN (SELECT id FROM <t_del>)
-func delete_selected_rows(t_del *[]RemoveTable, db *sqlx.Tx, table_name string,
+func delete_selected_rows(t_del *[]RemoveTable, tx *sqlx.Tx, table_name string,
 	changes_made *bool) error {
 
 	if len(*t_del) == 0 {
@@ -480,38 +380,68 @@ func delete_selected_rows(t_del *[]RemoveTable, db *sqlx.Tx, table_name string,
 	}
 
 	// CREATE TEMP TABLE
-	_, err := db.Exec("CREATE TEMP TABLE IF NOT EXISTS delete_table (id INTEGER)")
+	_, err := tx.Exec("CREATE TEMP TABLE IF NOT EXISTS delete_table (id INTEGER)")
 	if err != nil {
-		Printf("error creating TEMP TABLE delete_table: %v\n", err)
+		Printf("Error creating TEMP TABLE delete_table: %v\n", err)
 		return err
 	}
 
 	// fill - bulk INSERT works
 	sql := "INSERT INTO delete_table(id) VALUES(:id)"
-	if _, err = db.NamedExec(sql, *t_del); err != nil {
+	if _, err = tx.NamedExec(sql, *t_del); err != nil {
 		Printf("error INSERTing into TEMP TABLE delete_table: %v\n", err)
 		return err
 	}
 
 	// really DELETE via subquery in one go
 	sql = "DELETE FROM " + table_name + " WHERE id IN (SELECT id FROM delete_table)"
-	r, err := db.Exec(sql)
+	r, err := tx.Exec(sql)
 	if err != nil {
 		Printf("error in %s: error is: %v\n", sql, err)
 		return err
 	}
 	count, _ := r.RowsAffected()
-	Printf("DELETE %-15s %5d rows deleted\n", table_name, count)
+	Printf("DELETE %-15s %5d rows deleted.\n", table_name, count)
 	if count > 0 {
 		*changes_made = true
 	}
 
 	// empty TEMP TABLE
 	sql = "DELETE FROM delete_table"
-	r, err = db.Exec(sql)
+	r, err = tx.Exec(sql)
 	if err != nil {
 		Printf("error in %s: error is: %v\n", sql, err)
 		return err
 	}
+	return nil
+}
+
+func ProcessSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+	newComers *Newcomers) error {
+	t_insert := make([]RemoveTable, 0)
+	for snap_id, row := range db_aggregate.Table_snapshots {
+		if _, ok := repositoryData.snap_map[snap_id]; !ok {
+			t_insert = append(t_insert, RemoveTable{Id: row.Id})
+		}
+	}
+
+	// create TEMP TABLE remove_snaps
+	_, err := db_aggregate.tx.Exec("CREATE TEMP TABLE remove_snaps (id INTEGER)")
+	if err != nil {
+		Printf("error creating TEMP TABLE remove_snaps: %v\n", err)
+		return err
+	}
+
+	// fill TABLE remove_snaps
+	if len(t_insert) > 0 {
+		sql := "INSERT INTO remove_snaps(id) VALUES(:id)"
+		_, err := db_aggregate.tx.NamedExec(sql, t_insert)
+		if err != nil {
+			Printf("error INSERTing into TEMP TABLE remove_snaps: %v\n", err)
+			return err
+		}
+		Printf("INSERT remove_snaps    %5d rows inserted.\n", len(t_insert))
+	}
+	newComers.old_snapshots = nil
 	return nil
 }

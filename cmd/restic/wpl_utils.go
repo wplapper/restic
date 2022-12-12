@@ -14,13 +14,20 @@ import (
 
 	//deque
 	"github.com/gammazero/deque"
+
+	// sets
+	"github.com/wplapper/restic/library/mapset"
 )
 
 // static variable
 var gOptions GlobalOptions
 
+// system wide variables
+var db_aggregate DBAggregate
+var dbOptions DBOptions
+var newComers *Newcomers
+var repositoryData *RepositoryData
 var EMPTY_NODE_ID restic.ID
-//var PTR_EMPTY_NODE_ID *restic.ID
 var EMPTY_NODE_ID_TRANSLATED restic.IntID
 
 func init_repositoryData() *RepositoryData {
@@ -128,14 +135,13 @@ func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 	if !ok {
 		panic("No EMPTY_NODE_ID in repositoryData.blob_to_index!")
 	}
-	//Printf("length of blob_to_index %6d\n", len(repositoryData.blob_to_index))
 }
 
 // FindChildren steps through the directory_map and finds subdirectories.
 // The children get attached their parent
 func FindChildren(repositoryData *RepositoryData) {
 	//Printf("FindChildren start\n")
-	// 1. collect the chidren
+	// 1. collect the children
 	for parent, idd_file_list := range repositoryData.directory_map {
 		for _, node := range idd_file_list {
 			if node.Type == "dir" {
@@ -152,8 +158,7 @@ func FindChildren(repositoryData *RepositoryData) {
 
 	// 2. create tree roots for fullpath
 	for _, sn := range repositoryData.snaps {
-		tree_root := repositoryData.blob_to_index[*sn.Tree]
-		repositoryData.fullpath[tree_root] = "/"
+		repositoryData.fullpath[repositoryData.blob_to_index[*sn.Tree]] = "/"
 	}
 
 	// 3. create name tree for all meta_blobs
@@ -274,26 +279,26 @@ repositoryData *RepositoryData) error {
 	var m sync.Mutex
 
 	wg, ctx := errgroup.WithContext(gopts.ctx)
-	ch := make(chan restic.ID)
+	chan_tree_blob := make(chan restic.ID)
 	//Printf("%-26s ForAllMyTrees start\n", time.Now().Format("2006-01-02 15:04:05.999999"))
 	wg.Go(func() error {
-		defer close(ch)
+		defer close(chan_tree_blob)
 
 		// this callback function needs to return an 'id'
 		return DeliverTreeBlobs(repositoryData, func(id restic.ID) error {
 			select {
 			case <-ctx.Done():
-				return nil
-			case ch <- id:
+				// return nil
+			case chan_tree_blob <- id:
 			}
 			return nil
 		})
 	})
 
-	// a worker receives an snapshot ID from ch, loads the snapshot
+	// a worker receives a snapshot ID from chan_tree_blob, loads the tree
 	// and runs fn with id, the snapshot and the error
 	worker := func() error {
-		for id := range ch {
+		for id := range chan_tree_blob {
 			tree, err := restic.LoadTree(gopts.ctx, repo, id)
 			if err != nil {
 				Printf("LoadTree returned %v\n", err)
@@ -302,7 +307,8 @@ repositoryData *RepositoryData) error {
 
 			idd_file_list := make([]BlobFile2, len(tree.Nodes))
 			// do the work on the tree just received
-			for offset_in_node_list, node := range tree.Nodes {
+			offset_in_node_list := 0
+			for _, node := range tree.Nodes {
 				// setup these two place holders
 				content := make([]restic.IntID, 0)
 				subt_ID := EMPTY_NODE_ID_TRANSLATED
@@ -330,6 +336,7 @@ repositoryData *RepositoryData) error {
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
 					Type: node.Type, size: node.Size, inode: node.Inode,
 					mtime: node.ModTime, content: content, subtree_ID: subt_ID}
+				offset_in_node_list++
 			}
 
 			// get the index for our restic.ID storage
@@ -411,4 +418,19 @@ func ConfirmStdin() {
 	var input string
 	fmt.Scanln(&input)
 	return
+}
+
+// compare the keys of the equivalent memory and database table,
+// return the difference between database and memory
+func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
+	// define sets for the keys
+	set_db_keys := mapset.NewSet[K]()
+	set_mem_keys := mapset.NewSet[K]()
+	for key := range db {
+		set_db_keys.Add(key)
+	}
+	for key := range mem {
+		set_mem_keys.Add(key)
+	}
+	return set_db_keys.Difference(set_mem_keys)
 }

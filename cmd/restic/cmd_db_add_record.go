@@ -9,7 +9,7 @@ import (
 	// system
 	"fmt"
 	"golang.org/x/sync/errgroup"
-	"reflect"
+	//"reflect"
 	"strings"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	//"github.com/wplapper/restic/library/mapset"
 
 	// sqlx for sqlite3
 	"github.com/jmoiron/sqlx"
@@ -45,14 +45,14 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 
 func InitNewcomers() *Newcomers {
 	var new_comers Newcomers
-	new_comers.mem_snapshots = make(map[string]*SnapshotRecordMem)
-	new_comers.mem_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
-	new_comers.mem_names = make(map[string]*NamesRecordMem)
-	new_comers.mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
-	new_comers.mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
-	new_comers.mem_contents = make(map[CompContents]*ContentsRecordMem)
-	new_comers.mem_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
-
+	new_comers.Mem_snapshots = make(map[string]SnapshotRecordMem)
+	new_comers.Mem_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
+	new_comers.Mem_names = make(map[string]*NamesRecordMem)
+	new_comers.Mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
+	new_comers.Mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
+	new_comers.Mem_contents = make(map[CompContents]*ContentsRecordMem)
+	new_comers.Mem_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
+	/*
 	new_comers.new_snapshots = mapset.NewSet[string]()
 	new_comers.new_index_repo = mapset.NewSet[restic.IntID]()
 	new_comers.new_names = mapset.NewSet[string]()
@@ -60,6 +60,7 @@ func InitNewcomers() *Newcomers {
 	new_comers.new_meta_dir = mapset.NewSet[CompMetaDir]()
 	new_comers.new_contents = mapset.NewSet[CompContents]()
 	new_comers.new_packfiles = mapset.NewSet[*restic.ID]()
+	*/
 	return &new_comers
 }
 
@@ -67,12 +68,12 @@ func init() {
 	cmdRoot.AddCommand(cmdDBAdd)
 	flags := cmdDBAdd.Flags()
 	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
-	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROOLABCK databae operations")
+	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROLLBACK databae operations")
 	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
 type StdForAll func(GlobalOptions, *RepositoryData, *DBAggregate, *Newcomers) error
-type StdDbRead func(*sqlx.DB, *DBAggregate) error
+type StdDbRead func(*sqlx.Tx, *DBAggregate) error
 
 func runDBAdd(gopts GlobalOptions, args []string) error {
 	// step 0: setup global stuff
@@ -146,11 +147,20 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
+	// BEGIN TRANSACTION
+	tx, err := (db_aggregate).db_conn.Beginx()
+	if err != nil {
+		Printf("Cant start transaction. Error is %v\n", err)
+		return err
+	}
+	db_aggregate.tx = tx
+	Printf("BEGIN TRANSACTION\n")
+
 	// read three database tables in parallel
 	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return ReadSnapshotTable(db_conn, &db_aggregate) })
-	wg.Go(func() error { return ReadNamesTable(db_conn, &db_aggregate) })
-	wg.Go(func() error { return ReadPackfilesTable(db_conn, &db_aggregate) })
+	wg.Go(func() error { return ReadSnapshotTable(tx, &db_aggregate) })
+	wg.Go(func() error { return ReadNamesTable(tx, &db_aggregate) })
+	wg.Go(func() error { return ReadPackfilesTable(tx, &db_aggregate) })
 	res := wg.Wait()
 	if res != nil {
 		Printf("READ error processing group 1. Error is %v\n", res)
@@ -158,7 +168,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 
 	// Index Repo needs to run by itself
-	err = ReadIndexRepoTable(db_conn, &db_aggregate)
+	err = ReadIndexRepoTable(tx, &db_aggregate)
 	if err != nil {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
@@ -168,25 +178,20 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	PrintMemUsage()
   //ConfirmStdin()
 
-	// find new rows for these tables
-	wg, _ = errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return ForAllSnapShots(gopts, repositoryData, &db_aggregate, newComers) })
-	wg.Go(func() error { return ForAllPackfiles(gopts, repositoryData, &db_aggregate, newComers) })
-	wg.Go(func() error { return ForAllNames(gopts, repositoryData, &db_aggregate, newComers) })
-
-	res = wg.Wait()
-	if res != nil {
-		Printf("INSERT Error processing group 1. Error is %v\n", res)
-		return err
+	err1 := ForAllSnapShots(gopts, repositoryData, &db_aggregate, newComers)
+	err2 := ForAllPackfiles(gopts, repositoryData, &db_aggregate, newComers)
+	err3 := ForAllNames(gopts, repositoryData, &db_aggregate, newComers)
+	err4 := ForAllIndexRepo(gopts, repositoryData, &db_aggregate, newComers)
+	var errs = []error{err1, err2, err3, err4, nil}
+	for ix, err := range errs {
+		if err != nil && ix != 4 {
+			Printf("Error in processing function %d\n", ix + 1)
+			errs[4] = err
+		}
 	}
-
-	// we need ForAllIndexRepo by itself
-	err = ForAllIndexRepo(gopts, repositoryData, &db_aggregate, newComers)
-	if err != nil {
-		Printf("INSERT error ForAllIndexRepo. Error is %v\n", res)
-		return err
+	if errs[4] != nil {
+		return errs[4]
 	}
-
 	Printf("Usage after finding new rows for four database tables\n")
 	PrintMemUsage()
   //ConfirmStdin()
@@ -197,7 +202,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		a_map        string
 	}
 
-	// the main reason for sequential processinf is the amount of memory these
+	// the main reason for sequential processing is the amount of memory these
 	// functions create, henceforce sequential process and resetting the
 	// database tables afterwards
 	var process_list = []process_functions{
@@ -206,40 +211,30 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		{ReadContentsTable, ForAllContents, "contents"},
 	}
 	for _, actual := range process_list {
-		read_func := actual.read_func
-		for_all_func := actual.for_all_func
-		a_map := actual.a_map
-
 		// read database table
-		err := read_func(db_conn, &db_aggregate)
+		err := actual.read_func(tx, &db_aggregate)
 		if err != nil {
 			return err
 		}
 
 		// find new rows
-		err = for_all_func(gopts, repositoryData, &db_aggregate, newComers)
+		err = actual.for_all_func(gopts, repositoryData, &db_aggregate, newComers)
 		if err != nil {
 			return err
 		}
-
-		// empty the database table just processed
-		switch a_map {
-		case "meta_dir":
-			db_aggregate.Table_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
-		case "idd_file":
-			db_aggregate.Table_idd_file = make(map[CompIddFile]*IddFileRecordMem)
-		case "contents":
-			db_aggregate.Table_contents = make(map[CompContents]*ContentsRecordMem)
-		}
 	}
 
-	db_aggregate.Table_snapshots = make(map[string]*SnapshotRecordMem)
-	db_aggregate.Table_names = make(map[string]*NamesRecordMem)
-	db_aggregate.Table_packfiles = make(map[*restic.ID]*PackfilesRecordMem)
-	db_aggregate.Table_index_repo = make(map[restic.IntID]*IndexRepoRecordMem)
+	// reset table sizes
+	db_aggregate.Table_snapshots = nil
+	db_aggregate.Table_names = nil
+	db_aggregate.Table_packfiles = nil
+	db_aggregate.Table_index_repo = nil
+	db_aggregate.Table_meta_dir = nil
+	db_aggregate.Table_idd_file = nil
+	db_aggregate.Table_contents = nil
+
 	Printf("Usage after all new rows\n")
 	PrintMemUsage()
-	//ConfirmStdin()
 
 	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
@@ -250,7 +245,6 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 	return nil
 }
-
 
 // CommitNewRecords goes over all the Sets created before and INSERTs the
 // newly found data into the database
@@ -263,34 +257,28 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		return err
 	}
 
-	// BEGIN TRANSACTION
-	tx, err := (db_aggregate).db_conn.Beginx()
-	_ = tx
-	if err != nil {
-		Printf("Cant start transaction. Error is %v\n", err)
-		return err
-	}
-
-	Printf("BEGIN TRANSACTION\n")
 	changes_made := false
+	tx := db_aggregate.tx
+	err1 := InsTab("snapshots", newComers.Mem_snapshots,  tx, column_names, &changes_made)
+	err2 := InsTab("packfiles", newComers.Mem_packfiles,  tx, column_names, &changes_made)
+	err3 := InsTab("index_repo",newComers.Mem_index_repo, tx, column_names, &changes_made)
+	err4 := InsTab("names",     newComers.Mem_names,      tx, column_names, &changes_made)
+	err5 := InsTab("meta_dir",  newComers.Mem_meta_dir,   tx, column_names, &changes_made)
+	err6 := InsTab("idd_file",  newComers.Mem_idd_file,   tx, column_names, &changes_made)
+	err7 := InsTab("contents",  newComers.Mem_contents,   tx, column_names, &changes_made)
 
-	// all INSERTs can be done in parallel
-	Printf("Usage before INSERT\n")
-	PrintMemUsage()
-
-	wg, _ := errgroup.WithContext(gopts.ctx)
-	wg.Go(func() error { return InsTab("snapshots", newComers.mem_snapshots, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("packfiles", newComers.mem_packfiles, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("index_repo", newComers.mem_index_repo, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("names", newComers.mem_names, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("meta_dir", newComers.mem_meta_dir, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("idd_file", newComers.mem_idd_file, tx, column_names, &changes_made) })
-	wg.Go(func() error { return InsTab("contents", newComers.mem_contents, tx, column_names, &changes_made) })
-	res := wg.Wait()
-	if res != nil {
-		Printf("Error parallel INSERT INTO tables. Error is %v\n", res)
-		return res
+	// collect possible errors
+	var errs = []error{err1, err2, err3, err4, err5, err6, err7, nil}
+	for ix, err := range errs {
+		if err != nil && ix != 7 {
+			Printf("Error in processing function %d\n", ix + 1)
+			errs[7] = err
+		}
 	}
+	if errs[7] != nil {
+		return errs[7]
+	}
+
 	Printf("Usage after INSERT\n")
 	PrintMemUsage()
 	//ConfirmStdin()
@@ -299,7 +287,7 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	if len(db_aggregate.Table_snapshots) > 0 {
 		err = db_update_timestamp(db_aggregate.Table_snapshots, tx)
 	} else {
-		err = db_update_timestamp(newComers.mem_snapshots, tx)
+		err = db_update_timestamp(newComers.Mem_snapshots, tx)
 	}
 	if err != nil {
 		Printf("update timestamp failed: error is %v\n", err)
@@ -322,8 +310,9 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	return nil
 }
 
-func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
+func InsertTable[K comparable, V any] (tbl_name string, mem_table map[K]V,
 	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
+
 	if len(mem_table) == 0 {
 		return nil
 	}
@@ -354,7 +343,7 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 
 	// do the INSERT
 	// the splitting into segments could a bit more dynamic
-	// its is limited by the product of number-of-columns * rows_inserted
+	// its is limited by the product 'number-of-columns' * 'rows_inserted'
 	const OFFSET = 4000 // max 8 columns * 4000 = 32000 < 32k
 	for offset := 0; offset < len(t_insert); offset += OFFSET {
 		max := len(t_insert)
@@ -378,6 +367,7 @@ func InsertTable[K comparable, V any](tbl_name string, mem_table map[K]V,
 	return nil
 }
 
+/*
 // this is generic comparision function
 type MemBuildFunc func(*DBAggregate, *RepositoryData, *Newcomers)
 
@@ -391,46 +381,31 @@ func filter_new[K comparable, V any](mem_map map[K]V, status string) {
 		}
 	}
 }
+*/
 
 // generic funtion to INSERT new data into the database
 func InsTab[K comparable, V any](table_name string, mem_map map[K]V,
 	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
 	//filter_new(mem_map, "new")
-	return InsertTable(table_name, mem_map, tx, column_names, changes_made)
-}
-
-func ComparePackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-	newComers *Newcomers) error {
-	// compare packfiles with its DB counterpart
-	newComers.mem_packfiles = CreateMemPackfiles(db_aggregate, repositoryData, newComers)
-	newComers.new_packfiles = NewMemoryKeys(db_aggregate.Table_packfiles, newComers.mem_packfiles)
-	Printf("%7d new records in new_packfiles\n", newComers.new_packfiles.Cardinality())
-
-	high_pack := sqlite.Get_high_id("packfiles")
-	for pack_ID_ptr := range newComers.new_packfiles.Iter() {
-
-		row := newComers.mem_packfiles[pack_ID_ptr]
-		row.Status = "new"
-		row.Id = high_pack
-		newComers.mem_packfiles[pack_ID_ptr] = row
-
-		high_pack++
+	err := InsertTable(table_name, mem_map, tx, column_names, changes_made)
+	if table_name != "snapshots" {
+		mem_map = nil
 	}
-	return nil
+	return err
 }
 
 func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) {
 	// create blob summary
-	for key, data := range newComers.mem_index_repo {
+	for key, data := range newComers.Mem_index_repo {
 		if data.Status != "new" {
-			delete(newComers.mem_index_repo, key)
+			delete(newComers.Mem_index_repo, key)
 		}
 	}
 	sum_data_blobs := uint64(0)
 	sum_meta_blobs := uint64(0)
 	count_meta_blobs := 0
 	count_data_blobs := 0
-	for blob_int := range newComers.mem_index_repo {
+	for blob_int := range newComers.Mem_index_repo {
 		blob := repositoryData.index_to_blob[blob_int]
 		ih := repositoryData.index_handle[blob]
 		typ := ih.Type.String()[0:1]
@@ -451,7 +426,7 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 }
 
 // manage timestamp table (with one row)
-func db_update_timestamp(Table_snapshots map[string]*SnapshotRecordMem, tx *sqlx.Tx) error {
+func db_update_timestamp(Table_snapshots map[string]SnapshotRecordMem, tx *sqlx.Tx) error {
 	max_time := ""
 	for _, data := range Table_snapshots {
 		if data.Snap_time > max_time {

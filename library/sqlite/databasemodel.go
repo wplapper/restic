@@ -66,9 +66,8 @@ var SQLITE_TABLES = map[string]string{
 
   "names": `CREATE TABLE names (
   id INTEGER PRIMARY KEY,         -- the primary key
-  name TEXT,                      -- all names collected from restic system
+  name TEXT                       -- all names collected from restic system
   -- name is UNIQUE INDEX
-  name_type TEXT --one of b/d/p=basename,dirname,fullpath, INDEX
   )`,
 
   "timestamp": `CREATE TABLE timestamp (
@@ -85,10 +84,8 @@ var SQLITE_TABLES = map[string]string{
   position INTEGER NOT NULL,      -- position in idd_file
   offset   INTEGER NOT NULL,      -- the offset of the contents list
   -- the triple (id_blob, position, offset) is a UNIQUE INDEX
-  id_fullpath INTEGER NOT NULL,   -- reference to names.id
   FOREIGN KEY(id_data_idd) REFERENCES index_repo(id),
-  FOREIGN KEY(id_blob) REFERENCES     index_repo(id),
-  FOREIGN KEY(id_fullpath) REFERENCES names(id)
+  FOREIGN KEY(id_blob) REFERENCES     index_repo(id)
   )`,
 
   // history section
