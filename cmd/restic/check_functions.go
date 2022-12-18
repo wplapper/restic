@@ -2,7 +2,8 @@ package main
 
 import (
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
+
 	"github.com/wplapper/restic/library/restic"
 
 	"strings"
@@ -118,12 +119,13 @@ db_aggregate *DBAggregate) IddFileRecordMem {
 			Printf("check_db_idd_file_row.id_name missing. Name=%s\n", meta.name)
 			// error return
 			return IddFileRecordMem{}
+		} else {
+			// this row is lacking 'Id_blob' which will be inserted later
+			row := IddFileRecordMem{Size: int(meta.size),
+					Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1],
+					Id_name: row_name.Id, Position: position, Status: "", Id: 1}
+			return row
 		}
-		// this row is lacking 'Id_blob' which will be inserted later
-		row := IddFileRecordMem{Size: int(meta.size),
-				Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1],
-				Id_name: row_name.Id, Position: position, Status: "", Id: 1}
-		return row
 	}
 	// error return
 	return IddFileRecordMem{}
@@ -286,8 +288,8 @@ newComers *Newcomers) bool {
 		}
 
 		// pack pointer to packfiles
-		ptr_packID := &(repositoryData.index_to_blob[pack_index])
-		data3, ok := db_aggregate.Table_packfiles[ptr_packID]
+		//ptr_packID := &(repositoryData.index_to_blob[pack_index])
+		data3, ok := db_aggregate.Table_packfiles[pack_index]
 		if !ok {
 			Printf("No matching packfile for %6d\n", pack_index)
 			return false
@@ -323,21 +325,21 @@ newComers *Newcomers) bool {
 
 	// we have to create a memory represenation of all current packfiles in memory
 	// collect all packfiles from the index_handle
-	pack_IDs := mapset.NewSet[*restic.ID]()
+	pack_IDs := mapset.NewSet[restic.IntID]()
 	for _, handle := range repositoryData.index_handle {
-		pack_IDs.Add(&(repositoryData.index_to_blob[handle.pack_index]))
+		pack_IDs.Add(handle.pack_index)
 	}
 
 	// read data from table packfiles and check
 	for ix := range db_aggregate.Table_packfiles {
-		// ix is a *restic.ID
 		if pack_IDs.Contains(ix) {
 			continue
 		}
 
 		equal = false
 		if print_count < 10 {
-			Printf("packfile %s not found in repository\n", (*ix).String()[:12])
+			packID := repositoryData.index_to_blob[ix]
+			Printf("packfile %s not found in repository\n", packID.String()[:12])
 			print_count++
 		}
 	}

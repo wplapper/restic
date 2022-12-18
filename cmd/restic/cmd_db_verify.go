@@ -35,15 +35,14 @@ import (
 	//argparse
 	"github.com/spf13/cobra"
 
-	// sets
-	//"github.com/wplapper/restic/library/mapset"
-
 	// sqlx for sqlite3
 	//"github.com/jmoiron/sqlx"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
+	// sets
+	//"github.com/deckarep/golang-set/v2"
 )
 
 var cmdDBVerify = &cobra.Command{
@@ -111,7 +110,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
 	timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData (sum)", time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//PrintMemUsage()
 
 	// step 4.1: get database name
 	if dbOptions.altDB != "" {
@@ -188,9 +187,9 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
-	timeMessage("%-30s %10.1f seconds\n", "After READ 4 tables",
-		time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//timeMessage("%-30s %10.1f seconds\n", "After READ 4 tables",
+	//	time.Now().Sub(start).Seconds())
+	//PrintMemUsage()
 
 	// step 8: compare database and repository
 	var r1, r2, r3, r4, r5, r6, r7 bool
@@ -222,7 +221,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 	timeMessage("%-30s %10.1f seconds\n", "Compare all tables",
 		time.Now().Sub(start).Seconds())
-	PrintMemUsage()
+	//PrintMemUsage()
 
 	// step 9: check foreign key relationship
 	CheckForeignKeys(&db_aggregate, repositoryData)

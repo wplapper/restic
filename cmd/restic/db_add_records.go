@@ -6,7 +6,9 @@ import (
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
-	"github.com/wplapper/restic/library/mapset"
+
+	// sets
+	"github.com/deckarep/golang-set/v2"
 )
 
 /*
@@ -70,9 +72,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllSnapShots.res = %v\n", res)
-	}
 	return res
 }
 
@@ -131,8 +130,8 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 				}
 
 				pack_index := mem.pack_index
-				ptr_packID := &(repositoryData.index_to_blob[pack_index])
-				data3, ok3 := newComers.Mem_packfiles[ptr_packID]
+				//ptr_packID := &(repositoryData.index_to_blob[pack_index])
+				data3, ok3 := newComers.Mem_packfiles[pack_index]
 				if !ok3 {
 					// that will not do!
 					panic("ForAllIndexRepo: invalid packfile pointer!")
@@ -154,29 +153,19 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllIndexRepo.res = %v\n", res)
-	}
 	return res
 }
 
 // table packfiles
 func DeliverPackfileIds(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 fn func(id restic.IntID) error) error {
-	seen := mapset.NewSet[restic.IntID]()
+	//Printf("size of index_handle is %6d\n", len(repositoryData.index_handle))
 	for _, handle := range repositoryData.index_handle {
-		pack_intID := handle.pack_index
-		ix := &(repositoryData.index_to_blob)[pack_intID]
-		if _, ok := db_aggregate.Table_packfiles[ix]; ok {
+		if _, ok := db_aggregate.Table_packfiles[handle.pack_index]; ok {
 			continue
 		}
-		if seen.Contains(pack_intID) {
-			continue
-		}
-		seen.Add(pack_intID)
-		fn(pack_intID)
+		fn(handle.pack_index)
 	}
-	seen = nil
 	return nil
 }
 
@@ -204,23 +193,20 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 		})
 	})
 
-	// and attach the processin go routine
+	// and attach the processing go routine
 	wg.Go(func () error {
 		high_id := sqlite.Get_high_id("packfiles")
-		for id_int := range ch_pack {
-			target := &repositoryData.index_to_blob[id_int]
-			p := PackfilesRecordMem{Id: high_id, Packfile_id: (*target).String(),
+		for ix := range ch_pack {
+			target := repositoryData.index_to_blob[ix]
+			p := PackfilesRecordMem{Id: high_id, Packfile_id: target.String(),
 				Status: "new"}
-			newComers.Mem_packfiles[target] = &p
+			newComers.Mem_packfiles[ix] = &p
 			high_id++
 		}
 		return nil
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllPackfiles.res = %v\n", res)
-	}
 	return res
 }
 
@@ -311,9 +297,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllPackfiles.res = %v\n", res)
-	}
 	return res
 }
 
@@ -380,9 +363,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllNames.res = %v\n", res)
-	}
 	return res
 }
 
@@ -485,9 +465,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllIddFile.res = %v\n", res)
-	}
 	return res
 }
 
@@ -587,10 +564,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 		//Printf("Table contents %6d new rows\n", count)
 		return nil
 	})
-
 	res := wg.Wait()
-	if res != nil {
-		Printf("ForAllContents.res = %v\n", res)
-	}
 	return res
 }

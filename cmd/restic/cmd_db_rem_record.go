@@ -17,7 +17,7 @@ import (
 	//"database/sql"
 
 	// sets
-	//"github.com/wplapper/restic/library/mapset"
+	//"github.com/deckarep/golang-set/v2"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -55,14 +55,19 @@ func init() {
 
 func runDBRem(gopts GlobalOptions, args []string) error {
 	// step 0: setup global stuff
-	repositoryData := init_repositoryData() // is a *RepositoryData
-	newComers := InitNewcomers()
+	var (
+		repositoryData = init_repositoryData() // is a *RepositoryData
+		newComers = InitNewcomers()
+		db_name string
+		ok bool
+	)
 	db_aggregate.repositoryData = repositoryData
+	// EMPTY_NODE_ID = ac08ce34ba4f8123618661bef2425f7028ffb9ac740578a3ee88684d2523fee8
+	// this cannot be easily initialized durin compile,
+	// []byte is NOT const
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	// need access to verbose option
 	gOptions = gopts
-	var db_name string
-	var ok bool
 
 	// step 1: open repository
 	repo, err := OpenRepository(gopts)
@@ -90,6 +95,9 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	// step 3: collect all snapshot related information
 	start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
+	//Printf("After GatherAllRepoData\n")
+	//PrintMemUsage()
+	//ConfirmStdin()
 
 	// step 4.1: get database name
 	if dbOptions.altDB != "" {
@@ -110,13 +118,22 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 	db_aggregate.db_conn = db_conn
 
-	tx, err := (db_aggregate).db_conn.Beginx()
+	sql := "PRAGMA temp_store = memory"
+	_, err = db_aggregate.db_conn.Exec(sql)
+	if err != nil {
+		Printf("Can't set PRAGMA temp_store, error is %v\n", err)
+		return err
+	}
+
+	tx, err := db_aggregate.db_conn.Beginx()
 	if err != nil {
 		Printf("Cant start transaction. Error is %v\n", err)
 		return err
 	}
 	db_aggregate.tx = tx
 	Printf("BEGIN TRANSACTION\n")
+	//PrintMemUsage()
+	//ConfirmStdin()
 
 	names_and_counts := make(map[string]int)
 
@@ -124,6 +141,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	wg, _ := errgroup.WithContext(gopts.ctx)
 	wg.Go(func() error { return sqlite.Get_all_high_ids() })
 	wg.Go(func() error { return readAllTablesAndCounts(db_conn, names_and_counts) })
+
 	wg.Go(func() error { return ReadSnapshotTable(tx, &db_aggregate) })
 	wg.Go(func() error { return ReadNamesTable(tx, &db_aggregate) })
 	wg.Go(func() error { return ReadPackfilesTable(tx, &db_aggregate) })
@@ -140,6 +158,9 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		Printf("ReadIndexRepoTable failed with error %v\n", err)
 		return err
 	}
+	//Printf("After reading all tables\n")
+	//PrintMemUsage()
+	//ConfirmStdin()
 
 	// TABLE snapshots
 	ProcessSnapshots(&db_aggregate, repositoryData, newComers)
@@ -163,6 +184,7 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 			db_aggregate.Table_index_repo[ix] = row
 		}
 	}
+	CreateDeleteBlobSummary(&db_aggregate, repositoryData)
 
 	// TABLE names
 	newComers.Mem_names = CreateMemNames(&db_aggregate, repositoryData, newComers)
@@ -174,6 +196,9 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 	newComers.Mem_names = nil
 	newComers.old_names = nil
+	//Printf("Before DELETE\n")
+	//PrintMemUsage()
+	//ConfirmStdin()
 
 	// process index_repo changes
 	err = db_rem_index_repo(&db_aggregate, repositoryData, newComers)
@@ -212,15 +237,13 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	// update index_repo.id_pack_id, packfiles.id is master here!s
 	for id, ih := range repositoryData.index_handle {
 		id_int := repositoryData.blob_to_index[id]
-		pack_index := ih.pack_index
 		db_index_repo, ok := (db_aggregate.Table_index_repo)[id_int]
 		if !ok {
 			panic("update_index_repo: index_repo row not found in database")
 		}
 
-		// translate memory 'pack_index' into database packfiles index
-		pack_key := &(repositoryData.index_to_blob[pack_index])
-		pack_row, ok := (db_aggregate.Table_packfiles)[pack_key]
+		pack_index := ih.pack_index
+		pack_row, ok := (db_aggregate.Table_packfiles)[pack_index]
 		if !ok {
 			panic("update_index_repo: packfiles row not found in database")
 		}
@@ -236,108 +259,33 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	return nil
 }
 
+type process_remove func(*sqlx.Tx, *DBAggregate, *bool) error
+
+// make changes to the database. Use TEMP TABLE 'remove_snaps' to fire up
+// various DELETE requests from the dependent tables 'meta_dir', 'idd_file' and
+// 'contents'.
+// Remove rows from TABLEs 'names', 'packfiles' and 'index_repo' which where marked
+// as DELETE.
+// UPDATE rows from index_repo where the packfile has been changed during the
+// pruning process.
+// Last UPDATE the timestamp in the database.
 func modify_database_tables(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	newComers *Newcomers) error {
 
-	// start transaction
-	var changes_made = false
-	var err error
+	var (
+		changes_made = false
+		err error
+		do_the_jobs = []process_remove{
+			removeSecondaryTables, removePrimaryTables, updateIndexRepoTable,
+		}
+	)
+
 	tx := db_aggregate.tx
-
-	var sqls = []RemoveSqLTable{
-		RemoveSqLTable{"snapshots",
-			`DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`},
-		RemoveSqLTable{"meta_dir",
-			`DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`},
-		RemoveSqLTable{"contents",
-			`DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
-		RemoveSqLTable{"idd_file",
-			`DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
-		//RemoveSqLTable{"index_repo",
-		//	`DELETE FROM index_repo WHERE index_repo.id IN (SELECT id FROM meta_blobs)`},
-	}
-
-	for _, sql := range sqls {
-		if dbOptions.echo {
-			Printf("%s\n", sql.sql)
-		}
-
-		r, err := tx.Exec(sql.sql)
+	for _, do_one_job := range do_the_jobs {
+		err := do_one_job(tx, db_aggregate, &changes_made)
 		if err != nil {
-			Printf("error %s error is: %v\n", sql.sql, err)
 			return err
 		}
-		count, _ := r.RowsAffected()
-		Printf("DELETE %-15s %5d rows deleted.\n", sql.table_name, count)
-		if count > 0 {
-			changes_made = true
-		}
-	}
-
-	// DELETE FROM names
-	t_delete := make([]RemoveTable, 0)
-	for _, row := range db_aggregate.Table_names {
-		if row.Status == "delete" {
-			t_delete = append(t_delete, RemoveTable{Id: row.Id})
-		}
-	}
-	delete_selected_rows(&t_delete, tx, "names", &changes_made)
-
-	// DELETE FROM packfiles
-	t_delete = make([]RemoveTable, 0)
-	for _, row := range db_aggregate.Table_packfiles {
-		if row.Status == "delete" {
-			t_delete = append(t_delete, RemoveTable{Id: row.Id})
-		}
-	}
-	delete_selected_rows(&t_delete, tx, "packfiles", &changes_made)
-
-	// DELETE FROM index_repo
-	t_delete = make([]RemoveTable, 0)
-	for _, row := range db_aggregate.Table_index_repo {
-		if row.Status == "delete" {
-			t_delete = append(t_delete, RemoveTable{Id: row.Id})
-		}
-	}
-	delete_selected_rows(&t_delete, tx, "index_repo", &changes_made)
-
-	// UPDATE index_repo
-	update_table := make([]UpdateTable_index_repo, 0)
-	for _, row := range db_aggregate.Table_index_repo {
-		if row.Status == "update" {
-			update_table = append(update_table, UpdateTable_index_repo{
-				Id_pack_id: row.Id_pack_id, Id: row.Id})
-		}
-	}
-
-	if len(update_table) > 0 {
-		sql := "UPDATE index_repo SET id_pack_id = :id_pack_id WHERE id = :id"
-		if dbOptions.echo {
-			Printf("%s\n", sql)
-		}
-		stmt, err := tx.Prepare(sql)
-		if err != nil {
-			Printf("error Prepare UPDATE index_repo: %v\n", err)
-			return err
-		}
-
-		// do one UPDATE at a time, loop over all changes
-		for _, slice := range update_table {
-			r, err := stmt.Exec(slice.Id_pack_id, slice.Id)
-			if err != nil {
-				Printf("error UPDATE index_repo: %v\n", err)
-				return err
-			}
-
-			count, _ := r.RowsAffected()
-			if count == 1 {
-				continue
-			} else {
-				Printf("??? count=%d\n", count)
-			}
-		}
-		Printf("UPDATE repo_index %10d rows updated.\n", len(update_table))
-		changes_made = true
 	}
 
 	// update timestamp
@@ -368,54 +316,9 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 	return nil
 }
 
-// this is an ugly fix, because sql / sqlx cannot do bulk DELETEs.
-// delete_selected_rows generates a bulk DELETE via subquery
-// DELETE FROM <table_name> WHERE id IN (SELECT id FROM delete_table)
-// but it can DELETE <table_name> WHERE id IN (SELECT id FROM <t_del>)
-func delete_selected_rows(t_del *[]RemoveTable, tx *sqlx.Tx, table_name string,
-	changes_made *bool) error {
-
-	if len(*t_del) == 0 {
-		return nil
-	}
-
-	// CREATE TEMP TABLE
-	_, err := tx.Exec("CREATE TEMP TABLE IF NOT EXISTS delete_table (id INTEGER)")
-	if err != nil {
-		Printf("Error creating TEMP TABLE delete_table: %v\n", err)
-		return err
-	}
-
-	// fill - bulk INSERT works
-	sql := "INSERT INTO delete_table(id) VALUES(:id)"
-	if _, err = tx.NamedExec(sql, *t_del); err != nil {
-		Printf("error INSERTing into TEMP TABLE delete_table: %v\n", err)
-		return err
-	}
-
-	// really DELETE via subquery in one go
-	sql = "DELETE FROM " + table_name + " WHERE id IN (SELECT id FROM delete_table)"
-	r, err := tx.Exec(sql)
-	if err != nil {
-		Printf("error in %s: error is: %v\n", sql, err)
-		return err
-	}
-	count, _ := r.RowsAffected()
-	Printf("DELETE %-15s %5d rows deleted.\n", table_name, count)
-	if count > 0 {
-		*changes_made = true
-	}
-
-	// empty TEMP TABLE
-	sql = "DELETE FROM delete_table"
-	r, err = tx.Exec(sql)
-	if err != nil {
-		Printf("error in %s: error is: %v\n", sql, err)
-		return err
-	}
-	return nil
-}
-
+// compare snapshots on database with snapshots from repository
+// if snapshot not in repository, mark it "DELETE" and create TEMP TABLE,
+// fill TEMP TABLE
 func ProcessSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 	newComers *Newcomers) error {
 	t_insert := make([]RemoveTable, 0)
@@ -432,7 +335,7 @@ func ProcessSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		return err
 	}
 
-	// fill TABLE remove_snaps
+	// fill TEMP TABLE remove_snaps
 	if len(t_insert) > 0 {
 		sql := "INSERT INTO remove_snaps(id) VALUES(:id)"
 		_, err := db_aggregate.tx.NamedExec(sql, t_insert)
@@ -440,8 +343,209 @@ func ProcessSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 			Printf("error INSERTing into TEMP TABLE remove_snaps: %v\n", err)
 			return err
 		}
-		Printf("INSERT remove_snaps    %5d rows inserted.\n", len(t_insert))
+		//Printf("INSERT remove_snaps    %5d rows inserted.\n", len(t_insert))
 	}
-	newComers.old_snapshots = nil
+	return nil
+}
+
+// print a brief summary of changes in meta and datablobs, countd ans sizes
+func CreateDeleteBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData) {
+	// create blob summary
+	sum_data_blobs := 0
+	sum_meta_blobs := 0
+	count_meta_blobs := 0
+	count_data_blobs := 0
+	for _, row := range db_aggregate.Table_index_repo {
+		if row.Status == "delete" {
+			typ := row.Index_type[0:1]
+			if typ == "t" {
+				sum_meta_blobs += row.Idd_size
+				count_meta_blobs++
+			} else if typ == "d" {
+				sum_data_blobs += row.Idd_size
+				count_data_blobs++
+			}
+		}
+	}
+	Printf("\n*** Summary of data to be deleted from database ***\n")
+	Printf("type   count       size\n")
+	Printf("%s %7d %10.3f MiB\n", "meta", count_meta_blobs, float64(sum_meta_blobs)/ONE_MEG)
+	Printf("%s %7d %10.3f MiB\n", "data", count_data_blobs, float64(sum_data_blobs)/ONE_MEG)
+	Printf("%s %7d %10.3f MiB\n", "sum ", count_data_blobs + count_meta_blobs,
+		float64(sum_data_blobs + sum_meta_blobs) / ONE_MEG)
+	Printf("\n")
+}
+
+// remove rows from TABLEs 'names', 'packfiles' and 'index_repo'
+func removePrimaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *bool) error {
+	var sqlc = []RemoveSqLTable{
+		RemoveSqLTable{"names", "CREATE TEMP TABLE delete_names (id INTEGER PRIMARY KEY)"},
+		RemoveSqLTable{"packfiles", "CREATE TEMP TABLE delete_packfiles (id INTEGER PRIMARY KEY)"},
+		RemoveSqLTable{"index_repo", "CREATE TEMP TABLE delete_index_repo (id INTEGER PRIMARY KEY)"},
+	}
+	for _, sql := range sqlc {
+		if dbOptions.echo {
+			Printf("%s\n", sql.sql)
+		}
+
+		_, err := tx.Exec(sql.sql)
+		if err != nil {
+			Printf("error CREATE %s error is: %v\n", sql.table_name, err)
+			return err
+		}
+	}
+
+	// DELETE FROM names
+	sql := "INSERT INTO delete_names(id) VALUES(:id)"
+	name_stmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("Error Prepare %s error is %v\n", sql, err)
+		return err
+	}
+
+	for _, row := range db_aggregate.Table_names {
+		if row.Status == "delete" {
+			// INSERT INTO delete_names
+			_, err := name_stmt.Exec(row.Id)
+			if err != nil {
+				Printf("Error INSERT INFO delete_names, error is %v\n", err)
+				return err
+			}
+		}
+	}
+
+	// DELETE FROM packfiles
+	sql = "INSERT INTO delete_packfiles(id) VALUES(:id)"
+	pack_stmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("Error Prepare %s, error is %v\n", sql, err)
+		return err
+	}
+
+	for _, row := range db_aggregate.Table_packfiles {
+		if row.Status == "delete" {
+			// INSERT
+			_, err := pack_stmt.Exec(row.Id)
+			if err != nil {
+				Printf("Error INSERT INFO delete_packfiles, error is %v\n", err)
+				return err
+			}
+		}
+	}
+
+	// DELETE FROM index_repo - INSERT INTO temp TABLE
+	sql = "INSERT INTO delete_index_repo(id) VALUES(:id)"
+	repo_stmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("Error Prepare %s error is %v\n", sql, err)
+		return err
+	}
+
+	for _, row := range db_aggregate.Table_index_repo {
+		if row.Status == "delete" {
+			// INSERT
+			_, err := repo_stmt.Exec(row.Id)
+			if err != nil {
+				Printf("Error INSERT INFO delete_index_repo, error is %v\n", err)
+				return err
+			}
+		}
+	}
+
+	var del_stmts = []RemoveSqLTable{
+		RemoveSqLTable{"names", "DELETE FROM names WHERE id IN (SELECT id FROM delete_names)"},
+		RemoveSqLTable{"packfiles", "DELETE FROM packfiles WHERE id IN (SELECT id FROM delete_packfiles)"},
+		RemoveSqLTable{"index_repo", "DELETE FROM index_repo WHERE id IN (SELECT id FROM delete_index_repo)"},
+	}
+	for _, del_stmt := range del_stmts {
+		r, err := tx.Exec(del_stmt.sql)
+		if err != nil {
+			Printf("error DELETE from %s, error id %v\n", del_stmt.table_name, err)
+			return err
+		}
+		count, _ := r.RowsAffected()
+		Printf("DELETE %-15s %5d rows deleted.\n", del_stmt.table_name, count)
+		*changes_made = true
+	}
+	return nil
+}
+
+// remove rows from TABLEs which are defined by contents of TEMP TABLEs
+func removeSecondaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *bool) error {
+	var sqld = []RemoveSqLTable{
+		RemoveSqLTable{"snapshots",
+			`DELETE FROM snapshots WHERE snapshots.id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{"meta_dir",
+			`DELETE FROM meta_dir WHERE meta_dir.id_snap_id IN (SELECT id FROM remove_snaps)`},
+		RemoveSqLTable{"contents",
+			`DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"idd_file",
+			`DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
+	}
+
+	for _, sql := range sqld {
+		if dbOptions.echo {
+			Printf("%s\n", sql.sql)
+		}
+
+		r, err := tx.Exec(sql.sql)
+		if err != nil {
+			Printf("DELETE %s error is: %v\n", sql.table_name, err)
+			return err
+		}
+
+		count, _ := r.RowsAffected()
+		Printf("DELETE %-15s %5d rows deleted.\n", sql.table_name, count)
+		if count > 0 {
+			*changes_made = true
+		}
+	}
+	return nil
+}
+
+// UPDATE rows in TABLE index_repo which have been moved to new packfiles
+func updateIndexRepoTable(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *bool) error {
+	// we need a TEMP TABLE which contains the move blobs -> packfiles relationship
+	sql := "CREATE TEMP TABLE temp_update_ix_repo (id INTEGER PRIMARY KEY, id_pack_id INTEGER)"
+	_, err := tx.Exec(sql)
+	if err != nil {
+		Printf("Error CREATE TEMP TABLE, err is %v\n", err)
+		return err
+	}
+
+	// prepare INSERT into TEMP TABLE
+	sql = "INSERT INTO temp_update_ix_repo(id, id_pack_id) VALUES(:id, :id_pack_id)"
+	stmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("error Prepare INSERT temp_update_ix_repo: %v\n", err)
+		return err
+	}
+
+	for _, row := range db_aggregate.Table_index_repo {
+		if row.Status == "update" {
+			// INSERT
+			_, err := stmt.Exec(row.Id, row.Id_pack_id)
+			if err != nil {
+				Printf("Error INSERT temp_update_ix_repo, error is %v\n", err)
+				return err
+			}
+		}
+	}
+
+	// one BIG UPDATE UPDATE index_repo SET ... FROM temp_update_ix_repo
+	//         WHERE index_repo.id = temp_update_ix_repo.id
+	sql = `
+    UPDATE index_repo SET id_pack_id = temp_update_ix_repo.id_pack_id
+    FROM temp_update_ix_repo WHERE index_repo.id = temp_update_ix_repo.id`
+	r, err := tx.Exec(sql)
+	if err != nil {
+		Printf("error UPDATE index_repo: %v\n", err)
+		return err
+	}
+	count, _ := r.RowsAffected()
+	Printf("UPDATE repo_index %10d rows updated.\n", count)
+	if count > 0 {
+		*changes_made = true
+	}
 	return nil
 }

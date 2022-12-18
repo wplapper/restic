@@ -16,13 +16,14 @@ import (
 	"github.com/gammazero/deque"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	//"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
 )
 
 // static variable
 var gOptions GlobalOptions
 
-// system wide variables
+// system wide variables and containers
 var db_aggregate DBAggregate
 var dbOptions DBOptions
 var newComers *Newcomers
@@ -58,7 +59,7 @@ func GatherAllSnapshots(gopts GlobalOptions, repo restic.Repository) ([]*restic.
 		return nil
 	})
 
-	// now we can sort 'snaps': sort by sn.Time
+	// now we can sort 'snaps' by sn.Time
 	// sort is in-place!
 	sort.SliceStable(snaps, func(i, j int) bool {
 		return snaps[i].Time.Before(snaps[j].Time)
@@ -87,7 +88,7 @@ func HandleIndexRecords(gopts GlobalOptions, repo restic.Repository,
 }
 
 // this function converts restic.ID to IntID, forth and back
-// It also correlates bobs and pack IDs
+// It also correlates blobs and pack IDs
 func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 	repositoryData *RepositoryData) {
 
@@ -424,7 +425,8 @@ func ConfirmStdin() {
 // return the difference between database and memory
 func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.Set[K] {
 	// define sets for the keys
-	set_db_keys := mapset.NewSet[K]()
+	// these two sets are very short lived
+	set_db_keys  := mapset.NewSet[K]()
 	set_mem_keys := mapset.NewSet[K]()
 	for key := range db {
 		set_db_keys.Add(key)
@@ -432,5 +434,8 @@ func OldDBKeys[K comparable, V1 any, V2 any](db map[K]V1, mem map[K]V2) mapset.S
 	for key := range mem {
 		set_mem_keys.Add(key)
 	}
-	return set_db_keys.Difference(set_mem_keys)
+	diff := set_db_keys.Difference(set_mem_keys)
+	set_db_keys  = nil
+	set_mem_keys = nil
+	return diff
 }

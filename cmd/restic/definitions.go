@@ -8,13 +8,18 @@ import (
 	"github.com/wplapper/restic/library/restic"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	//"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
 
 	// sqlx for sqlite3
 	"github.com/jmoiron/sqlx"
 )
 
 // struct and type definitions
+
+const (
+	ONE_MEG = float64(1024.0 * 1024.0)
+)
 
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
@@ -174,14 +179,11 @@ type Newcomers struct {
 	Mem_idd_file   map[CompIddFile]*IddFileRecordMem
 	Mem_meta_dir   map[CompMetaDir]*MetaDirRecordMem
 	Mem_contents   map[CompContents]*ContentsRecordMem
-	Mem_packfiles  map[*restic.ID]*PackfilesRecordMem
+	Mem_packfiles  map[restic.IntID]*PackfilesRecordMem
 
 	// we aso need sets for easy manipulation
-	old_snapshots  mapset.Set[string]
-	old_index_repo mapset.Set[restic.IntID]
 	old_names      mapset.Set[string]
-	//old_idd_file   mapset.Set[CompIddFile]
-	old_packfiles  mapset.Set[*restic.ID]
+	old_packfiles  mapset.Set[restic.IntID]
 }
 
 type DBAggregate struct {
@@ -194,7 +196,7 @@ type DBAggregate struct {
 	Table_snapshots  map[string]SnapshotRecordMem
 	Table_index_repo map[restic.IntID]*IndexRepoRecordMem
 	Table_meta_dir   map[CompMetaDir]*MetaDirRecordMem
-	Table_packfiles  map[*restic.ID]*PackfilesRecordMem
+	Table_packfiles  map[restic.IntID]*PackfilesRecordMem
 	Table_idd_file   map[CompIddFile]*IddFileRecordMem
 	Table_names      map[string]*NamesRecordMem
 	Table_contents   map[CompContents]*ContentsRecordMem

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
 
 	// sqlite3 interface
 	"database/sql"
@@ -147,7 +147,7 @@ type DBDescriptor struct {
 	verbose         int
 	echo            bool
 	table_names     []string
-	table_names_map map[string]struct{}
+	table_names_map mapset.Set[string]
 }
 
 type TableIndex struct {
@@ -184,10 +184,9 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
 		return nil, err
 	}
 
-	db_descriptor.table_names_map = make(map[string]struct{},
-		len(db_descriptor.table_names))
+	db_descriptor.table_names_map = mapset.NewSet[string]()
 	for _, table_name := range db_descriptor.table_names {
-		db_descriptor.table_names_map[table_name] = struct{}{}
+		db_descriptor.table_names_map.Add(table_name)
 	}
 
 	//Printf("sqlite: calling init_tables\n")
@@ -233,8 +232,7 @@ func init_tables() error {
 	*/
 	//SQLite tables and INDEX definitions
 	for table_name, init_string := range SQLITE_TABLES {
-		_, ok := db_descriptor.table_names_map[table_name]
-		if ok {
+		if ok := db_descriptor.table_names_map.Contains(table_name); ok {
 			continue
 		}
 

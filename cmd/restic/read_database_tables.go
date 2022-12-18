@@ -2,7 +2,6 @@ package main
 
 import (
 	"strings"
-	//"reflect"
 
 	// sqlx for SQLite3
 	"database/sql"
@@ -40,7 +39,6 @@ func readAllTablesAndCounts(db_conn *sqlx.DB, table_counts map[string]int) error
 type TableInfo struct {
 	// from sqlite3 header ouputs
 	// cid|name|type|notnull|dflt_value|pk
-	// cid|name|type|notnull|dflt_value|pk
 	Cid        int
 	Name       string
 	Type       string
@@ -51,9 +49,9 @@ type TableInfo struct {
 
 // GetColumnNames creates a slice of all column names per table in the database
 func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
-	// utilize the pseudo table pragma_table_info to select the column names
+	// utilize the pseudo table pragma_table_info to retrieve the column names
 	table_column_names := make(map[string][]string)
-	// get table nams first
+	// get table names first
 	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
 	Table_names := make([]string, 0)
 	err := db_conn.Select(&Table_names, sql)
@@ -64,7 +62,7 @@ func GetColumnNames(db_conn *sqlx.DB) (map[string][]string, error) {
 
 	for _, tbl_name := range Table_names {
 		column_names := make([]string, 0)
-		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('" + tbl_name + "')")
+		rows, err := db_conn.Queryx("SELECT * FROM pragma_table_info('"+tbl_name+"')")
 		if err != nil {
 			Printf("SELECT * FROM pragma_table_info error is %v\n", err)
 			return nil, err
@@ -123,14 +121,11 @@ func ReadSnapshotTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 // load the database rows for table index_repo into memory
 func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 
-	// store results in db_index_repo
 	db_index_repo := make(map[restic.IntID]*IndexRepoRecordMem)
 	PK_index_repo := make(map[int]restic.IntID)
 	repositoryData := db_aggregate.repositoryData
 	rows, err := db_conn.Queryx("SELECT * FROM index_repo")
 	defer rows.Close()
-
-	//print_count := 0
 	for rows.Next() {
 		var row IndexRepoRecordMem
 		err = rows.StructScan(&row)
@@ -142,7 +137,7 @@ func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		// convert idd to ID
 		idd_as_ID, err := restic.ParseID(row.Idd)
 		if err != nil {
-			Printf("Parse failed for %s %v\n", row.Idd, err)
+			Printf("ReadIndexRepoTable:Parse failed for %s %v\n", row.Idd, err)
 			return err
 		}
 		Ptr2ID3(idd_as_ID, repositoryData, "ix_repo_DB")
@@ -169,12 +164,11 @@ func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 
 // load the database rows for table index_repo into memory
 func ReadMetaDirTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
-
-	// store results in db_index_repo
 	ptr_snapshot := db_aggregate.pk_snapshots
 	ptr_index_repo := db_aggregate.pk_index_repo
 	db_meta_dir := make(map[CompMetaDir]*MetaDirRecordMem)
 	rows, err := db_conn.Queryx("SELECT * FROM meta_dir")
+	defer rows.Close()
 
 	for rows.Next() {
 		var row MetaDirRecordMem
@@ -207,6 +201,7 @@ func ReadIddFileTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	ptr_index_repo := db_aggregate.pk_index_repo
 	db_idd_file := make(map[CompIddFile]*IddFileRecordMem)
 	rows, err := db_conn.Queryx("SELECT * FROM idd_file")
+	defer rows.Close()
 
 	for rows.Next() {
 		var row IddFileRecordMem
@@ -230,7 +225,7 @@ func ReadIddFileTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		Inode    int64
 		Mtime    string
 		Type     string
-		* */
+		*/
 		row.Status = "db"
 		db_idd_file[CompIddFile{meta_blob: meta_blob, position: row.Position}] = &row
 	}
@@ -244,6 +239,7 @@ func ReadNamesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	//table_name := "names"
 	db_names := make(map[string]*NamesRecordMem)
 	rows, err := db_conn.Queryx("SELECT * FROM names")
+	defer rows.Close()
 
 	for rows.Next() {
 		var row NamesRecordMem
@@ -267,8 +263,9 @@ func ReadNamesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 // load the database rows for table packfiles into memory
 func ReadPackfilesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	//table_name := "packfiles"
-	db_packfiles := make(map[*restic.ID]*PackfilesRecordMem)
+	db_packfiles := make(map[restic.IntID]*PackfilesRecordMem)
 	rows, err := db_conn.Queryx("SELECT * FROM packfiles")
+	defer rows.Close()
 
 	for rows.Next() {
 		var row PackfilesRecordMem
@@ -284,12 +281,14 @@ func ReadPackfilesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 			return err
 		}
 
-		id_ptr := Ptr2ID3(id, db_aggregate.repositoryData, "ReadPackfilesTable") // ReadPackfilesTable
+		Ptr2ID3(id, db_aggregate.repositoryData, "ReadPackfilesTable") // ReadPackfilesTable
+		int_id := db_aggregate.repositoryData.blob_to_index[id]
 		row.Status = "db"
-		db_packfiles[id_ptr] = &row
+		db_packfiles[int_id] = &row
 	}
 	rows.Close()
 	db_aggregate.Table_packfiles = db_packfiles
+	//Printf("ReadPackfilesTable: number of rows %6d\n", len(db_packfiles))
 	return nil
 }
 

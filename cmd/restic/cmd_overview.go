@@ -16,7 +16,8 @@ import (
 
 	// restic library
 	//"github.com/deckarep/golang-set"
-	"github.com/wplapper/restic/library/mapset"
+	//"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
 	"github.com/wplapper/restic/library/restic"
 )
 

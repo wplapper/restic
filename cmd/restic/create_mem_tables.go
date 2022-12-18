@@ -6,66 +6,15 @@ import (
 	"github.com/wplapper/restic/library/restic"
 
 	// sets
-	"github.com/wplapper/restic/library/mapset"
+	"github.com/deckarep/golang-set/v2"
+	//"github.com/wplapper/restic/library/mapset"
 )
 
-func CreateMemSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) map[string]SnapshotRecordMem {
-
-	Mem_snapshots := make(map[string]SnapshotRecordMem, len(repositoryData.snaps))
-	for _, sn := range repositoryData.snaps {
-		key := sn.ID().Str()
-		data, ok := db_aggregate.Table_snapshots[key]
-		if !ok {
-			row := SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
-				Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
-				Snap_fsys: sn.Paths[0], Snap_id: key, Status: "memory"}
-			Mem_snapshots[key] = row
-		} else {
-			data.Status = "db"
-			Mem_snapshots[key] = data
-		}
-	}
-	return Mem_snapshots
-}
-
-func CreateMemIndexRepo(db_aggregate *DBAggregate,
-	repositoryData *RepositoryData, newComers *Newcomers) map[restic.IntID]*IndexRepoRecordMem {
-
-	// make a new map for all entries stored in memory
-	mem_repo_index_map := make(map[restic.IntID]*IndexRepoRecordMem,
-		len(repositoryData.index_handle))
-
-	var index_type string
-	for id, data := range repositoryData.index_handle {
-		id_int := repositoryData.blob_to_index[id]
-		data2, ok := db_aggregate.Table_index_repo[id_int]
-		if ok {
-			data2.Status = "db"
-			mem_repo_index_map[id_int] = data2
-		} else {
-			pack_index := data.pack_index
-			if data.Type == restic.TreeBlob {
-				index_type = "tree"
-			} else {
-				index_type = "data"
-			}
-
-			// pack pointer
-			ptr_packID := &(repositoryData.index_to_blob[pack_index])
-			data3, ok3 := newComers.Mem_packfiles[ptr_packID]
-			if !ok3 {
-				return nil
-			}
-			id_pack_id_mem := data3.Id
-			row := IndexRepoRecordMem{Idd_size: int(data.size),
-				Index_type: index_type,	Id_pack_id: id_pack_id_mem, Idd: id.String(),
-				Status: "memory"}
-			mem_repo_index_map[id_int] = &row
-		}
-	}
-	return mem_repo_index_map
-}
+/*
+ * We need these two functions, since names and packfiles are embedded in other
+ * repository structures. To be able to handle them easily, they need to be
+ * made visible.
+ */
 
 func CreateMemNames(db_aggregate *DBAggregate,
 	repositoryData *RepositoryData, newComers *Newcomers) map[string]*NamesRecordMem {
@@ -90,7 +39,7 @@ func CreateMemNames(db_aggregate *DBAggregate,
 }
 
 func CreateMemPackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
-newComers *Newcomers) map[*restic.ID]*PackfilesRecordMem {
+newComers *Newcomers) map[restic.IntID]*PackfilesRecordMem {
 
 	// collect all packfiles from the index_handle
 	pack_intIDs := mapset.NewSet[restic.IntID]()
@@ -99,16 +48,17 @@ newComers *Newcomers) map[*restic.ID]*PackfilesRecordMem {
 	}
 
 	// convert the set to a map of Mem_packfiles_map
-	Mem_packfiles_map := make(map[*restic.ID]*PackfilesRecordMem, pack_intIDs.Cardinality())
+	Mem_packfiles_map := make(map[restic.IntID]*PackfilesRecordMem, pack_intIDs.Cardinality())
 	for pack_intID := range pack_intIDs.Iter() {
-		ix := &(repositoryData.index_to_blob)[pack_intID]
-		data, ok := (db_aggregate.Table_packfiles)[ix]
+		//ix := &(repositoryData.index_to_blob)[pack_intID]
+		data, ok := db_aggregate.Table_packfiles[pack_intID]
 		if !ok {
-			row := PackfilesRecordMem{Packfile_id: (*ix).String(), Status: "memory"}
-			Mem_packfiles_map[ix] = &row
+			packID := repositoryData.index_to_blob[pack_intID]
+			row := PackfilesRecordMem{Packfile_id: packID.String(), Status: "memory"}
+			Mem_packfiles_map[pack_intID] = &row
 		} else {
 			data.Status = "db"
-			Mem_packfiles_map[ix] = data
+			Mem_packfiles_map[pack_intID] = data
 		}
 	}
 	pack_intIDs = nil
