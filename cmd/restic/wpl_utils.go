@@ -114,7 +114,7 @@ func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 		}
 
 		// build index_handle
-		repositoryData.index_handle[blob.ID] = Index_Handle{Type: blob.Type, size: blob.Length,
+		repositoryData.index_handle[blob.ID] = Index_Handle{Type: blob.Type, size: int(blob.Length),
 			pack_index: repositoryData.blob_to_index[blob.PackID],
 			blob_index: repositoryData.blob_to_index[blob.ID]}
 	}

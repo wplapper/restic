@@ -15,17 +15,21 @@ import (
 	"github.com/spf13/cobra"
 
 	// restic library
-	//"github.com/deckarep/golang-set"
-	//"github.com/wplapper/restic/library/mapset"
-	"github.com/deckarep/golang-set/v2"
 	"github.com/wplapper/restic/library/restic"
+
+	// sets
+	"github.com/deckarep/golang-set/v2"
 )
+
+type snapGroup struct {
+	host string
+	fsys string
+}
 
 var cmdOverview = &cobra.Command{
 	Use:   "overview [flags]",
 	Short: "show summary of snapshots by host and filesystems",
-	Long: `
-show summary of snapshots by host and filesystems.
+	Long: `show summary of snapshots by host and filesystems.
 
 EXIT STATUS
 ===========
@@ -40,6 +44,8 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 
 func init() {
 	cmdRoot.AddCommand(cmdOverview)
+	flags := cmdOverview.Flags()
+	flags.BoolVarP(&dbOptions.timing, "timing", "T", false, "produce timings")
 }
 
 func runOverview(gopts GlobalOptions) error {
@@ -54,8 +60,8 @@ func runOverview(gopts GlobalOptions) error {
 	if err != nil {
 		return err
 	}
-	if gopts.verbosity > 0 {
-		Printf("%-30s in %10.1f seconds.\n", "open repository",
+	if dbOptions.timing {
+		Printf("%-30s %10.1f seconds.\n", "open repository",
 			time.Now().Sub(start).Seconds())
 	}
 
@@ -63,31 +69,28 @@ func runOverview(gopts GlobalOptions) error {
 	if err != nil {
 		return err
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "gather snapshots",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 2.1: manage Index Records
-	start = time.Now()
+	//start = time.Now()
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
 		return err
 	}
-
-	start = time.Now()
-	GatherAllRepoData(gopts, repo, repositoryData)
-	timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData (sum)", time.Now().Sub(start).Seconds())
-
-	// step 2.2 gather size info for each blob
-	blobs_from_ix := make(map[restic.ID]uint)
-	for blob := range repo.Index().Each(gopts.ctx) {
-		blobs_from_ix[blob.ID] = blob.Length
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "read index records",
+			time.Now().Sub(start).Seconds())
 	}
-	timeMessage("%-30s in %10.1f seconds\n", "read all index records", time.Now().Sub(start).Seconds())
+
+	GatherAllRepoData(gopts, repo, repositoryData)
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 4: build snap groups by host and filesystem
-	type snapGroup struct {
-		host string
-		fsys string
-	}
-
-	start = time.Now()
 	groups := make(map[snapGroup][]*restic.Snapshot)
 	for _, sn := range repositoryData.snaps {
 		host := sn.Hostname
@@ -103,7 +106,6 @@ func runOverview(gopts GlobalOptions) error {
 		groups_sorted[index] = group
 		index++
 	}
-
 	sort.Slice(groups_sorted, func(i, j int) bool {
 		if groups_sorted[i].host < groups_sorted[j].host {
 			return true
@@ -124,19 +126,19 @@ func runOverview(gopts GlobalOptions) error {
 
 		// step 8: gather blobs for the constructed tree lists
 		// get the data from our repository_data structures
-		usedIntBlobs := restic.NewIntSet()
-		count_file_sets := mapset.NewSet[uint64]()
+		data_blobs_in_group := restic.NewIntSet()
+		inodes_in_group := mapset.NewSet[uint64]()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
 			id_ptr := Ptr2ID(*sn.ID(), repositoryData)
-			usedIntBlobs.Merge(repositoryData.meta_dir_map[id_ptr])
+			data_blobs_in_group.Merge(repositoryData.meta_dir_map[id_ptr])
 			for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 				for _, meta := range repositoryData.directory_map[meta_blob] {
 					if meta.Type == "file" {
+						inodes_in_group.Add(meta.inode)
 						for _, cont := range meta.content {
-							usedIntBlobs.Insert(cont)
+							data_blobs_in_group.Insert(cont)
 						}
-						count_file_sets.Add(meta.inode)
 					}
 				}
 			}
@@ -145,36 +147,36 @@ func runOverview(gopts GlobalOptions) error {
 		// step 9: access size information on used blobs
 		count_data_blobs := 0
 		count_meta_blobs := 0
-		group_size := uint64(0)
-		for int_blob := range usedIntBlobs {
-			blobID := repositoryData.index_to_blob[int_blob]
-			ih := repositoryData.index_handle[blobID]
+		group_size := 0
+		for int_blob := range data_blobs_in_group {
+			ih := repositoryData.index_handle[repositoryData.index_to_blob[int_blob]]
 			if ih.Type == restic.DataBlob {
-				group_size += uint64(blobs_from_ix[blobID])
+				group_size += ih.size
 				count_data_blobs++
 			} else if ih.Type == restic.TreeBlob {
 				count_meta_blobs++
 			}
 		}
 		Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n",
-			host, fsys, len(groups[group]), count_meta_blobs, count_file_sets.Cardinality(),
-			count_data_blobs, float64(group_size)/1024.0/1024.0)
+			host, fsys, len(groups[group]), count_meta_blobs, inodes_in_group.Cardinality(),
+			count_data_blobs, float64(group_size) / ONE_MEG)
+		inodes_in_group = nil
+		data_blobs_in_group = nil
 	}
 
 	// *** ALL ***
-	usedIntBlobs := restic.NewIntSet()
-	count_file_sets := mapset.NewSet[uint64]()
+	all_blobs := restic.NewIntSet()
+	all_inodes_repo := mapset.NewSet[uint64]()
 	for _, sn := range repositoryData.snaps {
-		// step trough the list of meta_blobs and collect data
 		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
-		usedIntBlobs.Merge(repositoryData.meta_dir_map[id_ptr])
+		all_blobs.Merge(repositoryData.meta_dir_map[id_ptr])
 		for meta_blob := range repositoryData.meta_dir_map[id_ptr] {
 			for _, meta := range repositoryData.directory_map[meta_blob] {
 				if meta.Type == "file" {
+					all_inodes_repo.Add(meta.inode)
 					for _, cont := range meta.content {
-						usedIntBlobs.Insert(cont)
+						all_blobs.Insert(cont)
 					}
-					count_file_sets.Add(meta.inode)
 				}
 			}
 		}
@@ -183,12 +185,11 @@ func runOverview(gopts GlobalOptions) error {
 	// step 9: access size information on ALL blobs
 	count_data_blobs := 0
 	count_meta_blobs := 0
-	size_repo := uint64(0)
-	for int_blob := range usedIntBlobs {
-		blobID := repositoryData.index_to_blob[int_blob]
-		ih := repositoryData.index_handle[blobID]
+	size_repo := 0
+	for int_blob := range all_blobs {
+		ih := repositoryData.index_handle[repositoryData.index_to_blob[int_blob]]
 		if ih.Type == restic.DataBlob {
-			size_repo += uint64(blobs_from_ix[blobID])
+			size_repo += ih.size
 			count_data_blobs++
 		} else if ih.Type == restic.TreeBlob {
 			count_meta_blobs++
@@ -196,9 +197,14 @@ func runOverview(gopts GlobalOptions) error {
 	}
 	Printf("%s\n", strings.Repeat("=", 118))
 	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n", "summary", "", len(repositoryData.snaps),
-		count_meta_blobs, count_file_sets.Cardinality(), count_data_blobs,
-		float64(size_repo)/1024.0/1024.0)
+		count_meta_blobs, all_inodes_repo.Cardinality(), count_data_blobs,
+		float64(size_repo) / ONE_MEG)
 
-	timeMessage("%-30s in %10.1f seconds\n", "gather data for groups", time.Now().Sub(start).Seconds())
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "gather data for groups",
+			time.Now().Sub(start).Seconds())
+	}
+	all_blobs = nil
+	all_inodes_repo = nil
 	return nil
 }

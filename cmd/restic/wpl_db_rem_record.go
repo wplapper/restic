@@ -14,10 +14,6 @@ import (
 
 	// sqlx for sqlite3
 	"github.com/jmoiron/sqlx"
-	//"database/sql"
-
-	// sets
-	//"github.com/deckarep/golang-set/v2"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -31,8 +27,8 @@ type RemoveSqLTable struct {
 
 var cmdDBRem = &cobra.Command{
 	Use:   "db_rem_record [flags]",
-	Short: "remove records from SQLite database",
-	Long: `add records to SQLite database.
+	Short: "remove rows from SQLite database",
+	Long: `remove rows from SQLite database.
 
 EXIT STATUS
 ===========
@@ -50,6 +46,7 @@ func init() {
 	flags := cmdDBRem.Flags()
 	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
 	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROOLABCK databae operations")
+	flags.BoolVarP(&dbOptions.timing, "timing", "T", false, "produce timings")
 	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
@@ -61,10 +58,9 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		db_name string
 		ok bool
 	)
+	start := time.Now()
 	db_aggregate.repositoryData = repositoryData
 	// EMPTY_NODE_ID = ac08ce34ba4f8123618661bef2425f7028ffb9ac740578a3ee88684d2523fee8
-	// this cannot be easily initialized durin compile,
-	// []byte is NOT const
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
 	// need access to verbose option
 	gOptions = gopts
@@ -75,6 +71,10 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	Printf("Repository is %s\n", gopts.Repo)
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "open repository",
+			time.Now().Sub(start).Seconds())
+	}
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
@@ -84,20 +84,27 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	for _, sn := range repositoryData.snaps {
 		repositoryData.snap_map[sn.ID().Str()] = sn
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "gather snapshots",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 2: manage Index Records
-	start := time.Now()
-	_ = start
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
 		return err
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "read index records",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 3: collect all snapshot related information
-	start = time.Now()
+	//start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
-	//Printf("After GatherAllRepoData\n")
-	//PrintMemUsage()
-	//ConfirmStdin()
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 4.1: get database name
 	if dbOptions.altDB != "" {
@@ -158,11 +165,12 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 		Printf("ReadIndexRepoTable failed with error %v\n", err)
 		return err
 	}
-	//Printf("After reading all tables\n")
-	//PrintMemUsage()
-	//ConfirmStdin()
+	/*if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After reading 4 tables",
+			time.Now().Sub(start).Seconds())
+	}*/
 
-	// TABLE snapshots
+	// TABLE snapshots triggers all the DELETE processing
 	ProcessSnapshots(&db_aggregate, repositoryData, newComers)
 
 	// TABLE packfiles
@@ -184,6 +192,11 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 			db_aggregate.Table_index_repo[ix] = row
 		}
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "find old rows - 4 tables",
+			time.Now().Sub(start).Seconds())
+	}
+
 	CreateDeleteBlobSummary(&db_aggregate, repositoryData)
 
 	// TABLE names
@@ -196,9 +209,6 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 	newComers.Mem_names = nil
 	newComers.old_names = nil
-	//Printf("Before DELETE\n")
-	//PrintMemUsage()
-	//ConfirmStdin()
 
 	// process index_repo changes
 	err = db_rem_index_repo(&db_aggregate, repositoryData, newComers)
@@ -207,7 +217,15 @@ func runDBRem(gopts GlobalOptions, args []string) error {
 	}
 
 	// modify database tables
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "before modify_database_tables",
+			time.Now().Sub(start).Seconds())
+	}
 	modify_database_tables(&db_aggregate, repositoryData, newComers)
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "after  modify_database_tables",
+			time.Now().Sub(start).Seconds())
+	}
 	return nil
 }
 
@@ -239,12 +257,17 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 		id_int := repositoryData.blob_to_index[id]
 		db_index_repo, ok := (db_aggregate.Table_index_repo)[id_int]
 		if !ok {
+			packID := repositoryData.index_to_blob[id_int]
+			Printf("missing entry for blob %s at index %6d\n", packID.String()[:12], id_int)
 			panic("update_index_repo: index_repo row not found in database")
 		}
 
 		pack_index := ih.pack_index
 		pack_row, ok := (db_aggregate.Table_packfiles)[pack_index]
 		if !ok {
+			packID := repositoryData.index_to_blob[pack_index]
+			Printf("missing packfile %s for index %6d\n", packID.String()[:12], pack_index)
+			Printf("Run db_add_record first!\n")
 			panic("update_index_repo: packfiles row not found in database")
 		}
 
@@ -255,7 +278,6 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 			count_updates++
 		}
 	}
-	//Printf("number of updates to index_repo %5d\n", count_updates)
 	return nil
 }
 
@@ -276,9 +298,10 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 		changes_made = false
 		err error
 		do_the_jobs = []process_remove{
-			removeSecondaryTables, removePrimaryTables, updateIndexRepoTable,
-		}
-	)
+			removeSecondaryTables,
+			removePrimaryTables,
+			updateIndexRepoTable,
+	})
 
 	tx := db_aggregate.tx
 	for _, do_one_job := range do_the_jobs {
@@ -413,6 +436,7 @@ func removePrimaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *b
 			}
 		}
 	}
+	name_stmt.Close()
 
 	// DELETE FROM packfiles
 	sql = "INSERT INTO delete_packfiles(id) VALUES(:id)"
@@ -432,6 +456,7 @@ func removePrimaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *b
 			}
 		}
 	}
+	pack_stmt.Close()
 
 	// DELETE FROM index_repo - INSERT INTO temp TABLE
 	sql = "INSERT INTO delete_index_repo(id) VALUES(:id)"
@@ -451,6 +476,7 @@ func removePrimaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *b
 			}
 		}
 	}
+	repo_stmt.Close()
 
 	var del_stmts = []RemoveSqLTable{
 		RemoveSqLTable{"names", "DELETE FROM names WHERE id IN (SELECT id FROM delete_names)"},
@@ -531,6 +557,7 @@ func updateIndexRepoTable(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *
 			}
 		}
 	}
+	stmt.Close()
 
 	// one BIG UPDATE UPDATE index_repo SET ... FROM temp_update_ix_repo
 	//         WHERE index_repo.id = temp_update_ix_repo.id

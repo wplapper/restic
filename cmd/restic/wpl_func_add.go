@@ -13,9 +13,10 @@ import (
 
 /*
  * The combination of the two corresponding functions Deliver...IDs and
- * ForAll... pick up dat from the repository and create a correctly filled
+ * ForAll... pick up data from the repository and create a correctly filled
  * row for the table in question.
  * ! Important: Only missing entries are created !
+ * These functions are used to determine new rows for the database.
  */
 
 func DeliverSnapShotsIDs(repositoryData *RepositoryData, db_aggregate *DBAggregate,
@@ -79,8 +80,7 @@ func DeliverIndexRepoIds(repositoryData *RepositoryData, db_aggregate *DBAggrega
 fn func(id restic.IntID) error) error {
 	for id := range repositoryData.index_handle {
 		id_int := repositoryData.blob_to_index[id]
-		_, ok := db_aggregate.Table_index_repo[id_int]
-		if ok {
+		if _, ok := db_aggregate.Table_index_repo[id_int]; ok {
 			continue
 		}
 		fn(id_int)
@@ -113,42 +113,25 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	wg.Go(func () error {
-		//count := 0
 		high_id := sqlite.Get_high_id("index_repo")
 		var index_type string
 		for id_int := range ch_blob {
 			var mem_ix_repo IndexRepoRecordMem
-			var ok bool
-			_, ok = db_aggregate.Table_index_repo[id_int]
-			if !ok {
-				ID := repositoryData.index_to_blob[id_int]
-				mem := repositoryData.index_handle[ID]
-				if mem.Type == restic.TreeBlob {
-					index_type = "tree"
-				} else {
-					index_type = "data"
-				}
-
-				pack_index := mem.pack_index
-				//ptr_packID := &(repositoryData.index_to_blob[pack_index])
-				data3, ok3 := newComers.Mem_packfiles[pack_index]
-				if !ok3 {
-					// that will not do!
-					panic("ForAllIndexRepo: invalid packfile pointer!")
-				}
-				id_pack_id_mem := data3.Id
-
-				mem_ix_repo = IndexRepoRecordMem{Id: high_id, Idd: ID.String(),
-					Idd_size: int(mem.size), Index_type: index_type,
-					Id_pack_id: id_pack_id_mem, Status: "new"}
+			ID := repositoryData.index_to_blob[id_int]
+			mem := repositoryData.index_handle[ID]
+			if mem.Type == restic.TreeBlob {
+				index_type = "tree"
 			} else {
-				mem_ix_repo = *(db_aggregate.Table_index_repo[id_int])
+				index_type = "data"
 			}
+
+			data3 := newComers.Mem_packfiles[mem.pack_index]
+			mem_ix_repo = IndexRepoRecordMem{Id: high_id, Idd: ID.String(),
+				Idd_size: int(mem.size), Index_type: index_type,
+				Id_pack_id: data3.Id, Status: "new"}
 			newComers.Mem_index_repo[id_int] = &mem_ix_repo
 			high_id++
-			//count++
 		}
-		//Printf("Table index_repo  %6d new rows\n", count)
 		return nil
 	})
 
@@ -261,7 +244,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			// access snap back pointer
 			mem_snap, ok := newComers.Mem_snapshots[snap_id]
 			if !ok {
-				// might be an existin snapshot
+				// might be an existing snapshot
 				data_snap, ok2 := db_aggregate.Table_snapshots[snap_id]
 				if !ok2 {
 					panic("no snapshot row found")
@@ -290,9 +273,7 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 				Id_idd: id_idd, Status: "new"}
 			newComers.Mem_meta_dir[ix] = &mem
 			high_id++
-			//count++
 		}
-		//Printf("Table meta_dir      %6d new rows\n", count)
 		return nil
 	})
 
@@ -349,16 +330,13 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	// and attach the processin go routine
-	//count := 0
 	wg.Go(func () error {
 		high_id := sqlite.Get_high_id("names")
 		for name := range ch_names {
 			mem := NamesRecordMem{Id: high_id, Name: name, Status: "new"}
 			newComers.Mem_names[name] = &mem
 			high_id++
-			//count++
 		}
-		//Printf("Table names      %6d new rows\n", count)
 		return nil
 	})
 
@@ -410,7 +388,6 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	// and attach the processing go routine
-	count := 0
 	wg.Go(func () error {
 		high_id := sqlite.Get_high_id("idd_file")
 		for ix := range ch_idd_file {
@@ -419,48 +396,37 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 			var id_name int
 			meta_blob := ix.meta_blob
 			position  := ix.position
-
-			mem_ptr, ok := db_aggregate.Table_idd_file[ix]
-			if !ok {
-				// we have to build new row
-				node := repositoryData.directory_map[meta_blob][position]
-				name = node.name
-				db_names, ok := db_aggregate.Table_names[name]
-				if ok {
-					// name found, has Id
-					id_name = db_names.Id
-				} else {
-					Mem_names, ok2 := newComers.Mem_names[name]
-					if !ok2 {
-						Printf("ForAllIddFile: No name back pointer for %s\n", name)
-						panic("No name back pointer!")
-					} else {
-						id_name = Mem_names.Id
-					}
-				}
-
-				// we need back pointer to Id_blob
-				mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
-				if !ok {
-					Printf("ForAllIddFile: No ndex_repo back pointer for meta_blob %6d\n",
-						meta_blob)
-					panic("No index_repo back pointer!")
-				}
-				id_blob := mem_ix_repo.Id
-
-				mem = IddFileRecordMem{Position: position, Size: int(node.size),
-					Id_blob: id_blob, Inode: int64(node.inode), Mtime: node.mtime.String()[:19],
-					Type: node.Type, Id_name: id_name, Status: "new"}
+			node := repositoryData.directory_map[meta_blob][position]
+			name = node.name
+			db_names, ok := db_aggregate.Table_names[name]
+			if ok {
+				// name found, has Id
+				id_name = db_names.Id
 			} else {
-				mem = *mem_ptr
-				mem.Status = "new"
+				Mem_names, ok2 := newComers.Mem_names[name]
+				if !ok2 {
+					Printf("ForAllIddFile: No name back pointer for %s\n", name)
+					panic("No name back pointer!")
+				} else {
+					id_name = Mem_names.Id
+				}
 			}
-			mem.Id = high_id
+
+			// we need back pointer to Id_blob
+			mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
+			if !ok {
+				Printf("ForAllIddFile: No ndex_repo back pointer for meta_blob %6d\n",
+					meta_blob)
+				panic("No index_repo back pointer!")
+			}
+			id_blob := mem_ix_repo.Id
+
+			mem = IddFileRecordMem{Id: high_id, Position: position, Size: int(node.size),
+				Id_blob: id_blob, Inode: int64(node.inode), Mtime: node.mtime.String()[:19],
+				Type: node.Type, Id_name: id_name, Status: "new"}
 			newComers.Mem_idd_file[ix] = &mem
 			high_id++
-			count++
 		}
-		//Printf("Table idd_file %6d new rows\n", count)
 		return nil
 	})
 
@@ -510,58 +476,49 @@ db_aggregate *DBAggregate, newComers *Newcomers) error {
 	})
 
 	// and attach the processing go routine
-	count := 0
 	wg.Go(func () error {
 		high_id := sqlite.Get_high_id("contents")
 		for ix := range ch_contents {
-			var mem ContentsRecordMem
-			var id_data_id int
-			meta_blob := ix.meta_blob
-			position  := ix.position
-			offset    := ix.offset
+			var (
+				mem        ContentsRecordMem
+				id_data_id int
+				meta_blob  restic.IntID = ix.meta_blob
+				position   int          = ix.position
+				offset     int          = ix.offset
+			)
 
-			db_ptr, ok := db_aggregate.Table_contents[ix]
+			// we need back pointer to Id_blob
+			mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
 			if !ok {
-				// we have to build new row
-
-				// we need back pointer to Id_blob
-				mem_ix_repo, ok := newComers.Mem_index_repo[meta_blob]
-				if !ok {
-					Printf("ForAllContents: No ndex_repo back pointer for meta_blob %6d\n",
-						meta_blob)
-					panic("ForAllContents: No index_repo back pointer!")
-				}
-				id_blob := mem_ix_repo.Id
-
-				meta := repositoryData.directory_map[meta_blob][position]
-				data_blob := meta.content[offset]
-				row_ix_repo, ok :=  newComers.Mem_index_repo[data_blob]
-				if !ok {
-					db_ix_repo, ok2 := db_aggregate.Table_index_repo[data_blob]
-					if !ok2 {
-						Printf("contents index is %+v\n", ix)
-						Printf("ForAllContents: No index_repo back pointer for data_blob %6d\n",
-							data_blob)
-						panic("ForAllContents: No index_repo back pointer for data_blob!")
-					} else {
-						id_data_id = db_ix_repo.Id
-					}
-				} else {
-					id_data_id = row_ix_repo.Id
-				}
-
-				mem = ContentsRecordMem{Position: position, Offset: offset,
-					Id_data_idd: id_data_id, Id_blob: id_blob, Status: "new"}
-			} else {
-				mem = *db_ptr
-				mem.Status = "new"
+				Printf("ForAllContents: No ndex_repo back pointer for meta_blob %6d\n",
+					meta_blob)
+				panic("ForAllContents: No index_repo back pointer!")
 			}
-			mem.Id = high_id
+			id_blob := mem_ix_repo.Id
+
+			// construct 'id_data_id' back pointer
+			meta := repositoryData.directory_map[meta_blob][position]
+			data_blob := meta.content[offset]
+			row_ix_repo, ok :=  newComers.Mem_index_repo[data_blob]
+			if !ok {
+				db_ix_repo, ok2 := db_aggregate.Table_index_repo[data_blob]
+				if !ok2 {
+					Printf("contents index is %+v\n", ix)
+					Printf("ForAllContents: No index_repo back pointer for data_blob %6d\n",
+						data_blob)
+					panic("ForAllContents: No index_repo back pointer for data_blob!")
+				} else {
+					id_data_id = db_ix_repo.Id
+				}
+			} else {
+				id_data_id = row_ix_repo.Id
+			}
+
+			mem = ContentsRecordMem{Id: high_id, Position: position, Offset: offset,
+				Id_data_idd: id_data_id, Id_blob: id_blob, Status: "new"}
 			newComers.Mem_contents[ix] = &mem
 			high_id++
-			count++
 		}
-		//Printf("Table contents %6d new rows\n", count)
 		return nil
 	})
 	res := wg.Wait()

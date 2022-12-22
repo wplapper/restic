@@ -35,14 +35,9 @@ import (
 	//argparse
 	"github.com/spf13/cobra"
 
-	// sqlx for sqlite3
-	//"github.com/jmoiron/sqlx"
-
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
-	// sets
-	//"github.com/deckarep/golang-set/v2"
 )
 
 var cmdDBVerify = &cobra.Command{
@@ -65,6 +60,7 @@ func init() {
 	cmdRoot.AddCommand(cmdDBVerify)
 	flags := cmdDBVerify.Flags()
 	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
+	flags.BoolVarP(&dbOptions.timing, "timing", "T", false, "produce timings")
 	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
 }
 
@@ -87,7 +83,9 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	Printf("Repository is %s\n", gopts.Repo) //repo.cfg.ID)
-	//timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "open repository", time.Now().Sub(start).Seconds())
+	}
 
 	// step 1: gather the snapshot information
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
@@ -98,18 +96,25 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	for _, sn := range repositoryData.snaps {
 		repositoryData.snap_map[sn.ID().Str()] = sn
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
+	}
 
 	// step 2: manage Index Records
-	start = time.Now()
+	//start = time.Now()
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
 		return err
 	}
-	//timeMessage("%-30s %10.1f seconds\n", "read index records", time.Now().Sub(start).Seconds())
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "read index records", time.Now().Sub(start).Seconds())
+	}
 
 	// step 3: collect all repository related information
-	start = time.Now()
+	//start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
-	timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData (sum)", time.Now().Sub(start).Seconds())
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData", time.Now().Sub(start).Seconds())
+	}
 	//PrintMemUsage()
 
 	// step 4.1: get database name
@@ -124,6 +129,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	}
 
 	// step 4.2: open selected database -- XXX more generic verbose & echo options
+	//start = time.Now()
 	db_conn, err := sqlite.OpenDatabase(db_name, true, 1, true)
 	if err != nil {
 		Printf("db_verify: OpenDatabase failed, error is %v\n", err)
@@ -132,7 +138,7 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	db_aggregate.db_conn = db_conn
 
 	// step 5: BEGIN TRANSACTION
-	start = time.Now()
+	//start = time.Now()
 	tx, err := (db_aggregate).db_conn.Beginx()
 	if err != nil {
 		Printf("Cant start transaction. Error is %v\n", err)
@@ -163,8 +169,10 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		if len(tbl_name) >= 9 && tbl_name[:9] == "timestamp" {
 			continue
 		}
-		count := names_and_counts[tbl_name]
-		Printf("%-25s %8d\n", tbl_name, count)
+		Printf("%-25s %8d\n", tbl_name, names_and_counts[tbl_name])
+	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After initial DB", time.Now().Sub(start).Seconds())
 	}
 
 	// step 7: READ database
@@ -187,8 +195,9 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 		return err
 	}
 
-	//timeMessage("%-30s %10.1f seconds\n", "After READ 4 tables",
-	//	time.Now().Sub(start).Seconds())
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After READ 4 tables", time.Now().Sub(start).Seconds())
+	}
 	//PrintMemUsage()
 
 	// step 8: compare database and repository
@@ -219,8 +228,10 @@ func runDBVerify(gopts GlobalOptions, args []string) error {
 	} else {
 		Printf("*** some tables fail to compare! ***\n")
 	}
-	timeMessage("%-30s %10.1f seconds\n", "Compare all tables",
-		time.Now().Sub(start).Seconds())
+
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "Compare all tables",	time.Now().Sub(start).Seconds())
+	}
 	//PrintMemUsage()
 
 	// step 9: check foreign key relationship

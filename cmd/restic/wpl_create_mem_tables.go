@@ -7,13 +7,12 @@ import (
 
 	// sets
 	"github.com/deckarep/golang-set/v2"
-	//"github.com/wplapper/restic/library/mapset"
 )
 
 /*
  * We need these two functions, since names and packfiles are embedded in other
  * repository structures. To be able to handle them easily, they need to be
- * made visible.
+ * made visible and extractable.
  */
 
 func CreateMemNames(db_aggregate *DBAggregate,
@@ -50,7 +49,6 @@ newComers *Newcomers) map[restic.IntID]*PackfilesRecordMem {
 	// convert the set to a map of Mem_packfiles_map
 	Mem_packfiles_map := make(map[restic.IntID]*PackfilesRecordMem, pack_intIDs.Cardinality())
 	for pack_intID := range pack_intIDs.Iter() {
-		//ix := &(repositoryData.index_to_blob)[pack_intID]
 		data, ok := db_aggregate.Table_packfiles[pack_intID]
 		if !ok {
 			packID := repositoryData.index_to_blob[pack_intID]

@@ -8,18 +8,18 @@ import (
 	"github.com/wplapper/restic/library/restic"
 
 	// sets
-	//"github.com/wplapper/restic/library/mapset"
 	"github.com/deckarep/golang-set/v2"
 
 	// sqlx for sqlite3
 	"github.com/jmoiron/sqlx"
 )
 
-// struct and type definitions
-
 const (
 	ONE_MEG = float64(1024.0 * 1024.0)
 )
+
+// type definions
+type IntID int
 
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
@@ -35,7 +35,7 @@ type BlobFile2 struct {
 type Index_Handle struct {
 	blob_index restic.IntID
 	pack_index restic.IntID
-	size       uint
+	size       int
 	Type       restic.BlobType
 }
 
@@ -53,12 +53,13 @@ type DBOptions struct {
 	print_count_tables bool
 	altDB              string
 	rollback           bool
+	timing             bool
 }
 
 //==============================================================================
 
-// the following types represent databse tables and teir content in the
-// database and in memory
+// the following types represent database tables and their content in database and
+// in memory
 type SnapshotRecordMem struct {
 	Id           int
 	Snap_id      string
@@ -118,14 +119,6 @@ type PackfilesRecordMem struct {
 	Status      string
 }
 
-type DbData interface {
-	SnapshotRecordMem | IndexRepoRecordMem | NamesRecordMem | PackfilesRecordMem | MetaDirRecordMem | IddFileRecordMem | ContentsRecordMem
-}
-
-type DbKeys interface {
-	string | restic.IntID | *restic.ID | CompMetaDir | CompIddFile | CompContents
-}
-
 type TimeStamp struct {
 	Id               int
 	Restic_updated   time.Time
@@ -151,6 +144,16 @@ type CompContents struct {
 	offset    int
 }
 
+//==============================================================================
+// not used right now
+type DbData interface {
+	SnapshotRecordMem | IndexRepoRecordMem | NamesRecordMem | PackfilesRecordMem | MetaDirRecordMem | IddFileRecordMem | ContentsRecordMem
+}
+
+// not used right nowtype DbKeys
+type DbKeys interface {
+	string | IntID | CompMetaDir | CompIddFile | CompContents
+}
 //==============================================================================
 
 // the holding collections
@@ -206,7 +209,7 @@ type DBAggregate struct {
 	pk_index_repo    map[int]restic.IntID  // meta_dir, idd_file, contents
 }
 
-// map repo to database - really a const, but not according to the Go gospel
+// map repos to databases - really a const, but not according to the Go gospel
 var DATABASE_NAMES = map[string]string{
 	// master
 	"/media/mount-points/Backup-ext4-Mate/restic_master":  "/media/mount-points/home/wplapper/restic/db/restic-master_nfs.db",

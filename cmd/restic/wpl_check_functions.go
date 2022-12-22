@@ -36,6 +36,7 @@ func check_db_snapshots_v2(db_aggregate *DBAggregate, repositoryData *Repository
 	for db_key, db_value := range db_aggregate.Table_snapshots {
 		mem_value := 	check_db_snapshots_row(db_key, repositoryData)
 		if mem_value == empty_snapshot {
+			compare_equals = false
 			if count_print < 10 {
 				count_print++
 				Printf("snapshot %s only in database\n", db_key)

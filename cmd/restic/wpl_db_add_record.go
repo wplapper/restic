@@ -21,8 +21,6 @@ import (
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
-	// sets
-	//"github.com/deckarep/golang-set/v2"
 )
 
 var cmdDBAdd = &cobra.Command{
@@ -58,9 +56,10 @@ func InitNewcomers() *Newcomers {
 func init() {
 	cmdRoot.AddCommand(cmdDBAdd)
 	flags := cmdDBAdd.Flags()
-	flags.BoolVarP(&dbOptions.echo, "echo", "E", false, "echo database operations to stdout")
-	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROLLBACK databae operations")
-	flags.StringVarP(&dbOptions.altDB, "DB", "", "", "aternative database name")
+	flags.BoolVarP(&dbOptions.echo, 	  "echo", "E", false, "echo database operations to stdout")
+	flags.BoolVarP(&dbOptions.rollback, "rollback", "R", false, "ROLLBACK database operations")
+	flags.BoolVarP(&dbOptions.timing,   "timing", "T", false, "produce timings")
+	flags.StringVarP(&dbOptions.altDB,  "DB", "", "", "aternative database name")
 }
 
 type StdForAll func(GlobalOptions, *RepositoryData, *DBAggregate, *Newcomers) error
@@ -79,9 +78,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		ok bool
 	)
 
+	start := time.Now()
 	db_aggregate.repositoryData = repositoryData
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
-	// need access to verbose option
+	// need access to verbose option etc
 	gOptions = gopts
 
 	// step 1: open repository
@@ -90,6 +90,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		return err
 	}
 	Printf("Repository is %s\n", gopts.Repo)
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "open repository",
+			time.Now().Sub(start).Seconds())
+	}
 
 	repositoryData.snaps, err = GatherAllSnapshots(gopts, repo)
 	if err != nil {
@@ -99,22 +103,27 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	for _, sn := range repositoryData.snaps {
 		repositoryData.snap_map[sn.ID().Str()] = sn
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "gather snapshots",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 2: manage Index Records
-	start := time.Now()
-	_ = start
 	if err = HandleIndexRecords(gopts, repo, repositoryData); err != nil {
 		return err
 	}
-	//Printf("After HandleIndexRecords\n")
-	//PrintMemUsage()
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "read index records",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 3: collect all snapshot related information
-	start = time.Now()
+	//start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
-	//Printf("Usage after all data gathered\n")
-	//PrintMemUsage()
-	//ConfirmStdin()
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// step 4.1: get database name
 	if dbOptions.altDB != "" {
@@ -141,11 +150,14 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("db_add_record: Could not get Get_all_high_ids, error is %v\n", err)
 		return err
 	}
+	/*if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After initial DB", time.Now().Sub(start).Seconds())
+	}*/
 
 	// BEGIN TRANSACTION
 	tx, err := db_aggregate.db_conn.Beginx()
 	if err != nil {
-		Printf("Cant start transaction. Error is %v\n", err)
+		Printf("Can't start transaction. Error is %v\n", err)
 		return err
 	}
 	db_aggregate.tx = tx
@@ -168,14 +180,14 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 		Printf("Error processing ReadIndexRepoTable. Error is %v\n", err)
 		return err
 	}
-
-	//Printf("Usage after reading four database tables\n")
-	//PrintMemUsage()
-  //ConfirmStdin()
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After reading 4 tables",
+			time.Now().Sub(start).Seconds())
+	}
 
 	err1 := ForAllSnapShots(gopts, repositoryData, &db_aggregate, newComers)
 	err2 := ForAllPackfiles(gopts, repositoryData, &db_aggregate, newComers)
-	err3 := ForAllNames(gopts, repositoryData, &db_aggregate, newComers)
+	err3 := ForAllNames(gopts,     repositoryData, &db_aggregate, newComers)
 	err4 := ForAllIndexRepo(gopts, repositoryData, &db_aggregate, newComers)
 	var errs = []error{err1, err2, err3, err4, nil}
 	for ix, err := range errs {
@@ -187,9 +199,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	if errs[4] != nil {
 		return errs[4]
 	}
-	//Printf("Usage after finding new rows for four database tables\n")
-	//PrintMemUsage()
-  //ConfirmStdin()
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "After new rows for 4 tables",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// the main reason for sequential processing is the amount of memory these
 	// functions create, henceforce sequential process and resetting the
@@ -212,6 +225,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 			return err
 		}
 	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "3 dependent tables, read&new",
+			time.Now().Sub(start).Seconds())
+	}
 
 	// reset table sizes
 	db_aggregate.Table_snapshots = nil
@@ -228,6 +245,9 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	err = CommitNewRecords(&db_aggregate, repositoryData, newComers, gopts)
 	if err != nil {
 		return err
+	}
+	if dbOptions.timing {
+		timeMessage("%-30s %10.1f seconds\n", "COMMIT/ROLLBACK", time.Now().Sub(start).Seconds())
 	}
 	return nil
 }
