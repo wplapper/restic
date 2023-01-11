@@ -46,6 +46,7 @@ func init() {
 	cmdRoot.AddCommand(cmdOverview)
 	flags := cmdOverview.Flags()
 	flags.BoolVarP(&dbOptions.timing, "timing", "T", false, "produce timings")
+	flags.BoolVarP(&dbOptions.fullpath, "fullpath", "F", false, "fullpath analysis")
 }
 
 func runOverview(gopts GlobalOptions) error {
@@ -106,6 +107,7 @@ func runOverview(gopts GlobalOptions) error {
 		groups_sorted[index] = group
 		index++
 	}
+	// sort by host and filesystem
 	sort.Slice(groups_sorted, func(i, j int) bool {
 		if groups_sorted[i].host < groups_sorted[j].host {
 			return true
@@ -206,5 +208,41 @@ func runOverview(gopts GlobalOptions) error {
 	}
 	all_blobs = nil
 	all_inodes_repo = nil
+
+	if !dbOptions.fullpath {
+		return nil
+	}
+
+	// investiate repositoryData.directory_map for duplicate names
+	// note: all the tree roots get mapped to the name "/."which is outside
+	// of the checks done here. That explains the difference in rows between
+	// 'dir_path_id' and 'dir_name_id'
+	// The other difference worth mentioning is the ommision of the empty
+	// directory, which is obvious for the code here  and in 'FindChildren'
+	checks := make(map[restic.IntID]mapset.Set[string])
+	for _, idd_file_list := range repositoryData.directory_map {
+		for _, node := range idd_file_list {
+			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
+				// catches all files as well
+				continue
+			}
+			// new blob into 'checks'
+  		if _, ok := checks[node.subtree_ID]; !ok {
+				checks[node.subtree_ID] = mapset.NewSet[string]()
+			}
+			checks[node.subtree_ID].Add(node.name)
+		}
+	}
+
+	// find muliple entries
+	for blob, set := range checks {
+		if set.Cardinality() == 1 {
+			continue
+		}
+		Printf("*** Node %6d ***\n", blob)
+		for name := range set.Iter() {
+			Printf("  %s\n", name)
+		}
+	}
 	return nil
 }

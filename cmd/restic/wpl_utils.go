@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"time"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -16,20 +15,19 @@ import (
 	"github.com/gammazero/deque"
 
 	// sets
-	//"github.com/wplapper/restic/library/mapset"
 	"github.com/deckarep/golang-set/v2"
 )
 
-// static variable
-var gOptions GlobalOptions
-
 // system wide variables and containers
-var db_aggregate DBAggregate
-var dbOptions DBOptions
-var newComers *Newcomers
-var repositoryData *RepositoryData
-var EMPTY_NODE_ID restic.ID
-var EMPTY_NODE_ID_TRANSLATED restic.IntID
+var (
+	gOptions GlobalOptions
+	db_aggregate DBAggregate
+	dbOptions DBOptions
+	newComers *Newcomers
+	repositoryData *RepositoryData
+	EMPTY_NODE_ID restic.ID
+	EMPTY_NODE_ID_TRANSLATED restic.IntID
+)
 
 func init_repositoryData() *RepositoryData {
 	var repositoryData RepositoryData
@@ -119,11 +117,10 @@ func Convert_to_IntSet(gopts GlobalOptions, repo restic.Repository,
 			blob_index: repositoryData.blob_to_index[blob.ID]}
 	}
 
-	// add the *restic.IDs from the snapshots to this list
+	// add the *restic.IDs from the snapshots list to this list
 	for _, sn := range repositoryData.snaps {
 		snap := *sn.ID()
-		_, ok := repositoryData.blob_to_index[snap]
-		if !ok {
+		if _, ok := repositoryData.blob_to_index[snap]; !ok {
 			repositoryData.blob_to_index[snap] = pos
 			repositoryData.index_to_blob = append(repositoryData.index_to_blob, snap)
 			pos++
@@ -145,21 +142,35 @@ func FindChildren(repositoryData *RepositoryData) {
 	// 1. collect the children
 	for parent, idd_file_list := range repositoryData.directory_map {
 		for _, node := range idd_file_list {
-			if node.Type == "dir" {
-				// initialize
-				repositoryData.names[node.subtree_ID] = node.name
-				if len(repositoryData.children[parent]) == 0 {
-					repositoryData.children[parent] = restic.NewIntSet()
-				}
-				// the children data will be used in topology step
-				repositoryData.children[parent].Insert(node.subtree_ID)
+			if node.Type != "dir" {
+				continue
 			}
+
+			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
+				continue
+			}
+			// initialize
+			if old_name, ok := repositoryData.names[node.subtree_ID]; ok {
+				if old_name != node.name {
+					//Printf("Clobbering %6d with '%s', before '%s'\n", node.subtree_ID,
+					//node.name, old_name)
+				}
+			} else {
+				repositoryData.names[node.subtree_ID] = node.name
+			}
+
+			// new subtree
+			if _, ok := repositoryData.children[parent]; !ok {
+				repositoryData.children[parent] = restic.NewIntSet()
+			}
+			// the children data will be used in topology step
+			repositoryData.children[parent].Insert(node.subtree_ID)
 		}
 	}
 
 	// 2. create tree roots for fullpath
 	for _, sn := range repositoryData.snaps {
-		repositoryData.fullpath[repositoryData.blob_to_index[*sn.Tree]] = "/"
+		repositoryData.fullpath[repositoryData.blob_to_index[*sn.Tree]] = "/."
 	}
 
 	// 3. create name tree for all meta_blobs
@@ -178,19 +189,17 @@ func FindChildren(repositoryData *RepositoryData) {
 			}
 
 			for child := range children {
+				if child == EMPTY_NODE_ID_TRANSLATED {
+					continue
+				}
 				// if already done, don't repeat
 				if _, ok := repositoryData.fullpath[child]; ok {
 					continue
 				}
 
 				// construct name of child directory
-				if repositoryData.fullpath[parent] != "/" {
-					repositoryData.fullpath[child] = repositoryData.fullpath[parent] +
+				repositoryData.fullpath[child] = repositoryData.fullpath[parent] +
 						"/" + repositoryData.names[child]
-				} else {
-					repositoryData.fullpath[child] = "/" + repositoryData.names[child]
-				}
-				//Printf("%s\n", repositoryData.fullpath[child])
 			}
 		}
 	}
@@ -234,26 +243,16 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 // this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(gopts GlobalOptions, repo restic.Repository,
 	repositoryData *RepositoryData) error {
-	var err error
 	// step 1: gather snapshots
-	start := time.Now()
-	_ = start
-
-	//repositoryData.snaps = snaps
-	//timeMessage("  %-30s %10.1f seconds\n", "gather snapshots", time.Now().Sub(start).Seconds())
-
 	// build a slice of all meta_blob IDs in the repo
-	start = time.Now()
-	if err = ForAllMyTrees(gopts, repo, repositoryData); err != nil {
+	if err := ForAllMyTrees(gopts, repo, repositoryData); err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
 		return err
 	}
-	//timeMessage("  %-28s %10.1f seconds\n", "ForAllMyTrees", time.Now().Sub(start).Seconds())
-
-	// step 3: prepare children and parents from idd_file records
+	// step 2: prepare children and parents from idd_file records
 	FindChildren(repositoryData)
 
-	// step 4: build topology for each snapshot in repository
+	// step 3: build topology structure for each snapshot in repository
 	for _, sn := range repositoryData.snaps {
 		topology_structure(*sn, repositoryData)
 	}
@@ -289,7 +288,7 @@ repositoryData *RepositoryData) error {
 		return DeliverTreeBlobs(repositoryData, func(id restic.ID) error {
 			select {
 			case <-ctx.Done():
-				// return nil
+				return nil
 			case chan_tree_blob <- id:
 			}
 			return nil
@@ -314,7 +313,6 @@ repositoryData *RepositoryData) error {
 				content := make([]restic.IntID, 0)
 				subt_ID := EMPTY_NODE_ID_TRANSLATED
 
-				ok := false
 				switch node.Type {
 				case "file":
 					for _, cont := range node.Content {
@@ -328,11 +326,11 @@ repositoryData *RepositoryData) error {
 					}
 				case "dir":
 					// get the index for our restic.ID storage
-					subt_ID, ok = repositoryData.blob_to_index[*node.Subtree]
-					if !ok {
+					subt_ID = repositoryData.blob_to_index[*node.Subtree]
+					/*if !ok {
 						Printf("Fatal: %v not in blob_to_index\n", *node.Subtree)
 						panic("error during sub directory processing")
-					}
+					}*/
 				}
 				idd_file_list[offset_in_node_list] = BlobFile2{name: node.Name,
 					Type: node.Type, size: node.Size, inode: node.Inode,

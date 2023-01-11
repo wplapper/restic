@@ -246,19 +246,26 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 		ref_table    string // the implied column is always "Id" for the ref_table
 	}
 	var check_tables = []ForeignKeys{
-		{"meta_dir", "Id_snap_id", "snapshots"},
-		{"meta_dir", "Id_idd", "index_repo"},
-		{"idd_file", "Id_blob", "index_repo"},
-		{"contents", "Id_data_idd", "index_repo"},
-		{"contents", "Id_blob", "index_repo"},
-		{"idd_file", "Id_name", "names"},
-		{"index_repo", "Id_pack_id", "packfiles"}}
+		{"meta_dir",     "Id_snap_id",  "snapshots"},
+		{"meta_dir",     "Id_idd",      "index_repo"},
+		{"idd_file",     "Id_blob",     "index_repo"},
+		{"contents",     "Id_data_idd", "index_repo"},
+		{"contents",     "Id_blob",     "index_repo"},
+		{"idd_file",     "Id_name",     "names"},
+		{"index_repo",   "Id_pack_id",  "packfiles"},
+		{"dir_name_id",  "Id",          "index_repo"},
+		{"dir_name_id",  "Id_name",     "names"},
+		{"dir_path_id",  "Id",          "index_repo"},
+		{"dir_path_id",  "Id_pathname", "fullname"},
+		{"dir_children", "Id_parent",   "index_repo"},
+		{"dir_children", "Id_child",    "index_repo"},
+	}
 
 	Printf("\n*** Check Foreign Key relationship ***\n")
 	all_good := true
 	for _, action := range check_tables {
 		check_table := true
-		sql := fmt.Sprintf(`SELECT %s.%s FROM %s
+		sql := fmt.Sprintf(`SELECT DISTINCT %s.%s AS id FROM %s
   LEFT OUTER JOIN %s ON %s.%s = %s.id WHERE %s.id IS NULL`,
 			action.check_table, action.column_name, action.check_table, action.ref_table,
 			action.check_table, action.column_name, action.ref_table, action.ref_table)
@@ -279,6 +286,7 @@ func CheckForeignKeys(db_aggregate *DBAggregate, repositoryData *RepositoryData)
 			if err != nil {
 				Printf("CheckForeinKeys:StructScan for sql %s failed %v\n", sql, err)
 				check_table = false
+				return false
 			}
 			if count_rows < 10 {
 				Printf("Id=%6d in %s is not related to %s\n", row.Id,

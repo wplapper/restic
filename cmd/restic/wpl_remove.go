@@ -26,11 +26,6 @@ type TRemoveOptions struct {
 		timing bool
 }
 
-type Pack_and_size struct {
-		Size    int
-		PackID  restic.IntID
-}
-
 type comp_index struct {
 	meta_blob restic.IntID
 	position int
@@ -169,10 +164,8 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 	for _, sn := range snaps_to_be_deleted {
 		selected[0] = sn
 		Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
-				sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-		if err = CalculatePruneSize(selected, blobs_per_packID, repositoryData, data_map, detail); err != nil {
-				return err
-		}
+			sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
+		CalculatePruneSize(selected, blobs_per_packID, repositoryData, data_map, detail)
 	}
 
 	// select all the snapshots for the summary record
@@ -182,9 +175,7 @@ func runTRemove(gopts GlobalOptions, args []string) error {
 		selected[ix] = sn
 	}
 	Printf("\n*** ALL ***\n")
-	if err = CalculatePruneSize(selected, blobs_per_packID, repositoryData, nil, false); err != nil {
-			return err
-	}
+	CalculatePruneSize(selected, blobs_per_packID, repositoryData, nil, false)
 	if tremoveOptions.timing {
 		timeMessage("%-30s %10.1f seconds\n", "group summary",
 			time.Now().Sub(start).Seconds())
@@ -304,9 +295,12 @@ repositoryData *RepositoryData, data_map map[restic.IntID]comp_index, detail boo
 	}
 
 	// gather detail of deleted directories and files
-	deleted_files := mapset.NewSet[string]()
+	deleted_files := make(map[string]int)
 	for blob := range used_blobs {
-		filename := ""
+		var (
+			filename string
+			size int
+		)
 		ih := repositoryData.index_handle[repositoryData.index_to_blob[blob]]
 		if ih.Type == restic.TreeBlob {
 			if repositoryData.fullpath[blob] == "/" {
@@ -314,33 +308,43 @@ repositoryData *RepositoryData, data_map map[restic.IntID]comp_index, detail boo
 			} else {
 				filename = repositoryData.fullpath[blob] + "/"
 			}
+			size = 0
 		} else if ih.Type == restic.DataBlob {
 			cmp_ix := data_map[blob]
-			name := repositoryData.directory_map[cmp_ix.meta_blob][cmp_ix.position].name
+			meta := repositoryData.directory_map[cmp_ix.meta_blob][cmp_ix.position]
+			name := meta.name
 			filename = repositoryData.fullpath[cmp_ix.meta_blob] + "/" + name
+			size = int(meta.size)
 		}
-		deleted_files.Add(filename)
+		deleted_files[filename] = size
 	}
 
 	// convert deleted_files to Slice, so it can be sorted
-	deleted_files_to_sort := make([]string, deleted_files.Cardinality())
+	deleted_files_to_sort := make([]string, len(deleted_files))
 	index := 0
-	for filename := range deleted_files.Iter() {
+	for filename := range deleted_files {
 		deleted_files_to_sort[index] = filename
 		index++
 	}
 
 	sort.Strings(deleted_files_to_sort)
 	for _,filename := range deleted_files_to_sort {
-		Printf("%s\n", filename)
+		size := deleted_files[filename]
+		if size > 0 {
+			Printf("%10d %s\n", deleted_files[filename], filename[2:])
+		} else {
+			Printf("%10s %s\n", "", filename[2:])
+		}
 	}
 	return nil
 }
 
+// This function calculates a data map which is global for the repository. It
+// contains a mapping from a data blob to the containing meta blob a the
+// offset in the file list, used for gathering the file name to which this data
+// blob belongs. Data blob can belong to multiple files.
 func map_data_blob_file(repositoryData *RepositoryData) map[restic.IntID]comp_index {
 	// map data blobs back to meta_blob, position in directory_map
-	// TODO: calcuate once!
-
 	data_map := make(map[restic.IntID]comp_index)
 	for meta_blob, file_list := range repositoryData.directory_map {
 		for position, meta := range file_list {

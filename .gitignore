@@ -4,3 +4,6 @@
 go.mod
 go.sum
 *.gz
+.attic/
+sedfile
+NOTES*

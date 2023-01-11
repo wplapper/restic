@@ -39,6 +39,7 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 	},
 }
 
+// initialize new memory maps
 func InitNewcomers() *Newcomers {
 	var new_comers Newcomers
 	new_comers.Mem_snapshots  = make(map[string]SnapshotRecordMem)
@@ -49,10 +50,11 @@ func InitNewcomers() *Newcomers {
 	new_comers.Mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
 	new_comers.Mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
 	new_comers.Mem_contents = make(map[CompContents]*ContentsRecordMem)
+	new_comers.Mem_dir_children = make(map[CompDirChildren]*DirChildrenMem)
 	return &new_comers
 }
 
-// setop local flags for the current command
+// setup local flags for the current command
 func init() {
 	cmdRoot.AddCommand(cmdDBAdd)
 	flags := cmdDBAdd.Flags()
@@ -118,7 +120,6 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 
 	// step 3: collect all snapshot related information
-	//start = time.Now()
 	GatherAllRepoData(gopts, repo, repositoryData)
 	if dbOptions.timing {
 		timeMessage("%-30s %10.1f seconds\n", "GatherAllRepoData",
@@ -185,10 +186,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 			time.Now().Sub(start).Seconds())
 	}
 
-	err1 := ForAllSnapShots(gopts, repositoryData, &db_aggregate, newComers)
-	err2 := ForAllPackfiles(gopts, repositoryData, &db_aggregate, newComers)
-	err3 := ForAllNames(gopts,     repositoryData, &db_aggregate, newComers)
-	err4 := ForAllIndexRepo(gopts, repositoryData, &db_aggregate, newComers)
+	err1 := ForAllSnapShots(gopts,   repositoryData, &db_aggregate, newComers)
+	err2 := ForAllPackfiles(gopts,   repositoryData, &db_aggregate, newComers)
+	err3 := ForAllNames(gopts,       repositoryData, &db_aggregate, newComers)
+	err4 := ForAllIndexRepo(gopts,   repositoryData, &db_aggregate, newComers)
 	var errs = []error{err1, err2, err3, err4, nil}
 	for ix, err := range errs {
 		if err != nil && ix != 4 {
@@ -205,12 +206,16 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	}
 
 	// the main reason for sequential processing is the amount of memory these
-	// functions create, henceforce sequential process and resetting the
-	// database tables afterwards
+	// functions create, henceforce sequential process and resetting the memory
+	// for the database tables afterwards
 	var process_list = []process_functions{
 		{ReadMetaDirTable,  ForAllMetaDir},
 		{ReadIddFileTable,  ForAllIddFile},
 		{ReadContentsTable, ForAllContents},
+		{ReadDirChildrenTable, ForAllDirChildren},
+		{ReadDirNameIdTable, ForAllDirNameIDs},
+		{ReadFullnameTable, ForAllFullname},
+		{ReadDirPathIdTable, ForAllDirPathIDs},
 	}
 	for _, actual := range process_list {
 		// read database table
@@ -230,7 +235,7 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 			time.Now().Sub(start).Seconds())
 	}
 
-	// reset table sizes
+	// reset database tables
 	db_aggregate.Table_snapshots = nil
 	db_aggregate.Table_names = nil
 	db_aggregate.Table_packfiles = nil
@@ -238,6 +243,10 @@ func runDBAdd(gopts GlobalOptions, args []string) error {
 	db_aggregate.Table_meta_dir = nil
 	db_aggregate.Table_idd_file = nil
 	db_aggregate.Table_contents = nil
+	db_aggregate.Table_dir_children = nil
+	db_aggregate.Table_dir_name_id = nil
+	//db_aggregate.Table_dir_path_id = nil
+	//db_aggregate.Table_fullname = nil
 
 	CreateBlobSummary(&db_aggregate, repositoryData, newComers)
 
@@ -265,29 +274,29 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 
 	changes_made := false
 	tx := db_aggregate.tx
-	err1 := InsTab("snapshots", newComers.Mem_snapshots,  tx, column_names, &changes_made)
-	err2 := InsTab("packfiles", newComers.Mem_packfiles,  tx, column_names, &changes_made)
-	err3 := InsTab("index_repo",newComers.Mem_index_repo, tx, column_names, &changes_made)
-	err4 := InsTab("names",     newComers.Mem_names,      tx, column_names, &changes_made)
-	err5 := InsTab("meta_dir",  newComers.Mem_meta_dir,   tx, column_names, &changes_made)
-	err6 := InsTab("idd_file",  newComers.Mem_idd_file,   tx, column_names, &changes_made)
-	err7 := InsTab("contents",  newComers.Mem_contents,   tx, column_names, &changes_made)
+	err1 := InsTab("snapshots",   newComers.Mem_snapshots,  tx, column_names, &changes_made)
+	err2 := InsTab("packfiles",   newComers.Mem_packfiles,  tx, column_names, &changes_made)
+	err3 := InsTab("index_repo",  newComers.Mem_index_repo, tx, column_names, &changes_made)
+	err4 := InsTab("names",       newComers.Mem_names,      tx, column_names, &changes_made)
+	err5 := InsTab("meta_dir",    newComers.Mem_meta_dir,   tx, column_names, &changes_made)
+	err6 := InsTab("idd_file",    newComers.Mem_idd_file,   tx, column_names, &changes_made)
+	err7 := InsTab("contents",    newComers.Mem_contents,   tx, column_names, &changes_made)
+	err8 := InsTab("dir_children",newComers.Mem_dir_children,tx, column_names, &changes_made)
+	err9 := InsTab("dir_name_id", newComers.Mem_dir_name_id,tx, column_names, &changes_made)
+	err10 := InsTab("fullname",   newComers.Mem_fullname,   tx, column_names, &changes_made)
+	err11 := InsTab("dir_path_id",newComers.Mem_dir_path_id,tx, column_names, &changes_made)
 
 	// collect possible errors
-	var errs = []error{err1, err2, err3, err4, err5, err6, err7, nil}
+	var errs = []error{err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, nil}
 	for ix, err := range errs {
-		if err != nil && ix != 7 {
+		if err != nil && ix != 11 {
 			Printf("Error in processing function %d\n", ix + 1)
-			errs[7] = err
+			errs[11] = err
 		}
 	}
-	if errs[7] != nil {
-		return errs[7]
+	if errs[11] != nil {
+		return errs[11]
 	}
-
-	//Printf("Usage after INSERT\n")
-	//PrintMemUsage()
-	//ConfirmStdin()
 
 	// update timestamp
 	if len(db_aggregate.Table_snapshots) > 0 {
@@ -311,8 +320,6 @@ func CommitNewRecords(db_aggregate *DBAggregate, repositoryData *RepositoryData,
 		tx.Rollback()
 		Printf("ROLLBACK\n")
 	}
-	//Printf("Usage FINALE....\n")
-	//PrintMemUsage()
 	return nil
 }
 
@@ -322,6 +329,7 @@ func InsertTable[K comparable, V any] (tbl_name string, mem_table map[K]V,
 	if len(mem_table) == 0 {
 		return nil
 	}
+	Printf("INSERT INTO %s with %6d rows.\n", tbl_name, len(mem_table))
 
 	// build INSERT statement - bulk INSERT is the only SQL statement which
 	// does not need a loop over all new rows
@@ -333,12 +341,9 @@ func InsertTable[K comparable, V any] (tbl_name string, mem_table map[K]V,
 
 	t_insert := make([]V, len(mem_table))
 	ix := 0
-	for key, data := range mem_table {
+	for _, data := range mem_table {
 		t_insert[ix] = data
 		ix++
-		if tbl_name != "snapshots" {
-		  delete(mem_table, key)
-		}
 	}
 
 	sql := fmt.Sprintf("INSERT INTO %s(%s) VALUES(%s)", tbl_name,
@@ -384,15 +389,16 @@ func InsTab[K comparable, V any](table_name string, mem_map map[K]V,
 	return err
 }
 
-func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData, newComers *Newcomers) {
+func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) {
 	// create blob summary
 	for key, data := range newComers.Mem_index_repo {
 		if data.Status != "new" {
 			delete(newComers.Mem_index_repo, key)
 		}
 	}
-	sum_data_blobs := uint64(0)
-	sum_meta_blobs := uint64(0)
+	sum_data_blobs   := 0
+	sum_meta_blobs   := 0
 	count_meta_blobs := 0
 	count_data_blobs := 0
 	for blob_int := range newComers.Mem_index_repo {
@@ -400,10 +406,10 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 		ih := repositoryData.index_handle[blob]
 		typ := ih.Type.String()[0:1]
 		if typ == "t" {
-			sum_meta_blobs += uint64(ih.size)
+			sum_meta_blobs += ih.size
 			count_meta_blobs++
 		} else if typ == "d" {
-			sum_data_blobs += uint64(ih.size)
+			sum_data_blobs += ih.size
 			count_data_blobs++
 		}
 	}
@@ -443,11 +449,11 @@ func db_update_timestamp(Table_snapshots map[string]SnapshotRecordMem, tx *sqlx.
 	err := tx.Get(&restic_updated, sql)
 	if err != nil {
 		// there is no row in timestamp, create one
-		Printf("Error from SELECT restic_updated FROM timestamp WHERE id = 1: %v\n", err)
 		now := time.Now()
+		now_str := now.String()[:19]
 		sql2 := `INSERT INTO timestamp(id,restic_updated,database_updated,ts_created)
-							VALUES(:id,:restic_updated,:database_updated,:ts_created)`
-		_, err := tx.Exec(sql2, 1, now, now, now)
+               VALUES(:id,:restic_updated,:database_updated,:ts_created)`
+		_, err := tx.Exec(sql2, 1, now_str, now_str, now_str)
 		if err != nil {
 			fmt.Printf("Can't INSERT INTO timestamp. Error is %v\n", err)
 			return err
@@ -459,7 +465,7 @@ func db_update_timestamp(Table_snapshots map[string]SnapshotRecordMem, tx *sqlx.
 		sql = `UPDATE timestamp SET database_updated =
               (SELECT datetime('now', 'localtime')),
               restic_updated = :restic_updated WHERE id = 1`
-		_, err := tx.Exec(sql, max_snap_time)
+		_, err := tx.Exec(sql, max_snap_time.String()[:19])
 		if err != nil {
 			Printf("UPDATE timestamp failed 1: %v\n", err)
 			return err

@@ -8,6 +8,7 @@ package main
 import (
 	"golang.org/x/sync/errgroup"
 	"time"
+	"fmt"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -18,6 +19,9 @@ import (
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
+
+	// mapset
+	"github.com/deckarep/golang-set/v2"
 )
 
 type RemoveSqLTable struct {
@@ -252,7 +256,7 @@ func db_rem_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	}
 
 	count_updates := 0
-	// update index_repo.id_pack_id, packfiles.id is master here!s
+	// update index_repo.id_pack_id, packfiles.id is master here!
 	for id, ih := range repositoryData.index_handle {
 		id_int := repositoryData.blob_to_index[id]
 		db_index_repo, ok := (db_aggregate.Table_index_repo)[id_int]
@@ -310,6 +314,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 			return err
 		}
 	}
+	scrub_superfluous_rows(db_aggregate.tx)
 
 	// update timestamp
 	if err := db_update_timestamp(db_aggregate.Table_snapshots, tx); err != nil {
@@ -507,6 +512,14 @@ func removeSecondaryTables(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made 
 			`DELETE FROM contents WHERE contents.id_blob IN (SELECT id FROM meta_blobs)`},
 		RemoveSqLTable{"idd_file",
 			`DELETE FROM idd_file WHERE idd_file.id_blob IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"dir_children",
+			`DELETE FROM dir_children WHERE dir_children.id_parent IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"dir_children",
+			`DELETE FROM dir_children WHERE dir_children.id_child IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"dir_path_id",
+			`DELETE FROM dir_path_id WHERE dir_path_id.id IN (SELECT id FROM meta_blobs)`},
+		RemoveSqLTable{"dir_name_id",
+			`DELETE FROM dir_name_id WHERE dir_name_id.id IN (SELECT id FROM meta_blobs)`},
 	}
 
 	for _, sql := range sqld {
@@ -575,4 +588,102 @@ func updateIndexRepoTable(tx *sqlx.Tx, db_aggregate *DBAggregate, changes_made *
 		*changes_made = true
 	}
 	return nil
+}
+
+// remove rows in tables, wic reference oter tables
+// copied and modified from
+func scrub_superfluous_rows(tx *sqlx.Tx) error {
+	type ForeignKeys struct {
+		check_table  string
+		column_name  string
+		ref_table    string // the implied column is always "Id" for the ref_table
+	}
+	var check_tables = []ForeignKeys{
+		{"meta_dir",     "Id_snap_id",  "snapshots"},
+		{"meta_dir",     "Id_idd",      "index_repo"},
+		{"idd_file",     "Id_blob",     "index_repo"},
+		{"contents",     "Id_data_idd", "index_repo"},
+		{"contents",     "Id_blob",     "index_repo"},
+		{"idd_file",     "Id_name",     "names"},
+		{"index_repo",   "Id_pack_id",  "packfiles"},
+		{"dir_name_id",  "Id",          "index_repo"},
+		{"dir_name_id",  "Id_name",     "names"},
+		{"dir_path_id",  "Id",          "index_repo"},
+		{"dir_path_id",  "Id_pathname", "fullname"},
+		{"dir_children", "Id_parent",   "index_repo"},
+		{"dir_children", "Id_child",    "index_repo"},
+	}
+
+	//Printf("\n*** scrub superfluous rows ***\n")
+	for _, action := range check_tables {
+		sql := fmt.Sprintf(`DELETE FROM %s WHERE %s IN (SELECT DISTINCT %s.%s FROM %s
+  LEFT OUTER JOIN %s ON %s.%s = %s.id WHERE %s.id IS NULL)`,
+      action.check_table, action.column_name,
+			action.check_table, action.column_name,
+			action.check_table, action.ref_table,
+			action.check_table, action.column_name,
+			action.ref_table, action.ref_table)
+
+		if dbOptions.echo {
+			Printf("%s\n", sql)
+		}
+		r, err := tx.Exec(sql)
+		if err != nil {
+			Printf("Error in sql %s, error is %v\n", sql, err)
+			return err
+		}
+		count, _ := r.RowsAffected()
+		if count > 0 {
+			Printf("DELETE %-15s %6d rows deleted.\n", action.check_table, count)
+		}
+	}
+	return nil
+}
+
+func CreateMemNames(db_aggregate *DBAggregate,
+	repositoryData *RepositoryData, newComers *Newcomers) map[string]*NamesRecordMem {
+
+	Mem_names_map := make(map[string]*NamesRecordMem, len(repositoryData.directory_map))
+	for _, file_list := range repositoryData.directory_map {
+		for _, meta := range file_list {
+			switch meta.Type {
+			case "file", "dir":
+				data, ok := db_aggregate.Table_names[meta.name]
+				if !ok {
+					row := NamesRecordMem{Name: meta.name, Status: "memory"}
+					Mem_names_map[meta.name] = &row
+				} else {
+					data.Status = "db"
+					Mem_names_map[meta.name] = data
+				}
+			}
+		}
+	}
+	return Mem_names_map
+}
+
+func CreateMemPackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData,
+newComers *Newcomers) map[restic.IntID]*PackfilesRecordMem {
+
+	// collect all packfiles from the index_handle
+	pack_intIDs := mapset.NewSet[restic.IntID]()
+	for _, handle := range repositoryData.index_handle {
+		pack_intIDs.Add(handle.pack_index)
+	}
+
+	// convert the set to a map of Mem_packfiles_map
+	Mem_packfiles_map := make(map[restic.IntID]*PackfilesRecordMem, pack_intIDs.Cardinality())
+	for pack_intID := range pack_intIDs.Iter() {
+		data, ok := db_aggregate.Table_packfiles[pack_intID]
+		if !ok {
+			packID := repositoryData.index_to_blob[pack_intID]
+			row := PackfilesRecordMem{Packfile_id: packID.String(), Status: "memory"}
+			Mem_packfiles_map[pack_intID] = &row
+		} else {
+			data.Status = "db"
+			Mem_packfiles_map[pack_intID] = data
+		}
+	}
+	pack_intIDs = nil
+	return Mem_packfiles_map
 }

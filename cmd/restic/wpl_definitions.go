@@ -54,6 +54,7 @@ type DBOptions struct {
 	altDB              string
 	rollback           bool
 	timing             bool
+	fullpath           bool
 }
 
 //==============================================================================
@@ -119,6 +120,31 @@ type PackfilesRecordMem struct {
 	Status      string
 }
 
+type DirChildrenMem struct {
+	Id        int
+	Id_parent int
+	Id_child  int
+	Status    string
+}
+
+type DirNameIdMem struct {
+	Id        int
+	Id_name   int
+	Status    string
+}
+
+type FullnameMem struct {
+	Id        int
+	Pathname  string
+	Status    string
+}
+
+type DirPathIdMem struct {
+	Id          int
+	Id_pathname int
+	Status      string
+}
+
 type TimeStamp struct {
 	Id               int
 	Restic_updated   time.Time
@@ -144,16 +170,11 @@ type CompContents struct {
 	offset    int
 }
 
-//==============================================================================
-// not used right now
-type DbData interface {
-	SnapshotRecordMem | IndexRepoRecordMem | NamesRecordMem | PackfilesRecordMem | MetaDirRecordMem | IddFileRecordMem | ContentsRecordMem
+type CompDirChildren struct {
+	meta_blob_parent restic.IntID
+	meta_blob_child  restic.IntID
 }
 
-// not used right nowtype DbKeys
-type DbKeys interface {
-	string | IntID | CompMetaDir | CompIddFile | CompContents
-}
 //==============================================================================
 
 // the holding collections
@@ -176,17 +197,21 @@ type RepositoryData struct {
 
 type Newcomers struct {
 	// the containers of various memory tables
-	Mem_snapshots  map[string]SnapshotRecordMem
-	Mem_index_repo map[restic.IntID]*IndexRepoRecordMem
-	Mem_names      map[string]*NamesRecordMem
-	Mem_idd_file   map[CompIddFile]*IddFileRecordMem
-	Mem_meta_dir   map[CompMetaDir]*MetaDirRecordMem
-	Mem_contents   map[CompContents]*ContentsRecordMem
-	Mem_packfiles  map[restic.IntID]*PackfilesRecordMem
+	Mem_snapshots    map[string]SnapshotRecordMem
+	Mem_index_repo   map[restic.IntID]*IndexRepoRecordMem
+	Mem_names        map[string]*NamesRecordMem
+	Mem_idd_file     map[CompIddFile]*IddFileRecordMem
+	Mem_meta_dir     map[CompMetaDir]*MetaDirRecordMem
+	Mem_contents     map[CompContents]*ContentsRecordMem
+	Mem_packfiles    map[restic.IntID]*PackfilesRecordMem
+	Mem_dir_children map[CompDirChildren]*DirChildrenMem
+	Mem_dir_name_id  map[restic.IntID]*DirNameIdMem
+	Mem_dir_path_id  map[restic.IntID]*DirPathIdMem
+	Mem_fullname     map[string]*FullnameMem
 
-	// we aso need sets for easy manipulation
-	old_names      mapset.Set[string]
-	old_packfiles  mapset.Set[restic.IntID]
+	// we also need sets for easy manipulation
+	old_names        mapset.Set[string]
+	old_packfiles    mapset.Set[restic.IntID]
 }
 
 type DBAggregate struct {
@@ -196,17 +221,27 @@ type DBAggregate struct {
 	table_counts     map[string]int // count of all tables
 
 	// the database tables - memory representation
-	Table_snapshots  map[string]SnapshotRecordMem
-	Table_index_repo map[restic.IntID]*IndexRepoRecordMem
-	Table_meta_dir   map[CompMetaDir]*MetaDirRecordMem
-	Table_packfiles  map[restic.IntID]*PackfilesRecordMem
-	Table_idd_file   map[CompIddFile]*IddFileRecordMem
-	Table_names      map[string]*NamesRecordMem
-	Table_contents   map[CompContents]*ContentsRecordMem
+	Table_snapshots    map[string]SnapshotRecordMem
+	Table_index_repo   map[restic.IntID]*IndexRepoRecordMem
+	Table_meta_dir     map[CompMetaDir]*MetaDirRecordMem
+	Table_packfiles    map[restic.IntID]*PackfilesRecordMem
+	Table_idd_file     map[CompIddFile]*IddFileRecordMem
+	Table_names        map[string]*NamesRecordMem
+	Table_contents     map[CompContents]*ContentsRecordMem
+	Table_dir_children map[CompDirChildren]*DirChildrenMem
+	Table_dir_name_id  map[restic.IntID]*DirNameIdMem
+	Table_dir_path_id  map[restic.IntID]*DirPathIdMem
+	Table_fullname     map[string]*FullnameMem
 
 	// other tables reference these tables via FOREIGN KEY
 	pk_snapshots     map[int]string        // meta_dir
-	pk_index_repo    map[int]restic.IntID  // meta_dir, idd_file, contents
+	pk_index_repo    map[int]restic.IntID  // meta_dir, idd_file, contents,
+	                 // dir_children, dir_name_id, fullname, dir_path_id
+	pk_names         map[int]string        // point back to names table
+	pk_fullname      map[int]string
+	// idd_files references names(id)
+	// dir_path_id references fullname(id)
+	// index_repo references packfiles(id)
 }
 
 // map repos to databases - really a const, but not according to the Go gospel

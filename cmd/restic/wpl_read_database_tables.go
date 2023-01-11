@@ -162,7 +162,7 @@ func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	return nil
 }
 
-// load the database rows for table index_repo into memory
+// load the database rows for table meta_dir into memory
 func ReadMetaDirTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	ptr_snapshot := db_aggregate.pk_snapshots
 	ptr_index_repo := db_aggregate.pk_index_repo
@@ -238,6 +238,7 @@ func ReadIddFileTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 func ReadNamesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	//table_name := "names"
 	db_names := make(map[string]*NamesRecordMem)
+	pk_names := make(map[int]string)
 	rows, err := db_conn.Queryx("SELECT * FROM names")
 	defer rows.Close()
 
@@ -254,9 +255,11 @@ func ReadNamesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		*/
 		row.Status = "db"
 		db_names[row.Name] = &row
+		pk_names[row.Id] =row.Name
 	}
 	rows.Close()
 	db_aggregate.Table_names = db_names
+	db_aggregate.pk_names = pk_names
 	return nil
 }
 
@@ -281,7 +284,7 @@ func ReadPackfilesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 			return err
 		}
 
-		Ptr2ID3(id, db_aggregate.repositoryData, "ReadPackfilesTable") // ReadPackfilesTable
+		Ptr2ID3(id, db_aggregate.repositoryData, "ReadPackfilesTable")
 		int_id := db_aggregate.repositoryData.blob_to_index[id]
 		row.Status = "db"
 		db_packfiles[int_id] = &row
@@ -323,5 +326,143 @@ func ReadContentsTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 	}
 	rows.Close()
 	db_aggregate.Table_contents = db_contents
+	return nil
+}
+
+// load the database rows for table dir_children into memory
+func ReadDirChildrenTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
+	ptr_index_repo := db_aggregate.pk_index_repo
+	db_dir_children := make(map[CompDirChildren]*DirChildrenMem)
+	rows, err := db_conn.Queryx("SELECT * FROM dir_children")
+	defer rows.Close()
+
+	for rows.Next() {
+		var row DirChildrenMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("ReadDirChildrenTable.StructScan failed %v\n", err)
+			return err
+		}
+
+		// convert Id_parent and Id_child via back pointer in index_repo
+		meta_blob_parent := ptr_index_repo[row.Id_parent]
+		meta_blob_child  := ptr_index_repo[row.Id_child]
+		ix := CompDirChildren{meta_blob_parent: meta_blob_parent, meta_blob_child: meta_blob_child}
+		/* dir_children
+			Id        int
+			Id_parent int
+			Id_child  int
+		*/
+		row.Status = "db"
+		db_dir_children[ix] = &row
+	}
+	rows.Close()
+	db_aggregate.Table_dir_children = db_dir_children
+	return nil
+}
+
+// load the database rows for table dir_name_id into memory
+func ReadDirNameIdTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
+	ptr_index_repo := db_aggregate.pk_index_repo
+	ptr_names      := db_aggregate.pk_names
+	db_dir_name_id := make(map[restic.IntID]*DirNameIdMem)
+	rows, err := db_conn.Queryx("SELECT * FROM dir_name_id")
+	defer rows.Close()
+
+	for rows.Next() {
+		var row DirNameIdMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("ReadDirNameIdTable.StructScan failed %v\n", err)
+			return err
+		}
+
+		row.Status = "db"
+		//Printf("ReadDirNameIdTable.row %+v\n", row)
+		ix, ok := ptr_index_repo[row.Id]
+		if !ok {
+			Printf("No mapping for primary index %6d\n", row.Id)
+			panic("ReadDirNameIdTable No mapping of primary index")
+		}
+		db_dir_name_id[ix] = &row
+
+		// we need to check the back pointer to the names table
+		if _, ok = ptr_names[row.Id_name]; !ok {
+			Printf("No mapping for id_name %6d\n", row.Id_name)
+			panic("ReadDirNameIdTable no mapping of id_name to a name")
+		}
+	}
+	rows.Close()
+	db_aggregate.Table_dir_name_id = db_dir_name_id
+	return nil
+}
+
+func ReadFullnameTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
+	pk_fullname    := make(map[int]string)
+	fullname 			 := make(map[string]*FullnameMem)
+	rows, err 		 := db_conn.Queryx("SELECT * FROM fullname")
+	defer rows.Close()
+
+	for rows.Next() {
+		var row FullnameMem
+		/* FullnameMem
+			Id        int -> repo_index.id
+			Pathname  string
+			Status    string
+		 */
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("ReadFullnameTable.StructScan failed %v\n", err)
+			return err
+		}
+
+		row.Status = "db"
+		fullname[row.Pathname] = &row
+		pk_fullname[row.Id] = row.Pathname
+	}
+	rows.Close()
+	db_aggregate.Table_fullname = fullname
+	db_aggregate.pk_fullname = pk_fullname
+	return nil
+}
+
+// Table_dir_path_id
+func ReadDirPathIdTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
+	ptr_index_repo := db_aggregate.pk_index_repo
+	ptr_fullname   := db_aggregate.pk_fullname
+	dir_path_id    := make(map[restic.IntID]*DirPathIdMem)
+
+	rows, err := db_conn.Queryx("SELECT * FROM dir_path_id")
+	defer rows.Close()
+
+	for rows.Next() {
+		var row DirPathIdMem
+		/* type DirPathIdMem struct {
+				Id          int
+				Id_pathname int
+				Status      string
+		 */
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("ReadDirPathIdTable.StructScan failed %v\n", err)
+			return err
+		}
+
+		row.Status = "db"
+		ix, ok := ptr_index_repo[row.Id]
+		if !ok {
+			Printf("No mapping for primary index %6d\n", row.Id)
+			panic("ReadDirPathIdTable No mapping of primary index")
+		}
+
+		_, ok = ptr_fullname[row.Id_pathname]
+		if !ok {
+			Printf("No mapping for Id_pathname %d\n", row.Id_pathname)
+			panic("ReadDirPathIdTable - no mapping for Id_pathname")
+		}
+		dir_path_id[ix] = &row
+	}
+	db_aggregate.Table_dir_path_id = dir_path_id
+	rows.Close()
 	return nil
 }

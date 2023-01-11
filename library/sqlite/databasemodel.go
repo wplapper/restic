@@ -88,6 +88,34 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(id_blob) REFERENCES     index_repo(id)
   )`,
 
+  "dir_children": `CREATE TABLE dir_children (
+    id INTEGER PRIMARY KEY,         -- the primary key
+    id_parent INTEGER NOT NULL,     -- parent id, INDEX
+    id_child  INTEGER NOT NULL,     -- child  id, INDEX
+    -- the tuple (id_parent, id_child) is UNIQUE INDEX
+    FOREIGN KEY(id_parent)  REFERENCES index_repo(id),
+    FOREIGN KEY(id_child)   REFERENCES index_repo(id)
+  )`,
+
+  "dir_name_id": `CREATE TABLE dir_name_id (
+    id INTEGER PRIMARY KEY,         -- the primary key
+    id_name INTEGER NOT NULL,       -- ptr to basename of directory, INDEX
+    FOREIGN KEY(id_name) REFERENCES names(id),
+    FOREIGN KEY(id)      REFERENCES index_repo(id)
+  )`,
+
+  "fullname": `CREATE TABLE fullname (
+    id INTEGER PRIMARY KEY,         -- the primary key, GENERIC ascending
+    pathname TEXT NOT NULL          -- full pathname of directory UNIQUE INDEX
+  )`,
+
+  "dir_path_id": `CREATE TABLE dir_path_id (
+    id INTEGER PRIMARY KEY,         -- the primary key
+    id_pathname INTEGER NOT NULL,   -- ptr to "fullname", INDEX
+    FOREIGN KEY(id_pathname) REFERENCES fullname(id),
+    FOREIGN KEY(id)          REFERENCES index_repo(id)
+  )`,
+
   // history section
   "snapshots_history": `CREATE TABLE snapshots_history (
   id INTEGER PRIMARY KEY,         -- ID of table row
@@ -109,7 +137,8 @@ var SQLITE_TABLES = map[string]string{
   restic_updated    TIMESTAMP NOT NULL,  --change when restic gets updated
   database_updated  TIMESTAMP NOT NULL,  --last update of database
   ts_created        TIMESTAMP NOT NULL   --creation date of database
-  )`}
+  )`,
+}
 
 var SQLITE_INDEX = map[string][]ListIndexMaps{
 	"index_repo": {
@@ -140,7 +169,22 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
 	"snapshots_history": {
 		ListIndexMaps{ixname: "ix_snaphist_snap_id", on: "snap_id", unique: ""},
-		ListIndexMaps{ixname: "ix_snaphist_action",  on: "action", unique: ""}}}
+		ListIndexMaps{ixname: "ix_snaphist_action",  on: "action",  unique: ""}},
+
+	"dir_children": {
+		ListIndexMaps{ixname: "ux_dc_par_child",     on: "id_parent,id_child", unique: "UNIQUE"},
+		ListIndexMaps{ixname: "ix_dc_parent",        on: "id_parent", unique: ""},
+		ListIndexMaps{ixname: "ix_dc_child",         on: "id_child",  unique: ""}},
+
+	"dir_name_id": {
+		ListIndexMaps{ixname: "ix_dname_name",      on: "id_name", unique: ""}},
+
+	"fullname": {
+		ListIndexMaps{ixname: "ux_fname_path",      on: "pathname", unique: "UNIQUE"}},
+
+	"dir_path_id": {
+		ListIndexMaps{ixname: "ix_dpath_path",      on: "id_pathname", unique: ""}},
+}
 
 type DBDescriptor struct {
 	DB_ptr          *sqlx.DB
