@@ -7,10 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/restic/restic/internal/backend"
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/backend"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
 )
 
 var cmdCat = &cobra.Command{

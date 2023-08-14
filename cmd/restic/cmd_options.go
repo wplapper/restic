@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/restic/restic/internal/options"
+	"github.com/wplapper/restic/library/options"
 
 	"github.com/spf13/cobra"
 )

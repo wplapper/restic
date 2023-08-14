@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/restic/restic/internal/restic"
-	rtest "github.com/restic/restic/internal/test"
+	"github.com/wplapper/restic/library/restic"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 func testRunSnapshots(t testing.TB, gopts GlobalOptions) (newest *Snapshot, snapmap map[restic.ID]Snapshot) {

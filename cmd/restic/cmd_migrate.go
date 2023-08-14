@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/restic/restic/internal/migrations"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/migrations"
+	"github.com/wplapper/restic/library/restic"
 
 	"github.com/spf13/cobra"
 )

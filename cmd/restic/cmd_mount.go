@@ -11,12 +11,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/restic/restic/internal/debug"
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/restic"
 
-	resticfs "github.com/restic/restic/internal/fs"
-	"github.com/restic/restic/internal/fuse"
+	resticfs "github.com/wplapper/restic/library/fs"
+	"github.com/wplapper/restic/library/fuse"
 
 	systemFuse "github.com/anacrolix/fuse"
 	"github.com/anacrolix/fuse/fs"

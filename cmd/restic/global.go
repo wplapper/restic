@@ -12,31 +12,31 @@ import (
 	"strings"
 	"time"
 
-	"github.com/restic/restic/internal/backend"
-	"github.com/restic/restic/internal/backend/azure"
-	"github.com/restic/restic/internal/backend/b2"
-	"github.com/restic/restic/internal/backend/gs"
-	"github.com/restic/restic/internal/backend/limiter"
-	"github.com/restic/restic/internal/backend/local"
-	"github.com/restic/restic/internal/backend/location"
-	"github.com/restic/restic/internal/backend/logger"
-	"github.com/restic/restic/internal/backend/rclone"
-	"github.com/restic/restic/internal/backend/rest"
-	"github.com/restic/restic/internal/backend/retry"
-	"github.com/restic/restic/internal/backend/s3"
-	"github.com/restic/restic/internal/backend/sema"
-	"github.com/restic/restic/internal/backend/sftp"
-	"github.com/restic/restic/internal/backend/swift"
-	"github.com/restic/restic/internal/cache"
-	"github.com/restic/restic/internal/debug"
-	"github.com/restic/restic/internal/fs"
-	"github.com/restic/restic/internal/options"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/textfile"
-	"github.com/restic/restic/internal/ui/termstatus"
+	"github.com/wplapper/restic/library/backend"
+	"github.com/wplapper/restic/library/backend/azure"
+	"github.com/wplapper/restic/library/backend/b2"
+	"github.com/wplapper/restic/library/backend/gs"
+	"github.com/wplapper/restic/library/backend/limiter"
+	"github.com/wplapper/restic/library/backend/local"
+	"github.com/wplapper/restic/library/backend/location"
+	"github.com/wplapper/restic/library/backend/logger"
+	"github.com/wplapper/restic/library/backend/rclone"
+	"github.com/wplapper/restic/library/backend/rest"
+	"github.com/wplapper/restic/library/backend/retry"
+	"github.com/wplapper/restic/library/backend/s3"
+	"github.com/wplapper/restic/library/backend/sema"
+	"github.com/wplapper/restic/library/backend/sftp"
+	"github.com/wplapper/restic/library/backend/swift"
+	"github.com/wplapper/restic/library/cache"
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/fs"
+	"github.com/wplapper/restic/library/options"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/textfile"
+	"github.com/wplapper/restic/library/ui/termstatus"
 
-	"github.com/restic/restic/internal/errors"
+	"github.com/wplapper/restic/library/errors"
 
 	"os/exec"
 
@@ -426,6 +426,10 @@ const maxKeys = 20
 
 // OpenRepository reads the password and opens the repository.
 func OpenRepository(ctx context.Context, opts GlobalOptions) (*repository.Repository, error) {
+	if opts.Repo != "" { // wpl 2023-08-14
+		opts.Repo = map_repo_names(opts.Repo)
+		globalOptions.Repo = opts.Repo
+	}
 	repo, err := ReadRepo(opts)
 	if err != nil {
 		return nil, err

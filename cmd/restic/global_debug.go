@@ -9,8 +9,8 @@ import (
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/repository"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/repository"
 
 	"github.com/pkg/profile"
 )

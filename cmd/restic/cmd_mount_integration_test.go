@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/restic/restic/internal/debug"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/restic"
-	rtest "github.com/restic/restic/internal/test"
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 const (

@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 
-	"github.com/restic/restic/internal/index"
-	"github.com/restic/restic/internal/pack"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/index"
+	"github.com/wplapper/restic/library/pack"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

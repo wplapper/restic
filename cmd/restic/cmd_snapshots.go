@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/ui/table"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/ui/table"
 	"github.com/spf13/cobra"
 )
 

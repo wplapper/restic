@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/restic/restic/internal/debug"
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/restic"
 )
 
 type lockContext struct {
