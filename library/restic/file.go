@@ -17,6 +17,7 @@ const (
 	SnapshotFile
 	IndexFile
 	ConfigFile
+	WplFile // wpl 2023-08-14
 )
 
 func (t FileType) String() string {
@@ -35,6 +36,8 @@ func (t FileType) String() string {
 		s = "index"
 	case ConfigFile:
 		s = "config"
+	case WplFile:
+		s = "wpl"
 	}
 	return s
 }
@@ -63,6 +66,7 @@ func (h Handle) Valid() error {
 	case SnapshotFile:
 	case IndexFile:
 	case ConfigFile:
+	case WplFile:
 	default:
 		return errors.Errorf("invalid Type %d", h.Type)
 	}

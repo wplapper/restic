@@ -137,7 +137,8 @@ func build(cwd string, env map[string]string, args ...string) error {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	if !enableCGO {
-		cmd.Env = append(cmd.Env, "CGO_ENABLED=0")
+		// wpl 2023-08-14
+		cmd.Env = append(cmd.Env, "CGO_ENABLED=1")
 	}
 
 	printEnv(cmd.Env)

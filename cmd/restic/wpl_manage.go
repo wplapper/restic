@@ -191,7 +191,7 @@ func step_manage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 // run restic rebuild-index
 func run_rebuild_index(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
 
-	var opts RebuildIndexOptions
+	var opts RepairIndexOptions
 	Printf("\n%s restic rebuild-index -r %s\n",
 		time.Now().String()[:19], globalOptions.Repo)
 	err := runRebuildIndex(ctx, opts, gopts)
