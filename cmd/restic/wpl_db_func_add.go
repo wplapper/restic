@@ -22,7 +22,7 @@ import (
 
 func DeliverSnapShotsIDs(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(id string) error) error {
-	for _, sn := range repositoryData.snaps {
+	for _, sn := range repositoryData.Snaps {
 		snap_id := sn.ID().Str()
 		if _, ok := db_aggregate.Table_snapshots[snap_id]; ok {
 			continue
@@ -61,7 +61,7 @@ func ForAllSnapShots(gopts GlobalOptions, ctx context.Context, repositoryData *R
 	wg.Go(func() error {
 		high_id := sqlite.Get_high_id("snapshots")
 		for snap_id := range ch_snap_id {
-			mem := repositoryData.snap_map[snap_id]
+			mem := repositoryData.SnapMap[snap_id]
 			row := SnapshotRecordMem{Id: high_id, Snap_id: snap_id,
 				Snap_time: mem.Time.String()[:19], Snap_host: mem.Hostname,
 				Snap_fsys: mem.Paths[0], Id_snap_root: mem.Tree.String(), Status: "new"}
@@ -83,8 +83,8 @@ func ForAllSnapShots(gopts GlobalOptions, ctx context.Context, repositoryData *R
 
 func DeliverIndexRepoIds(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(id IntID) error) error {
-	for id := range repositoryData.index_handle {
-		id_int := repositoryData.blob_to_index[id]
+	for id := range repositoryData.IndexHandle {
+		id_int := repositoryData.BlobToIndex[id]
 		if _, ok := db_aggregate.Table_index_repo[id_int]; ok {
 			continue
 		}
@@ -121,8 +121,8 @@ func ForAllIndexRepo(gopts GlobalOptions, ctx context.Context, repositoryData *R
 		var index_type string
 		for id_int := range ch_blob {
 			var mem_ix_repo IndexRepoRecordMem
-			ID := repositoryData.index_to_blob[id_int]
-			mem := repositoryData.index_handle[ID]
+			ID := repositoryData.IndexToBlob[id_int]
+			mem := repositoryData.IndexHandle[ID]
 			if mem.Type == restic.TreeBlob {
 				index_type = "tree"
 			} else {
@@ -158,7 +158,7 @@ func ForAllIndexRepo(gopts GlobalOptions, ctx context.Context, repositoryData *R
 // table packfiles
 func DeliverPackfileIds(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(id IntID) error) error {
-	for _, handle := range repositoryData.index_handle {
+	for _, handle := range repositoryData.IndexHandle {
 		if _, ok := db_aggregate.Table_packfiles[handle.pack_index]; ok {
 			continue
 		}
@@ -196,7 +196,7 @@ func ForAllPackfiles(gopts GlobalOptions, ctx context.Context, repositoryData *R
 		high_id := sqlite.Get_high_id("packfiles")
 		//newComers.Mem_packfiles = make(map[IntID]*PackfilesRecordMem)
 		for ix := range ch_pack {
-			target := repositoryData.index_to_blob[ix]
+			target := repositoryData.IndexToBlob[ix]
 			row := PackfilesRecordMem{Id: high_id, Packfile_id: target.String(),
 				Status: "new"}
 			newComers.Mem_packfiles[ix] = &row
@@ -219,7 +219,7 @@ func ForAllPackfiles(gopts GlobalOptions, ctx context.Context, repositoryData *R
 func DeliverNames(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(string) error) error {
 	seen := mapset.NewSet[string]()
-	for _, file_list := range repositoryData.directory_map {
+	for _, file_list := range repositoryData.DirectoryMap {
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
@@ -288,7 +288,7 @@ func ForAllNames(gopts GlobalOptions, ctx context.Context, repositoryData *Repos
 // table meta_dir
 func DeliverMetaDirIds(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(id CompMetaDir) error) error {
-	for snap_id, blob_set := range repositoryData.meta_dir_map {
+	for snap_id, blob_set := range repositoryData.MetaDirMap {
 		for meta_blob := range blob_set.Iter() {
 			ix := CompMetaDir{snap_id: snap_id.Str(), meta_blob: meta_blob}
 			if _, ok := db_aggregate.Table_meta_dir[ix]; ok {
@@ -343,7 +343,7 @@ func ForAllMetaDir(gopts GlobalOptions, ctx context.Context, repositoryData *Rep
 					continue
 				}
 
-				Printf("missing meta blob %s\n", repositoryData.index_to_blob[meta_blob].String()[:12])
+				Printf("missing meta blob %s\n", repositoryData.IndexToBlob[meta_blob].String()[:12])
 				panic("ForAllMetaDir: no index_repo row found")
 			}
 			row := MetaDirRecordMem{Id: high_id, Id_snap_id: data_snap.Id,
@@ -360,8 +360,8 @@ func ForAllMetaDir(gopts GlobalOptions, ctx context.Context, repositoryData *Rep
 // table idd_file
 func DeliverIddFile(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(CompIddFile) error) error {
-	for meta_blob_int, file_list := range repositoryData.directory_map {
-		//meta_blob := repositoryData.index_to_blob[meta_blob_int]
+	for meta_blob_int, file_list := range repositoryData.DirectoryMap {
+		//meta_blob := repositoryData.IndexToBlob[meta_blob_int]
 		for position, meta := range file_list {
 			ix := CompIddFile{meta_blob: meta_blob_int, position: position}
 			switch meta.Type {
@@ -408,7 +408,7 @@ func ForAllIddFile(gopts GlobalOptions, ctx context.Context, repositoryData *Rep
 			var name string
 			meta_blob := ix.meta_blob
 			position := ix.position
-			node := repositoryData.directory_map[meta_blob][position]
+			node := repositoryData.DirectoryMap[meta_blob][position]
 			name = node.name
 			db_names, ok := db_aggregate.Table_names[name]
 			if !ok {
@@ -439,7 +439,7 @@ func ForAllIddFile(gopts GlobalOptions, ctx context.Context, repositoryData *Rep
 // table contents
 func DeliverContents(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(CompContents) error) error {
-	for meta_blob_int, file_list := range repositoryData.directory_map {
+	for meta_blob_int, file_list := range repositoryData.DirectoryMap {
 		for position, meta := range file_list {
 			for offset := range meta.content {
 				ix := CompContents{meta_blob: meta_blob_int, position: position, offset: offset}
@@ -498,7 +498,7 @@ func ForAllContents(gopts GlobalOptions, ctx context.Context, repositoryData *Re
 			id_blob := mem_ix_repo.Id
 
 			// construct 'id_data_id' back pointer
-			meta := repositoryData.directory_map[meta_blob][position]
+			meta := repositoryData.DirectoryMap[meta_blob][position]
 			data_blob := meta.content[offset]
 			db_ix_repo, ok2 := db_aggregate.Table_index_repo[data_blob]
 			if !ok2 {
@@ -522,7 +522,7 @@ func ForAllContents(gopts GlobalOptions, ctx context.Context, repositoryData *Re
 
 func DeliverFullname(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(string) error) error {
-	for _, fullpath := range repositoryData.fullpath {
+	for _, fullpath := range repositoryData.FullPath {
 		if len(fullpath) >= 2 {
 			if _, ok := db_aggregate.Table_fullname[fullpath[2:]]; ok {
 				continue
@@ -588,10 +588,10 @@ func ForAllFullname(gopts GlobalOptions, ctx context.Context, repositoryData *Re
 	return nil
 }
 
-// deliver the blob for new entries in repositoryData.fullpath
+// deliver the blob for new entries in repositoryData.FullPath
 func DeliverDirPathId(repositoryData *RepositoryData, db_aggregate *DBAggregate,
 	fn func(IntID) error) error {
-	for blob := range repositoryData.fullpath {
+	for blob := range repositoryData.FullPath {
 		if _, ok := db_aggregate.Table_dir_path_id[blob]; ok {
 			continue
 		}
@@ -632,7 +632,7 @@ func ForAllDirPathIDs(gopts GlobalOptions, ctx context.Context, repositoryData *
 				continue
 			}
 			if _, ok := db_aggregate.Table_dir_path_id[blob]; !ok {
-				pathname := repositoryData.fullpath[blob][2:]
+				pathname := repositoryData.FullPath[blob][2:]
 				if pathname == "" {
 					pathname = "/"
 				}

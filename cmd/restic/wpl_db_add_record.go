@@ -419,8 +419,8 @@ func CreateBlobSummary(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	count_meta_blobs := 0
 	count_data_blobs := 0
 	for blob_int := range newComers.Mem_index_repo {
-		blob := repositoryData.index_to_blob[blob_int]
-		ih := repositoryData.index_handle[blob]
+		blob := repositoryData.IndexToBlob[blob_int]
+		ih := repositoryData.IndexHandle[blob]
 		typ := ih.Type.String()[0:1]
 		if typ == "t" {
 			sum_meta_blobs += ih.size

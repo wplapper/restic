@@ -88,7 +88,7 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 3: decide what to do
 	if repo_details_options.same_tree {
-		find_same_tree(ctx, repo, &repositoryData)
+		findSameTree(ctx, repo, &repositoryData)
 		return nil
 	} else if repo_details_options.check_data {
 		check_data(ctx, repo, &repositoryData, gopts.Repo)
@@ -96,15 +96,15 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 	}
 
 	// normal processing
-	count_blobs(ctx, repo, &repositoryData)
-	count_files(ctx, repo, &repositoryData)
-	count_tables(ctx, repo, &repositoryData, repo_details_options)
+	countBlobs(ctx, repo, &repositoryData)
+	countFiles(ctx, repo, &repositoryData)
+	countTables(ctx, repo, &repositoryData, repo_details_options)
 	return nil
 }
 
 // go through index table and count tree and data blobs, and compressed and
 // uncompressed sizes
-func count_blobs(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
+func countBlobs(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
 	count_tree_blobs := 0
 	count_data_blobs := 0
 	size_tree_blobs := 0
@@ -194,7 +194,7 @@ type DeviceInode struct {
 }
 
 // count index, snapshot and meta file counts and sizes
-func count_files(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
+func countFiles(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
 	count_snaps := 0
 	size_snaps  := int64(0)
 
@@ -243,11 +243,11 @@ type MetaPositionOffet struct {
 }
 
 // count table contents and other interesting information
-func count_tables(ctx context.Context, repo restic.Repository,
+func countTables(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions) {
 	// meta_dir
 	count_meta_dir_entries := 0
-	for _, meta_blobs := range repositoryData.meta_dir_map {
+	for _, meta_blobs := range repositoryData.MetaDirMap {
 		count_meta_dir_entries += meta_blobs.Cardinality()
 	}
 
@@ -264,14 +264,14 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 	names       := mapset.NewSet[string]()
 
 	// map inodes back to 'meta_blob_int'
-	for _, file_list := range repositoryData.directory_map {
+	for _, file_list := range repositoryData.DirectoryMap {
 		count_directory_map_entries += len(file_list)
 		for _, meta := range file_list {
 			device_inode := DeviceInode{Inode: meta.inode, DeviceID: meta.DeviceID}
 			if meta.Type == "dir" {
 				inodes_meta.Add(device_inode)
 			} else if meta.Type == "file" {
-				inodes_data.Add(convert_content_version2(meta.content))
+				inodes_data.Add(convertContent2(meta.content))
 			}
 			names.Add(meta.name)
 		}
@@ -288,7 +288,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 	// report 2:
 	// build full map for all data blobs
 	// data_map_org is map[restic.ID]mapset.Set[CompIndexOffet]
-	data_map_org := make_full_contents_map_v2(repositoryData)
+	data_map_org := MakeFullContentsMap2(repositoryData)
 	// build a flat set
 	data_map := mapset.NewSet[CompIndexOffet]()
 	for _, sets := range data_map_org {
@@ -303,7 +303,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 	for data_blob, sets := range data_map_org {
 		if sets.Cardinality() == 1 {
 			count_singles++
-			ih := repositoryData.index_handle[data_blob]
+			ih := repositoryData.IndexHandle[data_blob]
 			size_singles += int(ih.size)
 		}
 	}
@@ -317,10 +317,10 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 
 	// check if repository needs pruning: more meta blobs in Index(), compared
 	// to the union of all trees
-	// full tree is mapped to repositoryData.fullpath
-	// index is mapped repositoryData.index_handle
+	// full tree is mapped to repositoryData.FullPath
+	// index is mapped repositoryData.IndexHandle
 	set_index_handle := mapset.NewSet[IntID]()
-	for _, ih := range repositoryData.index_handle {
+	for _, ih := range repositoryData.IndexHandle {
 		if ih.Type == restic.TreeBlob {
 			set_index_handle.Add(ih.blob_index)
 		}
@@ -328,7 +328,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 	set_index_handle.Remove(EMPTY_NODE_ID_TRANSLATED)
 
 	set_tree := mapset.NewSet[IntID]()
-	for meta_blob_int := range repositoryData.fullpath {
+	for meta_blob_int := range repositoryData.FullPath {
 		set_tree.Add(meta_blob_int)
 	}
 
@@ -347,7 +347,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 		l_diff = diff.Cardinality()
 
 		if repo_details_options.prune {
-			check_prune(repositoryData, diff, options)
+			checkPrune(repositoryData, diff, options)
 		}
 	}
 
@@ -363,12 +363,12 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 }
 
 // find snapshots which own the same tree (root)
-func find_same_tree(ctx context.Context, repo restic.Repository,
+func findSameTree(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData) {
 	printed := false
 	// map tree root to snap_id
-	double := make(map[restic.ID]mapset.Set[string])
-	for snap_id, sn := range repositoryData.snap_map {
+	double := map[restic.ID]mapset.Set[string]{}
+	for snap_id, sn := range repositoryData.SnapMap {
 		if _, ok := double[*sn.Tree]; ! ok {
 			double[*sn.Tree] = mapset.NewSet[string]()
 		}
@@ -390,7 +390,7 @@ repositoryData *RepositoryData) {
 		// collect duplicate snapshots, sort and print
 		owners := make([]*restic.Snapshot, 0, snap_id_set.Cardinality())
 		for snap_id := range snap_id_set.Iter() {
-			owners = append(owners, repositoryData.snap_map[snap_id])
+			owners = append(owners, repositoryData.SnapMap[snap_id])
 		}
 		sort.SliceStable(owners, func(i, j int) bool {
 			return owners[i].Time.Before(owners[j].Time)
@@ -460,7 +460,7 @@ repositoryData *RepositoryData, root string) {
 }
 
 // check for prune: 'meta_diff' only contains meta_blob records
-func check_prune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
+func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	options RepoDetailsOptions) {
 
 	// diff set length is zero, which means that the two sets are equal.
@@ -469,37 +469,17 @@ func check_prune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 
 	// need to copy fullpath, so we can work on the tree before it gets amended!
-	fullpath := make(map[IntID]string)
-	for k, v := range repositoryData.fullpath {
+	fullpath := map[IntID]string{}
+	for k, v := range repositoryData.FullPath {
 		fullpath[k] = v
 	}
 
-	// this amends the repositoryData.fullpath
-	diagnose_and_repair_orphans(meta_diff, repositoryData)
-
-	// constuct some helper containers
-	if options.detail > 0 {
-		// data_map is temp mapping for each data blob and the
-		// repositoryData.data_map = map_data_blob_file(repositoryData)
-
-		// inverse repositoryData.fullpath map which is map[IntID]string
-		// we need this for the analysis if there is temp replacement file in the repo
-		repositoryData.data_map = map_data_blob_file(repositoryData)
-		repositoryData.reverse_fullpath = make(map[string]mapset.Set[IntID])
-		for int_blob, path := range repositoryData.fullpath {
-			if _, ok := repositoryData.reverse_fullpath[path]; !ok {
-				repositoryData.reverse_fullpath[path] = mapset.NewSet[IntID]()
-			}
-			repositoryData.reverse_fullpath[path].Add(int_blob)
-		}
-	}
-
-	// collect all blobs which belong to the same packs (for repacking calculation)
-	repositoryData.blobs_per_packID = make_blobs_per_packID(repositoryData)
+	// this amends the repositoryData.FullPath
+	diagnoseAndRepairOrphans(meta_diff, repositoryData)
 
 	// 1. - get all data blobs from Index()
 	set_data_handle := mapset.NewSet[IntID]()
-	for _, ih := range repositoryData.index_handle {
+	for _, ih := range repositoryData.IndexHandle {
 		if ih.Type == restic.DataBlob {
 			set_data_handle.Add(ih.blob_index)
 		}
@@ -508,7 +488,7 @@ func check_prune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	// 2. - data all blobs from the mapped tree blobs - as in used blobs
 	set_data_tree := mapset.NewSet[IntID]()
 	for meta_blob_int := range fullpath {
-		for _, meta := range repositoryData.directory_map[meta_blob_int] {
+		for _, meta := range repositoryData.DirectoryMap[meta_blob_int] {
 			if meta.Type == "file" {
 				set_data_tree.Append(meta.content ...)
 			}
@@ -523,15 +503,16 @@ func check_prune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 
 	// 4. - report details if requested
 	detail := options.detail
+	data_map := map_data_blob_file(repositoryData)
 	if detail == 4 {
 		print_very_raw(repositoryData, unused_blobs)
 	} else if detail == 3 {
-		print_raw(repositoryData, unused_blobs)
+		print_raw(repositoryData, unused_blobs, data_map)
 	} else if detail == 2 || detail == 1 {
-		print_some_detail(repositoryData, unused_blobs, detail, options.lost)
+		print_some_detail(repositoryData, unused_blobs, detail, options.lost, data_map)
 	}
 
-	//5. - reset
+	//5. - reset for GC
 	fullpath = nil
 	diff_data = nil
 	unused_blobs = nil
@@ -541,13 +522,14 @@ func check_prune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 
 // this function generates identifiable names for 'lost' meta_blobs and
 // tries to derive meaningful names from subdirectories
-// output: update repositoryData.fullpath entries
-func diagnose_and_repair_orphans(missing_blobs mapset.Set[IntID],
+// output: update repositoryData.FullPath entries
+func diagnoseAndRepairOrphans(missing_blobs mapset.Set[IntID],
 repositoryData *RepositoryData) {
 
 	// step 1: build temp child -> parent table
-	parents := make(map[IntID]IntID)
-	for parent, children := range repositoryData.children {
+	children := CreateAllChildren(repositoryData)
+	parents  := map[IntID]IntID{}
+	for parent, children := range children {
 		for child := range children.Iter() {
 			parents[child] = parent
 		}
@@ -559,16 +541,16 @@ repositoryData *RepositoryData) {
 		changed = false
 		// here we are with orphaned meta blobs - check for parent -> child relationship
 		for parent := range missing_blobs.Iter() {
-			if _, ok := repositoryData.fullpath[parent]; ok {
+			if _, ok := repositoryData.FullPath[parent]; ok {
 				continue
 			}
-			for child := range repositoryData.children[parent].Iter() {
-				if _, ok := repositoryData.fullpath[child]; ! ok {
+			for child := range children[parent].Iter() {
+				if _, ok := repositoryData.FullPath[child]; ! ok {
 					continue
 				}
 
 				// we have temp unnamed child
-				components := strings.Split(repositoryData.fullpath[child], "/")
+				components := strings.Split(repositoryData.FullPath[child], "/")
 				lcomp := len(components)
 				if lcomp  < 3 {
 					continue
@@ -576,7 +558,7 @@ repositoryData *RepositoryData) {
 				// construct new parent
 				new_pathp := "/./" + strings.Join(components[2:lcomp-1], "/")
 				//Verboseff("new_pathp %s\n", new_pathp)
-				repositoryData.fullpath[parent] = new_pathp
+				repositoryData.FullPath[parent] = new_pathp
 
 				// check for grandparent, need to check length first
 				if lcomp  < 4 {
@@ -584,11 +566,11 @@ repositoryData *RepositoryData) {
 				}
 				grand_parent := parents[parent]
 				// we found gp -> parent
-				_, ok2 := repositoryData.fullpath[grand_parent]
+				_, ok2 := repositoryData.FullPath[grand_parent]
 				if ! ok2 {
 					//Printf("components %+v\n", components)
 					new_pathgp := "/./" + strings.Join(components[2:lcomp - 2], "/")
-					repositoryData.fullpath[grand_parent] = new_pathgp
+					repositoryData.FullPath[grand_parent] = new_pathgp
 				}
 				changed = true
 			}
@@ -599,11 +581,11 @@ repositoryData *RepositoryData) {
 	// check if they have temp common parent, which has temp name
 	// create name as <known-gp>/<hex-string>
 	for parent := range missing_blobs.Iter() {
-		if _, ok := repositoryData.fullpath[parent]; ! ok {
+		if _, ok := repositoryData.FullPath[parent]; ! ok {
 			gp := parents[parent]
-			if gp_name, ok2 := repositoryData.fullpath[gp]; ok2 {
-				repositoryData.fullpath[parent] = gp_name + "/" +
-					repositoryData.index_to_blob[parent].String()[:12]
+			if gp_name, ok2 := repositoryData.FullPath[gp]; ok2 {
+				repositoryData.FullPath[parent] = gp_name + "/" +
+					repositoryData.IndexToBlob[parent].String()[:12]
 			}
 		}
 	}
@@ -615,16 +597,16 @@ repositoryData *RepositoryData) {
 		if parent == EMPTY_NODE_ID_TRANSLATED {
 			continue
 		}
-		if _, ok := repositoryData.fullpath[parent]; ! ok {
-			repositoryData.fullpath[parent] = "/./" + repositoryData.index_to_blob[parent].String()[:12]
+		if _, ok := repositoryData.FullPath[parent]; ! ok {
+			repositoryData.FullPath[parent] = "/./" + repositoryData.IndexToBlob[parent].String()[:12]
 		}
 	}
 	parents = nil
 }
 
-// currently not used in favour of 'convert_content_version2'
+// currently not used in favour of 'convertContent2'
 // convert content slice to temp hash, so it can be compared against other content
-func convert_contents_to_sha256(content []IntID) [sha256.Size]byte {
+func convertContentsToSha256(content []IntID) [sha256.Size]byte {
 	buf := new(bytes.Buffer)
 	for _, data_blob_int := range content {
 		binary.Write(buf, binary.LittleEndian, data_blob_int)
@@ -633,7 +615,7 @@ func convert_contents_to_sha256(content []IntID) [sha256.Size]byte {
 }
 
 // serialize 'content' step by step into sha256 by Write() to it
-func convert_content_version2(content []IntID) [sha256.Size]byte {
+func convertContent2(content []IntID) (result [sha256.Size]byte) {
 	sha256sum := sha256.New()
 	temp := make([]byte, 4)
 	for _, data_blob_int := range content {
@@ -645,10 +627,9 @@ func convert_content_version2(content []IntID) [sha256.Size]byte {
 		sha256sum.Write(temp)
 	}
 
-	// copy to final target to [sha256.Size]byte,
+	// copy final target to [sha256.Size]byte,
 	// type 'sha256sum.Sum(nil)' is []byte
-	var result [sha256.Size]byte
-	// return fixed size result
+	// 'copy' can copy between different types
 	copy(result[:], sha256sum.Sum(nil))
 	return result
 }

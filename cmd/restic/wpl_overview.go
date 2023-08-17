@@ -107,7 +107,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	}
 
 	if overview_options.Age {
-		show_age(&repositoryData, overview_options)
+		ShowAge(&repositoryData, overview_options)
 		return nil
 	}
 
@@ -153,7 +153,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 
 // print the age of filtered snaps
 // The snaps are already sort by descending age.
-func show_age(repositoryData *RepositoryData, options OverviewOptions) {
+func ShowAge(repositoryData *RepositoryData, options OverviewOptions) {
 	filt_hostname := options.Hostname != ""
 	filt_fsys     := options.FileSystem != ""
 	hostname      := options.Hostname
@@ -169,7 +169,7 @@ func show_age(repositoryData *RepositoryData, options OverviewOptions) {
 	now := time.Now()
 	Printf("%-8s %-19s %-12s %s:%s\n", "snap_id", "   date and time", "", "hostname",
 		"file-system")
-	for _, sn := range repositoryData.snaps {
+	for _, sn := range repositoryData.Snaps {
 		if filt_hostname && sn.Hostname != hostname {
 			continue
 		}
@@ -225,8 +225,8 @@ options OverviewOptions) error {
 
 	// loop over all repositories
 	repos := json_config["BASE_CONFIG"]["repos"]
-	all_group_summary := make(map[snapGroup]GroupInfoSummary)
-	all_groups_sorted := make([]snapGroup, 0)
+	all_group_summary := map[snapGroup]GroupInfoSummary{}
+	all_groups_sorted := []snapGroup{}
 	for _, repo_basename := range repos {
 		repository := target + repo_basename
 		gopts.Repo = repository

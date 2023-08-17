@@ -136,11 +136,6 @@ type CompMetaDir struct {
 	meta_blob IntID
 }
 
-type CompIddFile struct {
-	meta_blob IntID
-	position  int
-}
-
 type CompContents struct {
 	meta_blob IntID
 	position  int

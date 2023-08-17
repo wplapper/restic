@@ -179,8 +179,8 @@ func run_db_rem_record(ctx context.Context, cmd *cobra.Command, gopts GlobalOpti
 
 	// find old rows in TABLE index_repo
 	for ix, row := range db_aggregate.Table_index_repo {
-		blob := repositoryData.index_to_blob[ix]
-		if _, ok := repositoryData.index_handle[blob]; !ok {
+		blob := repositoryData.IndexToBlob[ix]
+		if _, ok := repositoryData.IndexHandle[blob]; !ok {
 			row.Status = "delete"
 			db_aggregate.Table_index_repo[ix] = row
 		}
@@ -217,11 +217,11 @@ func db_upd_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	// new packfiles, therefore the table 'index_repo' needs updating.
 	count_updates := 0
 	// update index_repo.id_pack_id, packfiles.id is master here!
-	for id, ih := range repositoryData.index_handle {
-		id_int := repositoryData.blob_to_index[id]
+	for id, ih := range repositoryData.IndexHandle {
+		id_int := repositoryData.BlobToIndex[id]
 		db_index_repo, ok := db_aggregate.Table_index_repo[id_int]
 		if !ok {
-			packID := repositoryData.index_to_blob[id_int]
+			packID := repositoryData.IndexToBlob[id_int]
 			Printf("missing entry for blob %s at index %6d\n", packID.String()[:12], id_int)
 			panic("update_index_repo: index_repo row not found in database")
 		}
@@ -229,7 +229,7 @@ func db_upd_index_repo(db_aggregate *DBAggregate, repositoryData *RepositoryData
 		pack_index := ih.pack_index
 		pack_row, ok := db_aggregate.Table_packfiles[pack_index]
 		if !ok {
-			packID := repositoryData.index_to_blob[pack_index]
+			packID := repositoryData.IndexToBlob[pack_index]
 			Printf("missing packfile %s\n", packID.String()[:12])
 			panic("update_index_repo: packfiles row not found in database")
 		}
@@ -306,7 +306,7 @@ func modify_database_tables(db_aggregate *DBAggregate, repositoryData *Repositor
 func ProcessSnapshots(db_aggregate *DBAggregate, repositoryData *RepositoryData) error {
 	t_insert := make([]RemoveTable, 0)
 	for snap_id, row := range db_aggregate.Table_snapshots {
-		if _, ok := repositoryData.snap_map[snap_id]; !ok {
+		if _, ok := repositoryData.SnapMap[snap_id]; !ok {
 			t_insert = append(t_insert, RemoveTable{Id: row.Id})
 		}
 	}
@@ -626,7 +626,7 @@ func CreateOldMemNames(db_aggregate *DBAggregate, repositoryData *RepositoryData
 
 	// step1: extract names from idd_file
 	seen := mapset.NewSet[string]()
-	for _, file_list := range repositoryData.directory_map {
+	for _, file_list := range repositoryData.DirectoryMap {
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
@@ -651,7 +651,7 @@ func CreateOldMemNames(db_aggregate *DBAggregate, repositoryData *RepositoryData
 func CreateOldPackfiles(db_aggregate *DBAggregate, repositoryData *RepositoryData) {
 	// collect all packfiles from the index_handle
 	pack_intIDs := mapset.NewSet[IntID]()
-	for _, handle := range repositoryData.index_handle {
+	for _, handle := range repositoryData.IndexHandle {
 		pack_intIDs.Add(handle.pack_index)
 	}
 

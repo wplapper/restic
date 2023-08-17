@@ -34,17 +34,15 @@ var (
 )
 
 func init_repositoryData(repositoryData *RepositoryData) {
-	repositoryData.snaps = []*restic.Snapshot{}
-	repositoryData.snap_map = make(map[string]*restic.Snapshot)
-	repositoryData.directory_map = make(map[IntID][]BlobFile2)
-	repositoryData.fullpath = make(map[IntID]string)
-	repositoryData.names = make(map[IntID]string)
-	repositoryData.meta_dir_map = make(map[*restic.ID]mapset.Set[IntID])
-	repositoryData.index_handle = make(map[restic.ID]Index_Handle)
+	repositoryData.Snaps = []*restic.Snapshot{}
+	repositoryData.SnapMap = make(map[string]*restic.Snapshot)
+	repositoryData.DirectoryMap = make(map[IntID][]BlobFile2)
+	repositoryData.FullPath = make(map[IntID]string)
+	repositoryData.MetaDirMap = make(map[*restic.ID]mapset.Set[IntID])
+	repositoryData.IndexHandle = make(map[restic.ID]Index_Handle)
 
-	repositoryData.blob_to_index = make(map[restic.ID]IntID)
-	repositoryData.index_to_blob = []restic.ID{}
-	repositoryData.children = make(map[IntID]mapset.Set[IntID])
+	repositoryData.BlobToIndex = make(map[restic.ID]IntID)
+	repositoryData.IndexToBlob = []restic.ID{}
 }
 
 // GatherAllSnapshots retrieves all snapshots from the repository
@@ -52,11 +50,11 @@ func init_repositoryData(repositoryData *RepositoryData) {
 func GatherAllSnapshots(gopts GlobalOptions, ctx context.Context,
 	repo restic.Repository) ([]*restic.Snapshot, map[string]*restic.Snapshot, error) {
 	// collect all snap records
-	snaps := make([]*restic.Snapshot, 0)
+	snaps := []*restic.Snapshot{}
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(ctx, repo, id)
 		if err != nil {
-			Printf("Skip loading snap record %s! - reason: %v\n", id, err)
+			Printf("GatherAllSnapshots.skip loading snap record %s! - reason: %v\n", id, err)
 			return err
 		}
 		snaps = append(snaps, sn)
@@ -86,15 +84,15 @@ func HandleIndexRecords(gopts GlobalOptions, ctx context.Context, repo restic.Re
 		return err
 	}
 
-	Convert_to_IntSet(gopts, ctx, repo, repositoryData)
+	ConverToIntSet(gopts, ctx, repo, repositoryData)
 	return nil
 }
 
 // this function converts restic.ID to IntID, forth and back
 // It also correlates blobs and pack IDs
-// build 'repositoryData.blob_to_index' and 'repositoryData.index_to_blob'
+// build 'repositoryData.BlobToIndex' and 'repositoryData.IndexToBlob'
 // from 'repo.Index().Each(gopts.ctx)', containing 'blob.ID' and 'blob.PackID'
-func Convert_to_IntSet(gopts GlobalOptions, ctx context.Context, repo restic.Repository,
+func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo restic.Repository,
 	repositoryData *RepositoryData) {
 
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
@@ -107,118 +105,104 @@ func Convert_to_IntSet(gopts GlobalOptions, ctx context.Context, repo restic.Rep
 	// loop over each index record by calling unnamed func for every entry
 	// 'blob' is set by 'Each'
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
-		if _, ok := repositoryData.blob_to_index[blob.ID]; ! ok {
-			repositoryData.blob_to_index[blob.ID] = pos
-			repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.ID)
+		if _, ok := repositoryData.BlobToIndex[blob.ID]; ! ok {
+			repositoryData.BlobToIndex[blob.ID] = pos
+			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.ID)
 			pos++
 		}
 
 		// add packID from packfiles to 'blob_to_index' and 'index_to_blob',
-		if _, ok := repositoryData.blob_to_index[blob.PackID]; ! ok {
-			repositoryData.blob_to_index[blob.PackID] = pos
-			repositoryData.index_to_blob = append(repositoryData.index_to_blob, blob.PackID)
+		if _, ok := repositoryData.BlobToIndex[blob.PackID]; ! ok {
+			repositoryData.BlobToIndex[blob.PackID] = pos
+			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.PackID)
 			pos++
 		}
 
 		// build our index_handle from 'blob' record
 		length := int(blob.Length)
-		repositoryData.index_handle[blob.ID] = Index_Handle{Type: blob.Type, size: length,
-			pack_index:         repositoryData.blob_to_index[blob.PackID],
-			blob_index:         repositoryData.blob_to_index[blob.ID],
+		repositoryData.IndexHandle[blob.ID] = Index_Handle{Type: blob.Type, size: length,
+			pack_index:         repositoryData.BlobToIndex[blob.PackID],
+			blob_index:         repositoryData.BlobToIndex[blob.ID],
 			UncompressedLength: int(blob.UncompressedLength),
 		}
 	})
 
 	// add the *restic.IDs from the snapshots list to these list / maps
-	for _, sn := range repositoryData.snaps {
+	for _, sn := range repositoryData.Snaps {
 		snap := *sn.ID()
-		if _, ok := repositoryData.blob_to_index[snap]; ! ok {
-			repositoryData.blob_to_index[snap] = pos
-			repositoryData.index_to_blob = append(repositoryData.index_to_blob, snap)
+		if _, ok := repositoryData.BlobToIndex[snap]; ! ok {
+			repositoryData.BlobToIndex[snap] = pos
+			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, snap)
 			pos++
 		}
 	}
 
 	// we need to set EMPTY_NODE_ID_TRANSLATED
 	ok := false
-	EMPTY_NODE_ID_TRANSLATED, ok = repositoryData.blob_to_index[EMPTY_NODE_ID]
+	EMPTY_NODE_ID_TRANSLATED, ok = repositoryData.BlobToIndex[EMPTY_NODE_ID]
 	if !ok {
-		repositoryData.blob_to_index[EMPTY_NODE_ID] = pos
-		repositoryData.index_to_blob = append(repositoryData.index_to_blob, EMPTY_NODE_ID)
+		repositoryData.BlobToIndex[EMPTY_NODE_ID] = pos
+		repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, EMPTY_NODE_ID)
 		EMPTY_NODE_ID_TRANSLATED = pos
 	}
 }
 
 // FindChildren steps through the directory_map and finds subdirectories.
 // The children get attached their parent
-func FindChildren(repositoryData *RepositoryData) {
-	//Printf("FindChildren start, number of parents %7d\n", len(repositoryData.directory_map))
-	// 1. collect the children
-
-	for parent, idd_file_list := range repositoryData.directory_map {
-		if parent == EMPTY_NODE_ID_TRANSLATED {
-			continue
-		}
-
-		repositoryData.children[parent] = mapset.NewSet[IntID]()
+func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set[IntID]) {
+	children = CreateAllChildren(repositoryData)
+	names  := make(map[IntID]string)
+	for _, idd_file_list := range repositoryData.DirectoryMap {
 		for _, node := range idd_file_list {
-			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
-				continue
-			}
-
-			sub_node := node.subtree_ID
-			name := node.name
-			if _, ok := repositoryData.rename_children[name]; ok {
-				//Printf("Need to rename from %s to %s?\n", name, target)
-				// name = target
-			}
-			repositoryData.names[sub_node] = name
-			repositoryData.children[parent].Add(sub_node)
+			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED { continue }
+			names[node.subtree_ID] = node.name
 		}
 	}
 
 	// 2. create tree root names for fullpath
-	repositoryData.roots = make([]RootOfTree, 0, len(repositoryData.snaps))
+	repositoryData.roots = make([]RootOfTree, 0, len(repositoryData.Snaps))
 	initials := mapset.NewSet[IntID]()
-	for _, sn := range repositoryData.snaps {
-		tree := repositoryData.blob_to_index[*sn.Tree]
-		repositoryData.fullpath[tree] = "/."
+	for _, sn := range repositoryData.Snaps {
+		tree := repositoryData.BlobToIndex[*sn.Tree]
+		repositoryData.FullPath[tree] = "/."
 		repositoryData.roots = append(repositoryData.roots,
 			RootOfTree{meta_blob: tree, name: "/", multiplicity: 1})
 		initials.Add(tree)
 	}
 
-	// 3. create full name tree for all meta_blobs (repositoryData.fullpath)
-	//    dfs sorts the children topologically, so parents come befor the children
-	for _, meta_blob := range dfs(repositoryData.children, initials, repositoryData) {
-		for child := range repositoryData.children[meta_blob].Iter() {
-			repositoryData.fullpath[child] = repositoryData.fullpath[meta_blob] + "/" +
-				repositoryData.names[child]
+	// 3. create full name tree for all meta_blobs (repositoryData.FullPath)
+	// dfs sorts the children topologically, so parents appear before their children
+	for _, meta_blob := range dfs(children, initials) {
+		for child := range children[meta_blob].Iter() {
+			repositoryData.FullPath[child] = repositoryData.FullPath[meta_blob] + "/" +
+				names[child]
 		}
 	}
 
 	// rename repository root entries after fullpath has been set
-	for _, sn := range repositoryData.snaps {
-		ix := repositoryData.blob_to_index[*sn.Tree]
-		repositoryData.fullpath[ix] = fmt.Sprintf("/./ (root of %s)", sn.ID().Str())
+	for _, sn := range repositoryData.Snaps {
+		ix := repositoryData.BlobToIndex[*sn.Tree]
+		repositoryData.FullPath[ix] = fmt.Sprintf("/./ (root of %s)", sn.ID().Str())
 	}
 	initials = nil
+	return children
 }
 
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
-func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
+func TopologyStructure(sn restic.Snapshot, repositoryData *RepositoryData,
+children map[IntID]mapset.Set[IntID]) {
 
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
-	tree_root := repositoryData.blob_to_index[*sn.Tree]
+	tree_root := repositoryData.BlobToIndex[*sn.Tree]
 	seen := mapset.NewSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
 
 	// use 'queue' as a FIFO queue to copy the topologicl tree
 	to_be_processed := queue.New()
 	to_be_processed.Enqueue(tree_root)
 	for to_be_processed.Len() > 0 {
-		for child := range repositoryData.children[to_be_processed.Dequeue().(IntID)].Iter() {
+		for child := range children[to_be_processed.Dequeue().(IntID)].Iter() {
 			if ! seen.Contains(child) {
 				seen.Add(child)
 				to_be_processed.Enqueue(child)
@@ -229,8 +213,8 @@ func topology_structure(sn restic.Snapshot, repositoryData *RepositoryData) {
 	// at the end of the loop, 'seen' contains all directories
 	// referenced in the snapshot
 	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
-	repositoryData.meta_dir_map[id_ptr] = seen
-	// reset
+	repositoryData.MetaDirMap[id_ptr] = seen
+	// reset for GC
 	seen = nil
 	to_be_processed = nil
 }
@@ -245,11 +229,11 @@ func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
 	}
 
 	// step 2: prepare children and parents from idd_file records
-	FindChildren(repositoryData)
+	children := FindChildren(repositoryData)
 
 	// step 3: build topology structure for each snapshot in repository
-	for _, sn := range repositoryData.snaps {
-		topology_structure(*sn, repositoryData)
+	for _, sn := range repositoryData.Snaps {
+		TopologyStructure(*sn, repositoryData, children)
 	}
 	return nil
 }
@@ -257,7 +241,7 @@ func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for parallel processing
 func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) error) error {
-	for blob_ID, data := range repositoryData.index_handle {
+	for blob_ID, data := range repositoryData.IndexHandle {
 		if data.Type == restic.TreeBlob {
 			fn(blob_ID)
 		}
@@ -266,7 +250,7 @@ func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) erro
 }
 
 // home built parallel call to restic.LoadTree. All trees are accessed by the
-// method 'DeliverTreeBlobs' which accesses 'repositoryData.index_handle'
+// method 'DeliverTreeBlobs' which accesses 'repositoryData.IndexHandle'
 // which has been built beforehand
 func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 	repo restic.Repository, repositoryData *RepositoryData) error {
@@ -330,7 +314,7 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 				case "file":
 					for _, cont := range node.Content {
 						// get the index for our restic.ID storage
-						ix_data, ok := repositoryData.blob_to_index[cont]
+						ix_data, ok := repositoryData.BlobToIndex[cont]
 						if !ok {
 							Printf("Fatal: %v not in blob_to_index\n", cont)
 							panic("ForAllMyTrees: error during content processing")
@@ -345,7 +329,7 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 						Printf("renaming %s -> %s for %s\n", name, target, (*node.Subtree).String()[:12])
 						//name = target
 					}
-					subt_ID = repositoryData.blob_to_index[*node.Subtree]
+					subt_ID = repositoryData.BlobToIndex[*node.Subtree]
 				default:
 				  //name = node.Name
 				}
@@ -356,10 +340,10 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 				idd_file_list[offset_in_node_list] = blob_file
 			}
 
-			ix := repositoryData.blob_to_index[id]
+			ix := repositoryData.BlobToIndex[id]
 			// insert directory_map: this is the critical region, so lock it
 			m.Lock()
-			repositoryData.directory_map[ix] = idd_file_list
+			repositoryData.DirectoryMap[ix] = idd_file_list
 			m.Unlock()
 		}
 		return nil
@@ -407,17 +391,17 @@ func Ptr2ID(id restic.ID, repositoryData *RepositoryData) *restic.ID {
 
 // return the pointer to a given ID
 func Ptr2ID3(id restic.ID, repositoryData *RepositoryData, where string) *restic.ID {
-	ix, ok := repositoryData.blob_to_index[id]
+	ix, ok := repositoryData.BlobToIndex[id]
 	if ok {
-		return &(repositoryData.index_to_blob[ix])
+		return &(repositoryData.IndexToBlob[ix])
 	} else {
 		// allocate new slot
 		Printf("Ptr2ID.allocate new %s %s\n", where, id.String()[:12])
-		repositoryData.blob_to_index[id] = IntID(len(repositoryData.index_to_blob))
-		repositoryData.index_to_blob = append(repositoryData.index_to_blob, id)
+		repositoryData.BlobToIndex[id] = IntID(len(repositoryData.IndexToBlob))
+		repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, id)
 		// be aware: length just changed during last 'append'
-		return &(repositoryData.index_to_blob[IntID(
-			len(repositoryData.index_to_blob)-1)])
+		return &(repositoryData.IndexToBlob[IntID(
+			len(repositoryData.IndexToBlob)-1)])
 	}
 }
 
@@ -434,7 +418,7 @@ func gather_base_data_repo(repo restic.Repository, gopts GlobalOptions,
 	}
 
 	// step 2: gather all snapshots
-	repositoryData.snaps, repositoryData.snap_map, err = GatherAllSnapshots(gopts, ctx, repo)
+	repositoryData.Snaps, repositoryData.SnapMap, err = GatherAllSnapshots(gopts, ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -461,15 +445,14 @@ func gather_base_data_repo(repo restic.Repository, gopts GlobalOptions,
 	return nil
 }
 
-// depth first search using 'children_map' as the map, 'initials' as starting
+// depth first search using 'childrenMap' as the map, 'initials' as starting
 // points and 'repositoryData' is used for debugging
-func dfs(children_map map[IntID]mapset.Set[IntID], initials mapset.Set[IntID],
-repositoryData *RepositoryData) []IntID {
+func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (inverse_result []IntID) {
 
 	// define a stack entry
 	type StackEntry struct {
 		parent IntID
-		children_iter *mapset.Iterator[IntID]
+		ChildrenIter *mapset.Iterator[IntID]
 	}
 
 	// get rid of this entry!
@@ -486,7 +469,7 @@ repositoryData *RepositoryData) []IntID {
 
 			// create a completely new stack
 			stak := stack.New()
-			stak.Push(StackEntry{parent: root, children_iter: children_map[root].Iterator()})
+			stak.Push(StackEntry{parent: root, ChildrenIter: childrenMap[root].Iterator()})
 
 			for true {
 				// this is the only exit from the loop
@@ -495,44 +478,32 @@ LOOP:
 				entry  := stak.Peek().(StackEntry)
 				parent := entry.parent
 				new_data := false
-				for child := range entry.children_iter.C {
+				for child := range entry.ChildrenIter.C {
 					if ! visited.Contains(child) {
 						visited.Add(child)
-						stak.Push(StackEntry{parent: child, children_iter: children_map[child].Iterator()})
+						stak.Push(StackEntry{parent: child, ChildrenIter: childrenMap[child].Iterator()})
 						new_data = true
 					}
 				}
 				if new_data { goto LOOP }
 
 				stak.Pop()
-				if stak.Len() > 0 {
-					results = append(results, parent)
-				}
-			}
+				if stak.Len() > 0 { results = append(results, parent) }
+			} // end LOOP
 			results = append(results, root)
 		}
 	}
 
 	// reverse 'results' so that the roots are at the relative beginning of the slice
-	l_result := len(results)
-	inverse_result := make([]IntID, 0, l_result)
+	l_result := len(results) - 1
+	inverse_result = make([]IntID, 0, l_result + 1)
 	for ix := range results {
-		inverse_result = append(inverse_result, results[l_result - 1 - ix])
+		inverse_result = append(inverse_result, results[l_result - ix])
 	}
 
-	// reset and return
+	// reset for GC and return
 	visited = nil
 	results = nil
 	return inverse_result
 }
 
-func make_blobs_per_packID(repositoryData *RepositoryData) map[IntID]mapset.Set[IntID] {
-	blobs_per_packID := make(map[IntID]mapset.Set[IntID])
-	for _, ih := range repositoryData.index_handle {
-		if _, ok := blobs_per_packID[ih.pack_index]; !ok {
-			blobs_per_packID[ih.pack_index] = mapset.NewSet[IntID]()
-		}
-		blobs_per_packID[ih.pack_index].Add(ih.blob_index)
-	}
-	return blobs_per_packID
-}

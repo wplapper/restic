@@ -17,7 +17,7 @@ import (
 func check_db_snapshots_row(snap_id string, repositoryData *RepositoryData) SnapshotRecordMem {
 	// compare snapshots from repo with snapshots stored in the database
 	// step 1: build memory table to allow the comparison
-	if sn, ok := repositoryData.snap_map[snap_id]; ok {
+	if sn, ok := repositoryData.SnapMap[snap_id]; ok {
 		return SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
 			Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
 			Snap_fsys: sn.Paths[0], Snap_id: snap_id, Id: 1, Status: ""}
@@ -61,7 +61,7 @@ func check_db_snapshots_v2(db_aggregate *DBAggregate, repositoryData *Repository
 	// second check if there are more snapshots in the repository
 	// compared to the database!!
 	count_print = 0
-	for _, sn := range repositoryData.snaps {
+	for _, sn := range repositoryData.Snaps {
 		snap_id := sn.ID().Str()
 		_, ok := db_aggregate.Table_snapshots[snap_id]
 		if !ok {
@@ -79,7 +79,7 @@ func check_db_names_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData
 	// since all names are stored inside the directory_map, we have to extract them
 	// from there
 	all_names := mapset.NewSet[string]()
-	for _, file_list := range repositoryData.directory_map {
+	for _, file_list := range repositoryData.DirectoryMap {
 		for _, meta := range file_list {
 			switch meta.Type {
 			case "file", "dir":
@@ -110,7 +110,7 @@ func check_db_idd_file_row(db_key CompIddFile, repositoryData *RepositoryData,
 	// create new memory record from directory_map, given the input from 'db_key'
 	meta_blob := db_key.meta_blob
 	position := db_key.position
-	meta := repositoryData.directory_map[meta_blob][position]
+	meta := repositoryData.DirectoryMap[meta_blob][position]
 	switch meta.Type {
 	case "file", "dir":
 		mtime := meta.mtime.String()[:19]
@@ -200,13 +200,13 @@ func check_db_meta_dir_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 		// and a composite index
 		snap_id := ptr_snapshot[row.Id_snap_id]
 		meta_blob := ptr_index_repo[row.Id_idd]
-		sn := repositoryData.snap_map[snap_id]
+		sn := repositoryData.SnapMap[snap_id]
 		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
-		set_data, ok := repositoryData.meta_dir_map[id_ptr]
+		set_data, ok := repositoryData.MetaDirMap[id_ptr]
 		if !ok {
 			equal = false
 			if print_count < 10 {
-				Printf("snap %s not in repositoryData.meta_dir_map\n", snap_id)
+				Printf("snap %s not in repositoryData.MetaDirMap\n", snap_id)
 			}
 			print_count++
 			continue
@@ -251,7 +251,7 @@ func check_db_contents_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 		offset := row.Offset
 
 		// access memory
-		meta := repositoryData.directory_map[meta_blob][position]
+		meta := repositoryData.DirectoryMap[meta_blob][position]
 		data_content_int := meta.content[offset]
 		if data_content_int != data_blob {
 			equal = false
@@ -267,7 +267,7 @@ func check_db_contents_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 }
 
 // compare the largest table (index_repo) with its counterpart in memory
-// that is repositoryData.index_handle
+// that is repositoryData.IndexHandle
 func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	equal := true
 	print_count := 0
@@ -276,8 +276,8 @@ func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *Repositor
 	for ix, ptr_row := range db_aggregate.Table_index_repo {
 		// ix is a meta_blob_int (IntID)
 		var index_type string
-		id := repositoryData.index_to_blob[ix]
-		data := repositoryData.index_handle[id]
+		id := repositoryData.IndexToBlob[ix]
+		data := repositoryData.IndexHandle[id]
 		pack_index := data.pack_index
 		if data.Type == restic.TreeBlob {
 			index_type = "tree"
@@ -286,7 +286,7 @@ func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *Repositor
 		}
 
 		// back pointer to packfiles
-		//ptr_packID := &(repositoryData.index_to_blob[pack_index])
+		//ptr_packID := &(repositoryData.IndexToBlob[pack_index])
 		data3, ok := db_aggregate.Table_packfiles[pack_index]
 		if !ok {
 			Printf("No matching packfile for pack_index %6d\n", pack_index)
@@ -316,7 +316,7 @@ func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *Repositor
 	return equal
 }
 
-// check the pack_files table, the memory equivalent is repositoryData.index_handle
+// check the pack_files table, the memory equivalent is repositoryData.IndexHandle
 func check_db_packfiles_v2(db_aggregate *DBAggregate, repositoryData *RepositoryData) bool {
 	equal := true
 	print_count := 0
@@ -324,7 +324,7 @@ func check_db_packfiles_v2(db_aggregate *DBAggregate, repositoryData *Repository
 	// we have to create a memory represenation of all current packfiles in memory
 	// collect all packfiles from the index_handle
 	pack_IDs := mapset.NewSet[IntID]()
-	for _, handle := range repositoryData.index_handle {
+	for _, handle := range repositoryData.IndexHandle {
 		pack_IDs.Add(handle.pack_index)
 	}
 
@@ -336,7 +336,7 @@ func check_db_packfiles_v2(db_aggregate *DBAggregate, repositoryData *Repository
 
 		equal = false
 		if print_count < 10 {
-			packID := repositoryData.index_to_blob[ix]
+			packID := repositoryData.IndexToBlob[ix]
 			Printf("packfile %s not found in repository\n", packID.String()[:12])
 			print_count++
 		}

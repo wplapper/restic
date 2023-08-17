@@ -139,7 +139,7 @@ func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 			return err
 		}
 		Ptr2ID3(idd_as_ID, repositoryData, "ix_repo_DB")
-		idd_as_IntID := repositoryData.blob_to_index[idd_as_ID]
+		idd_as_IntID := repositoryData.BlobToIndex[idd_as_ID]
 
 		/* IndexRepoRecordMem:
 		Id         int
@@ -274,7 +274,7 @@ func ReadPackfilesTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		}
 
 		Ptr2ID3(id, db_aggregate.repositoryData, "ReadPackfilesTable")
-		int_id := db_aggregate.repositoryData.blob_to_index[id]
+		int_id := db_aggregate.repositoryData.BlobToIndex[id]
 		row.Status = "db"
 		db_aggregate.Table_packfiles[int_id] = &row
 	}

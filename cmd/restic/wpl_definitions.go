@@ -54,24 +54,18 @@ type RootOfTree struct {
 // the holding collections
 type RepositoryData struct {
 	// all snapshots
-	snaps         []*restic.Snapshot
-	snap_map      map[string]*restic.Snapshot
-	directory_map map[IntID][]BlobFile2
-	fullpath      map[IntID]string                 // directory ID -> full directory path
-	names         map[IntID]string                 // flat map of all directory names
-	children      map[IntID]mapset.Set[IntID]      // parent -> directory children
-	meta_dir_map  map[*restic.ID]mapset.Set[IntID] // flattened tree structure
-	index_handle  map[restic.ID]Index_Handle
+	Snaps         []*restic.Snapshot
+	SnapMap       map[string]*restic.Snapshot
+	DirectoryMap  map[IntID][]BlobFile2
+	FullPath      map[IntID]string                 // directory ID -> full directory path
+	MetaDirMap    map[*restic.ID]mapset.Set[IntID] // flattened tree structure
+	IndexHandle   map[restic.ID]Index_Handle
 
 	// the next two entries manage the restic.ID to IntID relationships
-	blob_to_index map[restic.ID]IntID
-	index_to_blob []restic.ID
+	BlobToIndex   map[restic.ID]IntID
+	IndexToBlob   []restic.ID
+
 	// more data on demand
-	//orphaned_index_handle map[restic.ID]Index_Handle
-	data_map              map[IntID]mapset.Set[CompIddFile]
-	reverse_fullpath      map[string]mapset.Set[IntID]
-	blobs_per_packID      map[IntID]mapset.Set[IntID]
-	all_blobs             mapset.Set[IntID]
 	roots                 []RootOfTree
 	repo                  *repository.Repository
 	rename_children       map[string]string
@@ -111,7 +105,31 @@ type CompIndexOffet struct {
  	name          string
 }
 
+type FullSet struct {
+	// the following triple maps a data blob
+	data_blob_int IntID
+	meta_blob_int IntID       // unique, part1
+	//position      int       // unique, part2
+	//offset        int       // unique, part3
+ 	//name          string
+  snap_id       string
+}
+
+type GroupInfo struct {
+  snap_groups          map[snapGroup][]*restic.Snapshot
+  group_numbers_sorted []int
+  group_keys           []snapGroup
+  group_numbers        map[snapGroup]int
+  map_snap_2_ix        map[string]int
+}
+
 type RenameNames struct {
   From_name string `json:"from_name"`
   To_name   string `json:"to_name"`
 }
+
+type CompIddFile struct {
+	meta_blob IntID
+	position  int
+}
+

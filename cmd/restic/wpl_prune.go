@@ -2,18 +2,12 @@ package main
 
 import (
   "context"
-  //"math"
-  "sort"
-  //"strconv"
-  //"strings"
-	//"golang.org/x/sync/errgroup"
 
-  //"github.com/wplapper/restic/library/errors"
-  //"github.com/wplapper/restic/library/index"
-  //"github.com/wplapper/restic/library/pack"
+  // library
   "github.com/wplapper/restic/library/repository"
-  "github.com/wplapper/restic/library/restic"
+  //"github.com/wplapper/restic/library/restic"
 
+  // argparse
   "github.com/spf13/cobra"
 
 	// sets
@@ -120,17 +114,8 @@ repo *repository.Repository, repositoryData *RepositoryData) error {
     }
   }
 
-	// gather all blobs
-  repositoryData.all_blobs = mapset.NewSet[IntID]()
-	for _, ih := range repositoryData.index_handle {
-		repositoryData.all_blobs.Add(ih.blob_index)
-	}
-
-	// collect all blobs which belong to the same pack
-	//repositoryData.blobs_per_packID = make_blobs_per_packID(repositoryData)
-
   // get a full map of all data blobs
-  full_contents_map := make_full_contents_map_v3(repositoryData)
+  full_contents_map := MakeFullContentsMap3(repositoryData)
   count_entries := 0
   for _, data_sett := range full_contents_map {
     count_entries += data_sett.Cardinality()
@@ -151,10 +136,10 @@ repo *repository.Repository, repositoryData *RepositoryData) error {
     group_slice := groupInfo.snap_groups[group]
     for _, sn := range group_slice {
       snap_id := sn.ID().Str()
-      id_ptr := Ptr2ID(*(repositoryData.snap_map[snap_id]).ID(), repositoryData)
-      for meta_blob := range repositoryData.meta_dir_map[id_ptr].Iter() {
+      id_ptr := Ptr2ID(*(repositoryData.SnapMap[snap_id]).ID(), repositoryData)
+      for meta_blob := range repositoryData.MetaDirMap[id_ptr].Iter() {
         used_blobs.Add(meta_blob)
-        for _, meta := range repositoryData.directory_map[meta_blob] {
+        for _, meta := range repositoryData.DirectoryMap[meta_blob] {
           used_blobs.Append(meta.content...)
         }
       }
@@ -173,7 +158,7 @@ groupInfo GroupInfo) {
   // find data blobs which live inside this group
   for blob := range blobs.Iter() {
     count++
-    sizes += repositoryData.index_handle[repositoryData.index_to_blob[blob]].size
+    sizes += repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]].size
   }
   group_name := group.Hostname + ":" + group.FileSystem
   if len(group_name) > 40 {
@@ -200,7 +185,7 @@ groupInfo GroupInfo) {
       snap_ix := groupInfo.map_snap_2_ix[snap_id]
       if ! seen.Contains(blob) {
         // catching the count and size once is an arbitrary choice for the group!
-        size := repositoryData.index_handle[repositoryData.index_to_blob[blob]].size
+        size := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]].size
         outside_count[snap_ix]++
         outsize_sizes[snap_ix] += size
         outside_sizes_once += size
@@ -224,108 +209,4 @@ groupInfo GroupInfo) {
     }
     Printf("    %-36s %7d %10.1f MiB\n", name, count, float64(sizes) / ONE_MEG)
   }
-}
-
-type GroupInfo struct {
-  snap_groups          map[snapGroup][]*restic.Snapshot
-  group_numbers_sorted []int
-  group_keys           []snapGroup
-  group_numbers        map[snapGroup]int
-  map_snap_2_ix        map[string]int
-}
-
-func MakeSnapGroups(ctx context.Context, repo *repository.Repository,
-repositoryData *RepositoryData) (groupInfo GroupInfo) {
-  // generate groups based on hostname and filesystems
-  groupInfo.snap_groups = make(map[snapGroup][]*restic.Snapshot)
-	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
-		sn, err := restic.LoadSnapshot(ctx, repo, id)
-		if err != nil {
-			Printf("Skip loading snap record %s! - reason: %v\n", id, err)
-			return err
-		}
-
-		hostname := sn.Hostname
-    for _, path := range sn.Paths {
-      group := snapGroup{Hostname: hostname, FileSystem: path}
-      groupInfo.snap_groups[group] = append(groupInfo.snap_groups[group], sn)
-    }
-		return nil
-	})
-
-  // transform groups in such a way that a group index can be used
-  // sort snap_group keys according to Hostname and FileSystem
-  groupInfo.group_keys = make([]snapGroup, 0, len(groupInfo.snap_groups))
-  for key := range groupInfo.snap_groups {
-    groupInfo.group_keys = append(groupInfo.group_keys, key)
-  }
-  sort.Slice(groupInfo.group_keys, func (i, j int) bool {
-    if groupInfo.group_keys[i].Hostname < groupInfo.group_keys[j].Hostname {
-      return true
-    } else if groupInfo.group_keys[i].Hostname > groupInfo.group_keys[j].Hostname {
-      return false
-    } else {
-      return groupInfo.group_keys[i].FileSystem < groupInfo.group_keys[j].FileSystem
-    }
-  })
-
-  // enumerate group_keys for future reference as group number
-  groupInfo.group_numbers = make(map[snapGroup]int)
-  for ix, key := range groupInfo.group_keys {
-    groupInfo.group_numbers[key] = ix
-  }
-
-  groupInfo.group_numbers_sorted = make([]int, 0, len(groupInfo.group_keys))
-  for _, ix := range groupInfo.group_numbers {
-    groupInfo.group_numbers_sorted = append(groupInfo.group_numbers_sorted, ix)
-  }
-  sort.Ints(groupInfo.group_numbers_sorted)
-
-  // map the group members == snaps back to the group-ID
-  groupInfo.map_snap_2_ix = make(map[string]int)
-  for group, group_slice := range groupInfo.snap_groups {
-    group_index := groupInfo.group_numbers[group]
-    for _, sn := range group_slice {
-      groupInfo.map_snap_2_ix[sn.ID().Str()] = group_index
-    }
-  }
-  return groupInfo
-}
-
-type FullSet struct {
-	// the following triple maps a data blob
-	data_blob_int IntID
-	meta_blob_int IntID     // unique, part1
-	//position      int       // unique, part2
-	//offset        int       // unique, part3
- 	//name          string
-  snap_id       string
-}
-
-// go through all contents and generate unique triples &
-// additional string info for sorting
-func make_full_contents_map_v3(repositoryData *RepositoryData) (data_map map[IntID]mapset.Set[FullSet]) {
-  // is a map[IntID]mapset.Set[string]
-  //meta_dir_map_reverse := make_meta_dir_map_reverse(repositoryData)
-	data_map = make(map[IntID]mapset.Set[FullSet])
-  for ID, meta_blob_sett := range repositoryData.meta_dir_map {
-    snap_id := ID.String()[:8]
-    for meta_blob_int := range meta_blob_sett.Iter() {
-      for _, meta := range repositoryData.directory_map[meta_blob_int] {
-        for _, data_blob_int := range meta.content {
-          // this data_blob can appear multiple times in different meta_blobs
-          cmp_ix := FullSet{
-            meta_blob_int: meta_blob_int,
-            data_blob_int: data_blob_int,
-            snap_id: snap_id,
-          }
-          if _, ok := data_map[data_blob_int]; ! ok {
-            data_map[data_blob_int] = mapset.NewSet[FullSet]()
-          }
-          data_map[data_blob_int].Add(cmp_ix)
-        }
-      }
-    }
-	}
-	return data_map
 }

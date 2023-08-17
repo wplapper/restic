@@ -8,8 +8,6 @@ package main
 import (
 	// system
 	"context"
-	//"time"
-	//"strings"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -28,7 +26,6 @@ type SnapSummaryRecord struct {
 	SizesDataBlobs int
 }
 
-
 type HistoryOptions struct {
 	Timing bool
 	All    bool
@@ -39,6 +36,11 @@ var cmdHistory = &cobra.Command{
 	Use:   "wpl-history [flags]",
 	Short: "show development of repository over time",
 	Long: `show development of repository over time.
+
+OPTIONS
+=======
+  --all, -A    show all changes since the oldest snapshot
+  --timing, -T show timing data - only half implemented.
 
 EXIT STATUS
 ===========
@@ -77,42 +79,15 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 	}
 
 	repoHistory := mapset.NewSet[IntID]()
-	lastIndex := len(repositoryData.snaps) - 1
+	lastIndex := len(repositoryData.Snaps) - 1
 	all := historyOptions.All
-	for snap_ix, sn := range repositoryData.snaps {
-		if ! all && snap_ix < lastIndex {
-			id_ptr := Ptr2ID(*sn.ID(), &repositoryData)
-			for metaBlobInt := range repositoryData.meta_dir_map[id_ptr].Iter() {
-				repoHistory.Add(metaBlobInt)
-				for _, meta := range repositoryData.directory_map[metaBlobInt] {
-					repoHistory.Append(meta.content ...)
-				}
-			}
-		} else if ! all && snap_ix == lastIndex {
+	for snap_ix, sn := range repositoryData.Snaps {
+		if all {
 			thisSnap := mapset.NewSet[IntID]()
 			id_ptr := Ptr2ID(*sn.ID(), &repositoryData)
-			for metaBlobInt := range repositoryData.meta_dir_map[id_ptr].Iter() {
+			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
 				thisSnap.Add(metaBlobInt)
-				for _, meta := range repositoryData.directory_map[metaBlobInt] {
-					thisSnap.Append(meta.content ...)
-				}
-			}
-
-			// form differences
-			summary := CountSnapSet(thisSnap.Difference(repoHistory), &repositoryData)
-			if summary.CountMetaBlobs == 0 { continue }
-			Printf("%s %s %s:%s\n", sn.ID().Str(), sn.Time.String()[:19],
-				sn.Hostname, sn.Paths[0])
-			Printf("meta %7d %10.1f MiB ", summary.CountMetaBlobs,
-				float64(summary.SizesMetaBlobs) / ONE_MEG)
-			Printf("data %7d %10.1f MiB\n", summary.CountDataBlobs,
-				float64(summary.SizesDataBlobs) / ONE_MEG)
-		}	else if all {
-			thisSnap := mapset.NewSet[IntID]()
-			id_ptr := Ptr2ID(*sn.ID(), &repositoryData)
-			for metaBlobInt := range repositoryData.meta_dir_map[id_ptr].Iter() {
-				thisSnap.Add(metaBlobInt)
-				for _, meta := range repositoryData.directory_map[metaBlobInt] {
+				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
 					thisSnap.Append(meta.content ...)
 				}
 			}
@@ -129,9 +104,37 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 				float64(summary.SizesDataBlobs) / ONE_MEG)
 
 			// add to repo history instead of repoHistory = repoHistory.Union(thisSnap)
+			// this would create a new result Set[IntID]
 			for metaBlobInt := range thisSnap.Iter() {
 				repoHistory.Add(metaBlobInt)
 			}
+		} else if snap_ix < lastIndex {
+			id_ptr := Ptr2ID(*sn.ID(), &repositoryData)
+			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
+				repoHistory.Add(metaBlobInt)
+				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
+					repoHistory.Append(meta.content ...)
+				}
+			}
+		} else {
+			thisSnap := mapset.NewSet[IntID]()
+			id_ptr := Ptr2ID(*sn.ID(), &repositoryData)
+			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
+				thisSnap.Add(metaBlobInt)
+				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
+					thisSnap.Append(meta.content ...)
+				}
+			}
+
+			// form differences
+			summary := CountSnapSet(thisSnap.Difference(repoHistory), &repositoryData)
+			if summary.CountMetaBlobs == 0 { continue }
+			Printf("%s %s %s:%s\n", sn.ID().Str(), sn.Time.String()[:19],
+				sn.Hostname, sn.Paths[0])
+			Printf("meta %7d %10.1f MiB ", summary.CountMetaBlobs,
+				float64(summary.SizesMetaBlobs) / ONE_MEG)
+			Printf("data %7d %10.1f MiB\n", summary.CountDataBlobs,
+				float64(summary.SizesDataBlobs) / ONE_MEG)
 		}
 	}
 	return nil
@@ -143,7 +146,7 @@ func CountSnapSet(theData mapset.Set[IntID], repositoryData *RepositoryData) (Sn
 	sizesMeta := 0
 	sizesData := 0
 	for blobInt := range theData.Iter() {
-		ih := repositoryData.index_handle[repositoryData.index_to_blob[blobInt]]
+		ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blobInt]]
 		if ih.Type == restic.TreeBlob {
 			countMeta++
 			sizesMeta += ih.size
