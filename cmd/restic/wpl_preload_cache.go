@@ -1,5 +1,6 @@
 
 
+
 package main
 
 import (
@@ -24,8 +25,8 @@ import (
 
 var cmdPreloadCache = &cobra.Command{
 	Use:   "preload-cache [flags]",
-	Short: "make sure that the cache is current",
-	Long: `make sure that the cache is current.
+	Short: "wpl make sure that the cache is current",
+	Long: `wpl make sure that the cache is current.
 
 EXIT STATUS
 ===========
@@ -118,7 +119,7 @@ func runPreloadCache(ctx context.Context) error {
 		Printf("OK\n")
 	} else {
 		Print("not OK!\n")
-		diff_set := snap_set.SymmetricDifference(snaps_in_cache)
+		diff_set := snap_set.Difference(snaps_in_cache)
 		Printf("\ndiff_set %+v\n\n", diff_set)
 		remove_old_snaps(diff_set, subdir_name + "/snapshots")
 		Printf("There are %d differences in the snapshots!\n", diff_set.Cardinality())

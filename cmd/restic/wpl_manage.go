@@ -100,6 +100,7 @@ func RunWplManage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, 
 		}
 	}
 
+	/*
 	if wpl_manage_opts_opts.db_manage {
 		var db_args []string
 		Verbosef("\n%s sync database with repository %s\n", time.Now().String()[:19], gopts.Repo)
@@ -108,6 +109,7 @@ func RunWplManage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, 
 			return err
 		}
 	}
+	*/
 	return nil
 }
 

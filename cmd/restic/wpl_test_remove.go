@@ -39,12 +39,12 @@ var tremoveOptions TRemoveOptions
 
 var cmdTRemove = &cobra.Command{
 	Use:   "tremove [flags]",
-	Short: "test temove one or more snapshots from the repo",
-	Long: `
-test temove one or more snapshots from the repo.
+	Short: "wpl test temove one or more snapshots from the repo",
+	Long: `wpl test remove one or more snapshots from the repo.
 Print repackaging information.
 
-Available options:
+OPTIONS
+=======
   - cutoff: defaults to 270 days
   - detail: prints file details of those blobs which are about to be removed
   - lost: checks if list files get replaced by newer versions of the file
@@ -70,6 +70,7 @@ func init() {
 	f.BoolVarP(&tremoveOptions.lost, "lost", "L", false, "print lost file details")
 	f.BoolVarP(&tremoveOptions.repacked, "repack", "R", false, "more info on repacks")
 	f.BoolVarP(&tremoveOptions.timing, "timing", "T", false, "produce timings")
+	f.BoolVarP(&tremoveOptions.memory_use, "memory", "m", false, "produce memory usage")
 }
 
 func runTRemove(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
@@ -160,7 +161,8 @@ func runTRemove(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		selected[0] = sn
 		Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
 			sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-		CalculatePruneSize(selected, &repositoryData, detail, lost, false, snap_set, ctx, repo, data_map)
+		CalculatePruneSize(selected, &repositoryData, detail, lost, false, snap_set,
+			ctx, repo, data_map)
 	}
 
 	Printf("\n*** ALL ***\n")
@@ -170,7 +172,6 @@ func runTRemove(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		timeMessage(tremoveOptions.memory_use, "%-30s %10.1f seconds\n",
 			"group summary", time.Now().Sub(start).Seconds())
 	}
-
 	return nil
 }
 
@@ -484,7 +485,6 @@ selected []*restic.Snapshot) {
 	}
 
 	pack_info := GetPackIDs(repositoryData)
-	Printf("*** topological sort ***\n")
 	location_depth2 := []int32{}
 	result := dfs(CreateAllChildren(repositoryData), root_set)
 
@@ -758,4 +758,3 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 		Printf("\n")
 	}
 }
-

@@ -9,11 +9,12 @@ import (
 	"sort"
 	"sync"
 	"time"
-	"encoding/json"
-	"io/ioutil"
+	//"encoding/json"
+	//"io/ioutil"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/repository"
 
 	// sets
 	"github.com/deckarep/golang-set/v2"
@@ -26,8 +27,6 @@ import (
 // system wide variables and containers
 var (
 	gOptions                 GlobalOptions
-  db_aggregate             DBAggregate
-	newComers                *Newcomers
 	repositoryData           *RepositoryData
 	EMPTY_NODE_ID            restic.ID
 	EMPTY_NODE_ID_TRANSLATED IntID
@@ -48,7 +47,7 @@ func init_repositoryData(repositoryData *RepositoryData) {
 // GatherAllSnapshots retrieves all snapshots from the repository
 // return: slice of all *sn, sorted by ascending snapshot time (*sn.Time)
 func GatherAllSnapshots(gopts GlobalOptions, ctx context.Context,
-	repo restic.Repository) ([]*restic.Snapshot, map[string]*restic.Snapshot, error) {
+	repo *repository.Repository) ([]*restic.Snapshot, map[string]*restic.Snapshot, error) {
 	// collect all snap records
 	snaps := []*restic.Snapshot{}
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
@@ -75,7 +74,7 @@ func GatherAllSnapshots(gopts GlobalOptions, ctx context.Context,
 	return snaps, snap_map, nil
 }
 
-func HandleIndexRecords(gopts GlobalOptions, ctx context.Context, repo restic.Repository,
+func HandleIndexRecords(gopts GlobalOptions, ctx context.Context, repo *repository.Repository,
 	repositoryData *RepositoryData) error {
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
@@ -92,7 +91,7 @@ func HandleIndexRecords(gopts GlobalOptions, ctx context.Context, repo restic.Re
 // It also correlates blobs and pack IDs
 // build 'repositoryData.BlobToIndex' and 'repositoryData.IndexToBlob'
 // from 'repo.Index().Each(gopts.ctx)', containing 'blob.ID' and 'blob.PackID'
-func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo restic.Repository,
+func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo *repository.Repository,
 	repositoryData *RepositoryData) {
 
 	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
@@ -221,7 +220,7 @@ children map[IntID]mapset.Set[IntID]) {
 
 // this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
-	repo restic.Repository, repositoryData *RepositoryData) error {
+	repo *repository.Repository, repositoryData *RepositoryData) error {
 	// step 1: build a slice of all meta_blob IDs in the repo
 	if err := ForAllMyTrees(gopts, ctx, repo, repositoryData); err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
@@ -240,7 +239,9 @@ func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
 
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for parallel processing
-func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) error) error {
+func DeliverTreeBlobs(ctx context.Context, repo *repository.Repository,
+repositoryData *RepositoryData, fn func(id restic.ID) error) error {
+
 	for blob_ID, data := range repositoryData.IndexHandle {
 		if data.Type == restic.TreeBlob {
 			fn(blob_ID)
@@ -253,13 +254,15 @@ func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(id restic.ID) erro
 // method 'DeliverTreeBlobs' which accesses 'repositoryData.IndexHandle'
 // which has been built beforehand
 func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
-	repo restic.Repository, repositoryData *RepositoryData) error {
+	repo *repository.Repository, repositoryData *RepositoryData) error {
 
 	var m sync.Mutex
-	wg, _ := errgroup.WithContext(ctx)
+	//orgCtx := ctx
+	wg, ctx := errgroup.WithContext(ctx)
 	chan_tree_blob := make(chan restic.ID)
 
-	repositoryData.rename_children = make(map[string]string) // from_name -> to_name
+	/*
+	repositoryData.rename_children = map[string]string{} // from_name -> to_name
 	var renameNames []RenameNames
 	data, err := ioutil.ReadFile("/home/wplapper/restic/directory_renames.json")
 	if err != nil {
@@ -276,25 +279,26 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 		repositoryData.rename_children[elem.From_name] = elem.To_name
 	}
 	renameNames = nil
-
+	*/
 
 	wg.Go(func() error {
 		defer close(chan_tree_blob)
 
 		// this callback function get fed the 'id'
-		return DeliverTreeBlobs(repositoryData, func(id restic.ID) error {
+		return DeliverTreeBlobs(ctx, repo, repositoryData, func(id restic.ID) error {
 			select {
 			case <-ctx.Done():
 				return nil
 			case chan_tree_blob <- id:
+				return nil
 			}
 			return nil
 		})
 	})
 
-	// a worker receives a snapshot ID from chan_tree_blob, loads the tree
+	// a worker receives a metablob ID from chan_tree_blob, loads the tree
 	// and runs fn with id, the snapshot and the error
-	var name string
+	//var name string
 	worker := func() error {
 		for id := range chan_tree_blob {
 			tree, err := restic.LoadTree(ctx, repo, id)
@@ -307,11 +311,10 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 			// do the work on the tree just received
 			for offset_in_node_list, node := range tree.Nodes {
 				// setup these two place holders
-				content := make([]IntID, 0)
+				content := []IntID{}
 				subt_ID := EMPTY_NODE_ID_TRANSLATED
 
-				switch node.Type {
-				case "file":
+				if node.Type == "file" {
 					for _, cont := range node.Content {
 						// get the index for our restic.ID storage
 						ix_data, ok := repositoryData.BlobToIndex[cont]
@@ -320,19 +323,9 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 							panic("ForAllMyTrees: error during content processing")
 						}
 						content = append(content, ix_data)
-
 					}
-					//name = node.Name
-				case "dir":
-					//name = node.Name
-					if target, ok := repositoryData.rename_children[name]; ok {
-						Printf("renaming %s -> %s for %s\n", name, target, (*node.Subtree).String()[:12])
-						//name = target
-					}
-					subt_ID = repositoryData.BlobToIndex[*node.Subtree]
-				default:
-				  //name = node.Name
 				}
+
 				blob_file := BlobFile2{name: node.Name,
 					Type: node.Type, size: node.Size,
 					DeviceID: node.DeviceID, inode: node.Inode,
@@ -351,11 +344,11 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 
 	// start all these parallel workers
 	max_parallel := int(repo.Connections()) + runtime.GOMAXPROCS(0)
-	//Printf("max_parallel = %2d\n", max_parallel)
 	for i := 0; i < max_parallel; i++ {
 		wg.Go(worker)
 	}
-	return wg.Wait()
+	res := wg.Wait()
+	return res
 }
 
 // PrintMemUsage outputs the current, total and OS memory being used.
@@ -379,7 +372,7 @@ func bToMb(b uint64) uint64 {
 }
 
 func timeMessage(memory_use bool, format string, args ...interface{}) {
-	Verbosef(format, args...)
+	Printf(format, args...)
 	if memory_use {
 		PrintMemUsage()
 	}
@@ -407,7 +400,7 @@ func Ptr2ID3(id restic.ID, repositoryData *RepositoryData, where string) *restic
 
 // collect the usual stuff from a repository:
 // snapshots, Index records, node records
-func gather_base_data_repo(repo restic.Repository, gopts GlobalOptions,
+func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	ctx context.Context, repositoryData *RepositoryData, timing bool) error {
 
 	var err error
@@ -506,4 +499,3 @@ LOOP:
 	results = nil
 	return inverse_result
 }
-

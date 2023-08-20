@@ -39,8 +39,8 @@ var overview_options OverviewOptions
 
 var cmdOverview = &cobra.Command{
 	Use:   "overview [flags]",
-	Short: "show summary of snapshots by Hostname and filesystems",
-	Long: `show summary of snapshots by Hostname and filesystems.
+	Short: "wpl show summary of snapshots by Hostname and filesystems",
+	Long: `wpl show summary of snapshots by Hostname and filesystems.
 
 EXIT STATUS
 ===========
@@ -57,7 +57,7 @@ func init() {
 	cmdRoot.AddCommand(cmdOverview)
 	f := cmdOverview.Flags()
 	f.BoolVarP(&overview_options.timing, "timing", "T", false, "produce timings")
-	//f.BoolVarP(&overview_options.memory_use, "memory", "M", false, "produce memory usage")
+	f.BoolVarP(&overview_options.memory_use, "memory", "m", false, "produce memory usage")
 	f.BoolVarP(&overview_options.Age, "age", "A", false, "show snapshots by age in days")
 	f.BoolVarP(&overview_options.Fullpath, "fullpath", "U", false, "show duplicate paths")
 	f.StringVarP(&overview_options.Hostname, "hostname", "H", "", "filter for Hostname")
@@ -143,11 +143,17 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		total_count_inodes     += inodes
 		total_sizes            += group_size
 	}
+	// XXX the sums for data blobs etc are incorrect because some files are
+	// XXX just mapped on top of one another - in different filesystems!
 	Printf("%s\n", strings.Repeat("=", 118))
 	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n",
 		"", "", total_count_snaps, total_count_meta_blobs,
 		total_count_inodes,
 		total_count_data_blobs, float64(total_sizes) / ONE_MEG)
+	if overview_options.timing {
+		timeMessage(overview_options.memory_use, "%-30s %10.1f seconds\n", "finale",
+			time.Now().Sub(start).Seconds())
+	}
 	return nil
 }
 

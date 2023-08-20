@@ -9,6 +9,7 @@ import (
 	"strings"
 	"io/fs"
 	"path/filepath"
+	"time"
 
 	// sha256
 	"crypto/sha256"
@@ -35,13 +36,12 @@ type RepoDetailsOptions struct {
 	timing     bool
 	memory_use bool
 }
-
 var repo_details_options RepoDetailsOptions
 
 var cmdRepoDetails = &cobra.Command{
 	Use:   "repo-details [flags]",
-	Short: "counts various tables and reort usage",
-	Long: `counts various tables and reort usage.
+	Short: "wpl counts various tables and reort usage",
+	Long: `wpl counts various tables and reort usage.
 
 EXIT STATUS
 ===========
@@ -61,7 +61,7 @@ func init() {
 	f.BoolVarP(&repo_details_options.check_data, "check-data", "C", false, "compare list of all data file with packfiles")
 	f.BoolVarP(&repo_details_options.prune, "prune", "P", false, "make prune calculations")
 	f.BoolVarP(&repo_details_options.timing, "timing", "T", false, "produce timings")
-	f.BoolVarP(&repo_details_options.memory_use, "memory", "M", false, "produce memory usage")
+	f.BoolVarP(&repo_details_options.memory_use, "memory", "m", false, "produce memory usage")
 	f.CountVarP(&repo_details_options.detail, "detail", "D", "print dir/file details")
 }
 
@@ -70,6 +70,7 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 	var repositoryData RepositoryData
 
 	// startup
+	start := time.Now()
 	gOptions = gopts
 	init_repositoryData(&repositoryData)
 
@@ -81,7 +82,8 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 
 	// step 2: gather the base information
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
+		repo_details_options.timing)
 	if err != nil {
 		return err
 	}
@@ -96,15 +98,16 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 	}
 
 	// normal processing
-	countBlobs(ctx, repo, &repositoryData)
-	countFiles(ctx, repo, &repositoryData)
-	countTables(ctx, repo, &repositoryData, repo_details_options)
+	countBlobs(ctx,  repo, &repositoryData, repo_details_options, start)
+	countFiles(ctx,  repo, &repositoryData, repo_details_options, start)
+	countTables(ctx, repo, &repositoryData, repo_details_options, start)
 	return nil
 }
 
 // go through index table and count tree and data blobs, and compressed and
 // uncompressed sizes
-func countBlobs(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
+func countBlobs(ctx context.Context, repo restic.Repository,
+repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_tree_blobs := 0
 	count_data_blobs := 0
 	size_tree_blobs := 0
@@ -182,6 +185,10 @@ func countBlobs(ctx context.Context, repo restic.Repository, repositoryData *Rep
 		pack_set_meta.Cardinality() + pack_set_data.Cardinality(),
 		float64(size_meta_pack + size_data_pack) / ONE_MEG)
 
+	if options.timing {
+		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "countBlobs",
+			time.Now().Sub(start).Seconds())
+	}
 	// reset
 	repo_packs = nil
 	pack_set_data = nil
@@ -194,7 +201,8 @@ type DeviceInode struct {
 }
 
 // count index, snapshot and meta file counts and sizes
-func countFiles(ctx context.Context, repo restic.Repository, repositoryData *RepositoryData) {
+func countFiles(ctx context.Context, repo restic.Repository,
+repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_snaps := 0
 	size_snaps  := int64(0)
 
@@ -231,6 +239,10 @@ func countFiles(ctx context.Context, repo restic.Repository, repositoryData *Rep
 	Printf("%s\n", strings.Repeat("=", 52))
 
 	// clear up
+	if options.timing {
+		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "countFiles",
+			time.Now().Sub(start).Seconds())
+	}
 	tree_set = nil
 }
 
@@ -244,7 +256,7 @@ type MetaPositionOffet struct {
 
 // count table contents and other interesting information
 func countTables(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData, options RepoDetailsOptions) {
+repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// meta_dir
 	count_meta_dir_entries := 0
 	for _, meta_blobs := range repositoryData.MetaDirMap {
@@ -346,9 +358,14 @@ repositoryData *RepositoryData, options RepoDetailsOptions) {
 		diff = set_index_handle.Difference(set_tree)
 		l_diff = diff.Cardinality()
 
-		if repo_details_options.prune {
+		if options.prune {
 			checkPrune(repositoryData, diff, options)
 		}
+	}
+
+	if options.timing {
+		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "CountTables",
+			time.Now().Sub(start).Seconds())
 	}
 
 	// reset
@@ -592,7 +609,6 @@ repositoryData *RepositoryData) {
 
 	// step 4: generate the rest of the names
 	// output the directory names found as absolute directories
-	//Verboseff("\n===================\n")
 	for parent := range missing_blobs.Iter() {
 		if parent == EMPTY_NODE_ID_TRANSLATED {
 			continue

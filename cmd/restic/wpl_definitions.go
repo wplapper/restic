@@ -8,9 +8,6 @@ import (
 	"github.com/wplapper/restic/library/repository"
 	"github.com/wplapper/restic/library/restic"
 
-	// sqlx for sqlite3
-	"github.com/jmoiron/sqlx"
-
 	// mapset
 	"github.com/deckarep/golang-set/v2"
 )
@@ -40,10 +37,12 @@ type Index_Handle struct {
 	UncompressedLength int
 }
 
+/*
 type PackSetType struct {
 	Type    restic.BlobType
 	PackSet mapset.Set[IntID]
 }
+*/
 
 type RootOfTree struct {
 	meta_blob    IntID
@@ -71,49 +70,27 @@ type RepositoryData struct {
 	rename_children       map[string]string
 }
 
-type DBAggregate struct {
-	repositoryData    *RepositoryData
-	db_conn           *sqlx.DB
-	tx                *sqlx.Tx
-	table_counts      map[string]int // count of all tables
-	// the database tables - memory representation
-	Table_snapshots   map[string]SnapshotRecordMem
-	Table_index_repo  map[IntID]*IndexRepoRecordMem
-	Table_packfiles   map[IntID]*PackfilesRecordMem
-	Table_names       map[string]*NamesRecordMem
-	Table_meta_dir    map[CompMetaDir]*MetaDirRecordMem
-	Table_idd_file    map[CompIddFile]*IddFileRecordMem
-	Table_contents    map[CompContents]*ContentsRecordMem
-	Table_dir_path_id map[IntID]*DirPathIdMem
-	Table_fullname    map[string]*FullnameMem
-	// other tables reference these tables via FOREIGN KEY
-	pk_snapshots      map[int]string
-	pk_index_repo     map[int]IntID
-	pk_fullname       map[int]string
-}
-
 type CompIndexOffet struct {
 	// the following triple maps a data blob
 	data_blob     restic.ID
-	meta_blob     restic.ID // unique, part1
-	meta_blob_int IntID // unique, part1
-	position  int       // unique, part2
-	offset    int       // unique, part3
+	meta_blob     restic.ID
+	meta_blob_int IntID     // unique, part1
+	position      int       // unique, part2
+	offset        int       // unique, part3
 
 	data_blob_str string
 	meta_blob_str string
  	name          string
 }
 
+/*
 type FullSet struct {
 	// the following triple maps a data blob
 	data_blob_int IntID
 	meta_blob_int IntID       // unique, part1
-	//position      int       // unique, part2
-	//offset        int       // unique, part3
- 	//name          string
   snap_id       string
 }
+*/
 
 type GroupInfo struct {
   snap_groups          map[snapGroup][]*restic.Snapshot
@@ -123,13 +100,14 @@ type GroupInfo struct {
   map_snap_2_ix        map[string]int
 }
 
+/*
 type RenameNames struct {
   From_name string `json:"from_name"`
   To_name   string `json:"to_name"`
 }
+*/
 
 type CompIddFile struct {
 	meta_blob IntID
 	position  int
 }
-

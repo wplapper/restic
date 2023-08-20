@@ -40,11 +40,12 @@ const UPPER_LIMIT int = 999999999
 
 var cmdReadall = &cobra.Command{
 	Use:   "read-all [flags]",
-	Short: "read all data files (extended version of the 'check' command)",
-	Long: `read all data files (extended version of the 'check' command).
+	Short: "wpl read all data files (extended version of the 'check' command)",
+	Long: `wpl read all data files (extended version of the 'check' command).
 Read all data packfiles in order to find errors in the packs.
 
-Options are:
+OPTIONS
+=======
 * number of packfiles and blocksize for one round of checks can be chosen.
 * reset-packs <n> reset <n> packs randomly to "non-checked" status
 * one-hour: run for one hour and then stop

@@ -120,8 +120,10 @@ data_map map[restic.ID]mapset.Set[CompIndexOffet]) {
 	return data_map
 }
 
+// XXX currently not used!
 // go through all contents and generate unique triples &
 // additional string info for sorting
+/*
 func MakeFullContentsMap3(repositoryData *RepositoryData) (
 data_map map[IntID]mapset.Set[FullSet]) {
 
@@ -148,6 +150,7 @@ data_map map[IntID]mapset.Set[FullSet]) {
 	}
 	return data_map
 }
+*/
 
 // This function creates a data map which is global for the repository. It
 // contains a mapping from a data blob to the containing meta blob a the
