@@ -18,7 +18,7 @@ import (
 	"github.com/wplapper/restic/library/repository"
 )
 
-var cmdPlainRepo = &cobra.Command{
+var cmdExportMeta = &cobra.Command{
 	Use:   "wpl-export [flags]",
 	Short: "export metadata of repo to plaintext directory structure",
 	Long: `export metadata of repo to plaintext directory structure.
@@ -30,24 +30,24 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 `,
 	DisableAutoGenTag: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runPlainRepo(cmd.Context(), cmd, globalOptions)
+		return runExportMeta(cmd.Context(), cmd, globalOptions)
 	},
 }
 
-type PlainRepoOptions struct {
+type ExportMetaOptions struct {
 	Repo string
 }
-var plainRepoOptions PlainRepoOptions
+var exportMetaOptions ExportMetaOptions
 
 func init() {
-	cmdRoot.AddCommand(cmdPlainRepo)
-	f := cmdPlainRepo.Flags()
-	f.StringVarP(&plainRepoOptions.Repo, "alt-repo", "A", "", "repository name")
+	cmdRoot.AddCommand(cmdExportMeta)
+	f := cmdExportMeta.Flags()
+	f.StringVarP(&exportMetaOptions.Repo, "alt-repo", "A", "", "repository name")
 }
 
 // convert all the metadata into plain files with a directory strcuture like
 // a repository
-func runPlainRepo(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
+func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
 	var (
 		err              error
 		repositoryData   RepositoryData
@@ -64,13 +64,13 @@ func runPlainRepo(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) 
 	}
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 
-	if globalOptions.Repo[:1] != "/" && plainRepoOptions.Repo == "" {
+	if globalOptions.Repo[:1] != "/" && exportMetaOptions.Repo == "" {
 		return errors.New("Need a local filesystem directory to map repo!")
 	}
 
 	// check for alternative repo name
-	if plainRepoOptions.Repo != "" {
-		repoUnpackedName = plainRepoOptions.Repo
+	if exportMetaOptions.Repo != "" {
+		repoUnpackedName = exportMetaOptions.Repo
 	} else {
 		lenRepoName := len(globalOptions.Repo)
 		if globalOptions.Repo[lenRepoName-1 : lenRepoName] == "/" {
@@ -85,14 +85,14 @@ func runPlainRepo(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) 
 		return err
 	}
 
-	type procFunc func(GlobalOptions, context.Context, *repository.Repository, string) error
+	type procFunc func(context.Context, *repository.Repository, string) error
 	var processList = []procFunc{
 		ProcessSnapshots, ProcessIndexFiles, ProcessMetaData, CreatePackList,
 	}
 
 	// run through the file lists: snapshots, index, metablobs, packlists
 	for _, proc := range processList {
-		err = proc(gopts, ctx, repo, repoUnpackedName)
+		err = proc(ctx, repo, repoUnpackedName)
 		if err != nil {
 			return err
 		}
@@ -126,10 +126,9 @@ func MakeDirectoryStructure(dirname string, toplevel bool) error {
 	return nil
 }
 
-func ProcessSnapshots(gopts GlobalOptions, ctx context.Context,
-repo *repository.Repository, repoUnpackedName string) error {
+func ProcessSnapshots(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
 	// get snapshots list
-	snaps, _, err := GatherAllSnapshots(gopts, ctx, repo)
+	snaps, _, err := GatherAllSnapshots(gOptions, ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -146,11 +145,11 @@ repo *repository.Repository, repoUnpackedName string) error {
 
 	handle.Flush()
 	fd.Close()
+	snaps =nil
 	return nil
 }
 
-func ProcessIndexFiles(gopts GlobalOptions, ctx context.Context,
-repo *repository.Repository, repoUnpackedName string) error {
+func ProcessIndexFiles(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
 
 	if err := repo.LoadIndex(ctx); err != nil {
 		Printf("repo.LoadIndex - failed. Error is %v\n", err)
@@ -160,7 +159,7 @@ repo *repository.Repository, repoUnpackedName string) error {
 	target := fmt.Sprintf("%s/all_index_info", repoUnpackedName)
 	fd, _ := os.Create(target)
 	handle := bufio.NewWriter(fd)
-	for _, e := range CreateIndexInfo(gopts, ctx, repo) {
+	for _, e := range CreateIndexInfo(ctx, repo) {
 		handle.WriteString(fmt.Sprintf("%s,\"%s\",%d,%d,%d,%s\n", e.ID, e.Type,
 			e.Offset, e.Length, e.UncompressedLength, e.PackID))
 	}
@@ -179,17 +178,13 @@ type IndexHandleExpo struct {
 	PackID              string
 }
 
-func CreateIndexInfo(gopts GlobalOptions, ctx context.Context,
-repo *repository.Repository) ([]IndexHandleExpo) {
+func CreateIndexInfo(ctx context.Context, repo *repository.Repository) ([]IndexHandleExpo) {
 	MetaBlobInfo := []IndexHandleExpo{}
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
 		MetaBlobInfo = append(MetaBlobInfo, IndexHandleExpo{
-			ID: blob.ID.String(),
-			Type: blob.Type.String(),
-			Offset: blob.Offset,
-			Length: blob.Length,
-			UncompressedLength: blob.UncompressedLength,
-			PackID: blob.PackID.String(),
+			blob.ID.String(),        blob.Type.String(),
+			blob.Offset,             blob.Length,
+			blob.UncompressedLength, blob.PackID.String(),
 		})
 	})
 
@@ -205,8 +200,7 @@ repo *repository.Repository) ([]IndexHandleExpo) {
 	return MetaBlobInfo
 }
 
-func ProcessMetaData(gopts GlobalOptions, ctx context.Context,
-repo *repository.Repository, repoUnpackedName string) error {
+func ProcessMetaData(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
 
 	// load index
 	if err := repo.LoadIndex(ctx); err != nil {
@@ -263,8 +257,7 @@ repo *repository.Repository, repoUnpackedName string) error {
 	return nil
 }
 
-func CreatePackList(gopts GlobalOptions, ctx context.Context,
-repo *repository.Repository, repoUnpackedName string) error {
+func CreatePackList(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
 	// packlists and sets
 	packIDs  := map[restic.ID]string{}
 	packList := []restic.ID{}
@@ -279,13 +272,13 @@ repo *repository.Repository, repoUnpackedName string) error {
 	// write one large packfile list
 	target := fmt.Sprintf("%s/all_packfiles", repoUnpackedName)
 	fd, _ := os.Create(target)
-
 	handle := bufio.NewWriter(fd)
-	//handle.WriteString("PackID\n")
 	for _, packID := range packList {
 		handle.WriteString(fmt.Sprintf("%s,\"%s\"\n", packID.String(), packIDs[packID]))
 	}
 	handle.Flush()
 	fd.Close()
+	packIDs = nil
+	packList = nil
 	return nil
 }

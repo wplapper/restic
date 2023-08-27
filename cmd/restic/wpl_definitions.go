@@ -37,13 +37,6 @@ type Index_Handle struct {
 	UncompressedLength int
 }
 
-/*
-type PackSetType struct {
-	Type    restic.BlobType
-	PackSet mapset.Set[IntID]
-}
-*/
-
 type RootOfTree struct {
 	meta_blob    IntID
 	multiplicity int16
@@ -83,15 +76,6 @@ type CompIndexOffet struct {
  	name          string
 }
 
-/*
-type FullSet struct {
-	// the following triple maps a data blob
-	data_blob_int IntID
-	meta_blob_int IntID       // unique, part1
-  snap_id       string
-}
-*/
-
 type GroupInfo struct {
   snap_groups          map[snapGroup][]*restic.Snapshot
   group_numbers_sorted []int
@@ -99,13 +83,6 @@ type GroupInfo struct {
   group_numbers        map[snapGroup]int
   map_snap_2_ix        map[string]int
 }
-
-/*
-type RenameNames struct {
-  From_name string `json:"from_name"`
-  To_name   string `json:"to_name"`
-}
-*/
 
 type CompIddFile struct {
 	meta_blob IntID

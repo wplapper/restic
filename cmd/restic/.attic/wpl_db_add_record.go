@@ -85,7 +85,7 @@ func runDBAdd(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, args
 	}
 
 	// step 4.1: get database name
-	db_name, err = database_via_cache(repo, ctx)
+	db_name, err := database_via_cache(repo, ctx)
 	if err != nil {
 		Printf("db_verify: could not copy database from backend %v\n", err)
 		return err

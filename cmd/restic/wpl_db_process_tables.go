@@ -1,0 +1,622 @@
+package main
+
+import (
+	// system
+	"os"
+	"errors"
+	"strconv"
+	"encoding/csv"
+	"encoding/json"
+	"encoding/hex"
+	"io"
+	"path/filepath"
+
+	// restic library
+	"github.com/wplapper/restic/library/restic"
+
+	// sqlite
+	"github.com/jmoiron/sqlx"
+	"github.com/wplapper/restic/library/sqlite"
+
+	//sets and queues
+	"github.com/deckarep/golang-set/v2"
+)
+
+func ProcessSnaphotsTable(tx *sqlx.Tx, filename string, table_column_names map[string][]string,
+changes_made *bool) (SnapshotsTable map[string]SnapshotRecordMem, err error) {
+	SnapshotsTable = map[string]SnapshotRecordMem{}
+	// step 1: read from TABLE snapshots
+	sql := "SELECT * FROM snapshots"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select snap_id. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row SnapshotRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select snap_id.StructScan failed %v\n", err)
+			return nil, err
+		}
+		row.Status = DBOK
+		SnapshotsTable[row.Snap_id] = row
+	}
+
+	// step 2: read /all_snapshots
+	fd, err := os.Open(filename)
+	if err != nil {
+		Printf("os.Open %s failed = reason %v\n", filename, err)
+		return nil, err
+	}
+	defer fd.Close()
+	csvReader := csv.NewReader(fd)
+
+	highID := sqlite.Get_high_id("snapshots")
+	for {
+		components, err := csvReader.Read()
+		if err == io.EOF { break }
+		snap_id  := components[0]
+		tree     := components[1]
+		hostname := components[2]
+		path     := components[3]
+		snTime   := components[4]
+
+		snapIDShort := snap_id[:8]
+		if _, ok := SnapshotsTable[snapIDShort]; ok {
+			continue
+		}
+
+		// build INSERT slice
+		SnapshotsTable[snapIDShort] = SnapshotRecordMem{
+			Id: highID,
+			Snap_id: snapIDShort,
+			Snap_time: snTime,
+			Snap_host: hostname,
+			Snap_fsys: path,
+			Snap_root: tree,
+			Status:    DBNEW,
+		}
+		highID++
+	}
+
+	if len(SnapshotsTable) > 0 {
+		err = InsertTable("snapshots", SnapshotsTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(snapshots) %v\n", err)
+			return nil, err
+		}
+	}
+	return SnapshotsTable, nil
+}
+
+func ProcessPackfilesTable(tx *sqlx.Tx, filename string, table_column_names map[string][]string,
+changes_made *bool) (PackfilesTable map[string]PackfilesRecordMem, err error) {
+	PackfilesTable = map[string]PackfilesRecordMem{}
+
+	// step 1: read from TABLE packfiles
+	sql := "SELECT * FROM packfiles"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select snapshots. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row PackfilesRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select packfiles.StructScan failed %v\n", err)
+			return nil, err
+		}
+		row.Status = DBOK
+		PackfilesTable[hex.EncodeToString(row.Packfile_id)] = row
+	}
+
+	// step 2: read /all_packfiles
+	fd, err := os.Open(filename)
+	if err != nil {
+		Printf("os.Open %s failed = reason %v\n", filename, err)
+		return nil, err
+	}
+	defer fd.Close()
+	csvReader := csv.NewReader(fd)
+
+	highID := sqlite.Get_high_id("packfiles")
+	for {
+		line, err := csvReader.Read()
+		if err == io.EOF { break }
+
+		packfile := line[0]
+		if _, ok := PackfilesTable[packfile]; ok {
+			continue
+		}
+
+		packfile_bytes, _ := hex.DecodeString(packfile)
+		PackfilesTable[packfile] = PackfilesRecordMem{
+			Id: highID,
+			Packfile_id: packfile_bytes,
+			Status: DBNEW,
+		}
+		highID++
+	}
+
+	if len(PackfilesTable) > 0 {
+		err = InsertTable("packfiles", PackfilesTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(packfiles) %v\n", err)
+			return nil, err
+		}
+	}
+	return PackfilesTable, nil
+}
+
+func ProcessIndexRecordsTable(tx *sqlx.Tx, filename string, table_column_names map[string][]string,
+changes_made *bool, packfiles map[string]PackfilesRecordMem) (
+IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID, err error) {
+
+	// initialize return maps
+	IndexRepoTable = map[string]IndexRepoRecordMem{}
+	reverseIndexRepo = map[int]restic.ID{}
+
+	// step 1: read from TABLE index_repo
+	sql := "SELECT * FROM index_repo"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select index_repo. Error in Queryx %v\n", err)
+		return nil, nil, err
+	}
+
+	count := 0
+	for rows.Next() {
+		var row IndexRepoRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select index_repo.StructScan failed %v\n", err)
+			return nil, nil, err
+		}
+		row.Status = DBOK
+		IndexRepoTable[hex.EncodeToString(row.Blob)] = row
+
+		if len(row.Blob) != 32 {
+			Printf("Can't parse blob %s from index_repo.blob %v\n", row.Blob[:12], err)
+			panic("Can't parse blob from index_repo.blob")
+		}
+
+		blobAsID := restic.ID{}
+		copy(blobAsID[:], row.Blob)
+		reverseIndexRepo[row.Id] = blobAsID
+	}
+
+	// step 2: read /all_index_info
+	fd, err := os.Open(filename)
+	if err != nil {
+		Printf("os.Open %s failed = reason %v\n", filename, err)
+		return nil, nil, err
+	}
+	defer fd.Close()
+	csvReader := csv.NewReader(fd)
+
+	// insert new rows
+	highID := sqlite.Get_high_id("index_repo")
+	//count = 0
+	for {
+		components, err := csvReader.Read()
+		if err == io.EOF { break }
+		blob := components[0]
+		_, ok := IndexRepoTable[blob]; if ok { continue }
+
+		Type := components[1]
+		offset, err1 := strconv.Atoi(components[2])
+		length, err2 := strconv.Atoi(components[3])
+		UCLength, err3 := strconv.Atoi(components[4])
+		packfile := components[5]
+		_ = packfile
+
+		if err1 != nil || err2 != nil || err3 != nil {
+			Printf("Conversion error of str->int\n")
+			return nil, nil, errors.New("Int Conversion error")
+		}
+
+		if _, ok := packfiles[packfile]; ! ok {
+			Printf("Back ptr to packfile %s does not exist. Abort!\n", packfile[:12])
+			panic("Back ptr to packfile does not exist. Aborting!")
+		}
+
+		blob_bytes, _ := hex.DecodeString(blob)
+		IndexRepoTable[blob] = IndexRepoRecordMem{
+			Id: highID,
+			Blob: blob_bytes,
+			Type: Type,
+			Offset: offset,
+			Length: length,
+			UncompressedLength: UCLength,
+			Pack__id: packfiles[packfile].Id,
+			Status: DBNEW,
+		}
+		highID++
+		count++
+	}
+
+	if len(IndexRepoTable) > 0 {
+		err = InsertTable("index_repo", IndexRepoTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(index_repo) %v\n", err)
+			return nil, nil, err
+		}
+	}
+	return IndexRepoTable, reverseIndexRepo, nil
+}
+
+// big function which processes all Tree elements of the metadata
+func ProcessMetaDataDetails(tx *sqlx.Tx, dirname string, table_column_names map[string][]string,
+changes_made *bool, IndexRepoTable map[string]IndexRepoRecordMem) (metaDataAll map[IntID]*restic.Tree, err error) {
+
+	type MyTree struct {
+		MetaBlob restic.ID `json:"metablob"`
+		restic.Tree
+	}
+
+	info, err := os.Stat(dirname)
+	if err != nil {
+		Printf("Can't stat directory %s - reason %v\n", dirname, err)
+		return nil, err
+	}
+	if ! info.IsDir() {
+		Printf("%s is not a directory. Aborting!\n", dirname)
+		return nil, errors.New("Not a directory. Aborting!")
+	}
+
+	metaDataAll = map[IntID]*restic.Tree{}
+	files, err := filepath.Glob(dirname + "/[0-9a-f][0-9a-f]/[0-9a-f][0-9a-f]*")
+	for _, filename := range files {
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			Printf("Can't os.Read %s - error %v. Aborting\n", filename, err)
+			return nil, err
+		}
+
+		t := &MyTree{}
+		err = json.Unmarshal(data, t)
+		if err != nil {
+			Printf("Can't Unmarshal data from file %s - error '%+v'. Aborting\n", filename, err)
+			return nil, err
+		}
+		record, ok := IndexRepoTable[t.MetaBlob.String()]
+		if ! ok {
+			Printf("entry %s not found in IndexRepo. Aborting!\n", t.MetaBlob.String())
+			panic("Internal inconsistency. Aborting!")
+		}
+		metaDataAll[IntID(record.Id)] = &(t.Tree)
+	}
+	return metaDataAll, nil
+}
+
+func ProcessMetaDirTable(tx *sqlx.Tx, table_column_names map[string][]string,
+changes_made *bool, metaDirMap map[string]mapset.Set[IntID],
+SnapshotsTable map[string]SnapshotRecordMem) (
+metaDirTable map[CompMetaDir]MetaDirRecordMem, err error) {
+	metaDirTable = map[CompMetaDir]MetaDirRecordMem{}
+
+	// step 1: read mata_dir table
+	sql := "SELECT * FROM meta_dir"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select meta_dir. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row MetaDirRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select meta_dir.StructScan failed %v\n", err)
+			return nil, err
+		}
+		row.Status = DBOK
+		cmpix := CompMetaDir{row.Snap__id, IntID(row.Blob__id)}
+		metaDirTable[cmpix] = row
+	}
+
+	// step 2: compare with data from maetadata export as create new rows
+	highID := sqlite.Get_high_id("meta_dir")
+	for snap_id, blobSet := range metaDirMap {
+		snapRow, ok := SnapshotsTable[snap_id]
+		if ! ok {
+			Printf("internal inconsistency for snap_id %s. Aborting!\n", snap_id[:12])
+			panic("internal inconsistency for snap_id. Aborting!")
+		}
+		for blob := range blobSet.Iter() {
+			cmpix := CompMetaDir{snapRow.Id, blob}
+			if _, ok := metaDirTable[cmpix]; ok {
+				continue
+			}
+
+			row := MetaDirRecordMem{
+				Status: DBNEW,
+				Id: highID,
+				Snap__id: snapRow.Id,
+				Blob__id: int(blob),
+			}
+			metaDirTable[cmpix] = row
+			highID++
+		}
+	}
+
+	if len(metaDirTable) > 0 {
+		err = InsertTable("meta_dir", metaDirTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(meta_dir) %v\n", err)
+			return nil, err
+		}
+	}
+	return metaDirTable, nil
+}
+
+func ProcessNamesTable(tx *sqlx.Tx, table_column_names map[string][]string,
+changes_made *bool, metaDataAll map[IntID]*restic.Tree) (namesTable map[string]NamesRecordMem, err error) {
+	namesTable = map[string]NamesRecordMem{}
+
+	// step 1: read mata_dir table
+	sql := "SELECT * FROM names"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select names. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row NamesRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select names.StructScan failed %v\n", err)
+			return nil, err
+		}
+
+		row.Status = DBOK
+		namesTable[row.Name] = row
+	}
+
+	// step 2: look for new rows
+	highID := sqlite.Get_high_id("names")
+	for _, tree := range metaDataAll {
+		for _, node := range tree.Nodes {
+			name := node.Name
+			if _, ok := namesTable[name]; ok {
+				continue
+			}
+			namesTable[name] = NamesRecordMem{Status: DBNEW, Id: highID, Name: name}
+			highID++
+		}
+	}
+
+	if len(namesTable) > 0 {
+		err = InsertTable("names", namesTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(names) %v\n", err)
+			return nil, err
+		}
+	}
+	return namesTable, nil
+}
+
+func ProcessContentsTable(tx *sqlx.Tx, table_column_names map[string][]string,
+changes_made *bool, IndexRepoTable map[string]IndexRepoRecordMem,
+reverseIndexRepo map[int]restic.ID,
+metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsRecordMem, err error) {
+	contentsTable = map[CompContents]ContentsRecordMem{}
+
+	// step 1: read mata_dir table
+	sql := "SELECT * FROM contents"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select contents. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row ContentsRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select contents.StructScan failed %v\n", err)
+			return nil, err
+		}
+
+		cmpix := CompContents{Blob__id: IntID(row.Blob__id), Position: row.Position, Offset: row.Offset}
+		row.Status = DBOK
+		contentsTable[cmpix] = row
+	}
+
+	// step 2: look for new rows
+	highID := sqlite.Get_high_id("contents")
+	for parent_int, tree := range metaDataAll {
+		for position, node := range tree.Nodes {
+			if node.Type != "file" || len(node.Content) == 0 { continue }
+			for offset, data_blob := range node.Content {
+				row_ix_repo, ok := IndexRepoTable[data_blob.String()]
+				if ! ok {
+					Printf("Internal inconsistency for data_blob %s. Aborting!\n", data_blob[:12])
+					panic("Internal inconsistency for data_blob. Aborting!")
+				}
+
+				cmpix := CompContents{Blob__id: parent_int, Position: position, Offset: offset}
+				if _, ok := contentsTable[cmpix]; ok {
+					continue
+				}
+
+				row := ContentsRecordMem{Status: DBNEW, Id: highID, Data__id: row_ix_repo.Id,
+					Blob__id: int(parent_int), Position: position, Offset: offset}
+				contentsTable[cmpix] = row
+				highID++
+			}
+		}
+	}
+
+	if len(contentsTable) > 0 {
+		err = InsertTable("contents", contentsTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(contents) %v\n", err)
+			return nil, err
+		}
+	}
+	return contentsTable, nil
+}
+
+func ProcessFileDataTable(tx *sqlx.Tx, table_column_names map[string][]string,
+changes_made *bool, namesTable map[string]NamesRecordMem,
+metaDataAll map[IntID]*restic.Tree) (fileDataTable map[CompIddFile]IddFileRecordMem, err error) {
+	fileDataTable = map[CompIddFile]IddFileRecordMem{}
+
+	// step 1: read idd_file table
+	sql := "SELECT * FROM idd_file"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select idd_file. Error in Queryx %v\n", err)
+		return nil, err
+	}
+
+	for rows.Next() {
+		var row IddFileRecordMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select idd_file.StructScan failed %v\n", err)
+			return nil, err
+		}
+
+		cmpix := CompIddFile{meta_blob: IntID(row.Blob__id), position: row.Position}
+		row.Status = DBOK
+		fileDataTable[cmpix] = row
+	}
+
+	// step 2: look for new rows
+	highID := sqlite.Get_high_id("idd_file")
+	for parent_int, tree := range metaDataAll {
+		for position, node := range tree.Nodes {
+			cmpix := CompIddFile{meta_blob: parent_int, position: position}
+			if _, ok := fileDataTable[cmpix]; ok {
+				continue
+			}
+			name_row, ok := namesTable[node.Name]
+			if ! ok {
+				Printf("Internal inconsistency for name %s. Aborting!\n", node.Name)
+				panic("Internal inconsistency for namesTable. Aborting!")
+			}
+
+			row := IddFileRecordMem{Status: DBNEW, Id: highID, Blob__id: int(parent_int),
+				Position: position, Name__id: name_row.Id, Size: int(node.Size),
+				Inode: int64(node.Inode), Mtime: node.ModTime.String()[:19], Type: node.Type}
+			fileDataTable[cmpix] = row
+			highID++
+		}
+	}
+
+	if len(fileDataTable) > 0 {
+		err = InsertTable("idd_file", fileDataTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(idd_file) %v\n", err)
+			return nil, err
+		}
+	}
+	return fileDataTable, nil
+}
+
+func ProcessFullNameTable(tx *sqlx.Tx, table_column_names map[string][]string,
+changes_made *bool, fullname map[IntID]string, children map[IntID]mapset.Set[IntID]) (
+fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err error) {
+
+	//  step 1: initialize
+	fullnameTable = map[string]FullnameMem{}
+	pathDirTable  = map[int]DirPathIdMem{}
+
+	/* since 'fullname' points from a directory ID to a pathname, a lot of
+	 * pathsnames will be repeated a few times
+	 * In order to normalize this pattern, an intermediate table will be inserted
+	 * which collects all the unique names and a mapping which map that unique
+	 * ID back to 'fullname'.
+	 * So the visible table is 'dir_path_id' which points to the back table
+	 * 'fullname'.
+	 */
+
+	// step 2: read fullpath table
+	sql := "SELECT * FROM fullname"
+	rows, err := tx.Queryx(sql)
+	if err != nil {
+		Printf("Select fullname. Error in Queryx %v\n", err)
+		return nil, nil, err
+	}
+
+	for rows.Next() {
+		var row FullnameMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select fullname.StructScan failed %v\n", err)
+			return nil, nil, err
+		}
+
+		row.Status = DBOK
+		fullnameTable[row.Pathname] = row
+	}
+
+	// step 3: construct new fullname table rows
+	highID := sqlite.Get_high_id("fullname")
+	for _, path := range fullname {
+		if _, ok := fullnameTable[path]; ok {
+			continue
+		}
+		row := FullnameMem{Status: DBNEW, Id: highID, Pathname: path}
+		fullnameTable[path] = row
+		highID++
+	}
+
+
+	// step 4: read dir_path_id table
+	sql = "SELECT * FROM dir_path_id"
+	rows, err = tx.Queryx(sql)
+	if err != nil {
+		Printf("Select dir_path_id. Error in Queryx %v\n", err)
+		return nil, nil, err
+	}
+
+	for rows.Next() {
+		var row DirPathIdMem
+		err = rows.StructScan(&row)
+		if err != nil {
+			Printf("select dir_path_id.StructScan failed %v\n", err)
+			return nil, nil, err
+		}
+
+		row.Status = DBOK
+		pathDirTable[row.Id] = row
+	}
+
+	// step 5: construct dir_path_id table
+	for meta_int, path := range fullname {
+		if _, ok := fullnameTable[path]; ! ok {
+			Printf("Internal inconsistency for fullname %s. Aborting!\n", path)
+			panic("Internal inconsistency fullname. Aborting!")
+		}
+		if _, ok := pathDirTable[int(meta_int)]; ok {
+			continue
+		}
+		row := DirPathIdMem{Status: DBNEW, Id: int(meta_int), Pathname__id: fullnameTable[path].Id}
+		pathDirTable[int(meta_int)] = row
+	}
+
+	if len(fullnameTable) > 0 {
+		err = InsertTable("fullname", fullnameTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(fullname) %v\n", err)
+			return nil, nil, err
+		}
+	}
+
+	if len(pathDirTable) > 0 {
+		err = InsertTable("dir_path_id", pathDirTable, tx, table_column_names, changes_made)
+		if err != nil {
+			Printf("InsertTable(dir_path_id) %v\n", err)
+			return nil, nil, err
+		}
+	}
+	return fullnameTable, pathDirTable, nil
+}

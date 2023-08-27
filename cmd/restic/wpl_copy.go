@@ -108,7 +108,6 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.String()[:19]}
 		src_map[triple] = snap_id
-		//Printf("++src %+v\n", triple)
 	}
 
 	dst_map := make(map[SnapTriple]string)
@@ -116,7 +115,6 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.String()[:19]}
 		dst_map[triple] = snap_id
-		//Printf("++dst %+v\n", triple)
 	}
 
 	copied := false
@@ -133,7 +131,6 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 			continue
 		}
 		sort_keys = append(sort_keys, triple)
-		//Printf("++st %+v\n", triple)
 	}
 
 	sort.SliceStable(sort_keys, func(i, j int) bool {

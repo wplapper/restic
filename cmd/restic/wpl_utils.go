@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 	//"encoding/json"
-	//"io/ioutil"
+	//"os"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -33,15 +33,14 @@ var (
 )
 
 func init_repositoryData(repositoryData *RepositoryData) {
-	repositoryData.Snaps = []*restic.Snapshot{}
-	repositoryData.SnapMap = make(map[string]*restic.Snapshot)
-	repositoryData.DirectoryMap = make(map[IntID][]BlobFile2)
-	repositoryData.FullPath = make(map[IntID]string)
-	repositoryData.MetaDirMap = make(map[*restic.ID]mapset.Set[IntID])
-	repositoryData.IndexHandle = make(map[restic.ID]Index_Handle)
-
-	repositoryData.BlobToIndex = make(map[restic.ID]IntID)
-	repositoryData.IndexToBlob = []restic.ID{}
+	repositoryData.Snaps        = []*restic.Snapshot{}
+	repositoryData.SnapMap      = map[string]*restic.Snapshot{}
+	repositoryData.DirectoryMap = map[IntID][]BlobFile2{}
+	repositoryData.FullPath     = map[IntID]string{}
+	repositoryData.MetaDirMap   = map[*restic.ID]mapset.Set[IntID]{}
+	repositoryData.IndexHandle  = map[restic.ID]Index_Handle{}
+	repositoryData.BlobToIndex  = map[restic.ID]IntID{}
+	repositoryData.IndexToBlob  = []restic.ID{}
 }
 
 // GatherAllSnapshots retrieves all snapshots from the repository
@@ -149,6 +148,7 @@ func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo *repository.R
 // FindChildren steps through the directory_map and finds subdirectories.
 // The children get attached their parent
 func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set[IntID]) {
+	//Print("FindChildren start\n")
 	children = CreateAllChildren(repositoryData)
 	names  := make(map[IntID]string)
 	for _, idd_file_list := range repositoryData.DirectoryMap {
@@ -171,7 +171,8 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
 
 	// 3. create full name tree for all meta_blobs (repositoryData.FullPath)
 	// dfs sorts the children topologically, so parents appear before their children
-	for _, meta_blob := range dfs(children, initials) {
+	dfs_res := dfs(children, initials)
+	for _, meta_blob := range dfs_res {
 		for child := range children[meta_blob].Iter() {
 			repositoryData.FullPath[child] = repositoryData.FullPath[meta_blob] + "/" +
 				names[child]
@@ -189,33 +190,31 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
 
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
-func TopologyStructure(sn restic.Snapshot, repositoryData *RepositoryData,
-children map[IntID]mapset.Set[IntID]) {
+func TopologyStructure(tree_root IntID,
+children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
-	tree_root := repositoryData.BlobToIndex[*sn.Tree]
-	seen := mapset.NewSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
+	flatSet = mapset.NewSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
 
-	// use 'queue' as a FIFO queue to copy the topologicl tree
+	// use 'queue' as a FIFO queue to create the flattened tree structure
 	to_be_processed := queue.New()
+	// prime queue with tree root
 	to_be_processed.Enqueue(tree_root)
 	for to_be_processed.Len() > 0 {
 		for child := range children[to_be_processed.Dequeue().(IntID)].Iter() {
-			if ! seen.Contains(child) {
-				seen.Add(child)
+			if ! flatSet.Contains(child) {
+				flatSet.Add(child)
 				to_be_processed.Enqueue(child)
 			}
 		}
 	}
 
-	// at the end of the loop, 'seen' contains all directories
+	// at the end of the loop, 'flatSet' contains all directories
 	// referenced in the snapshot
-	id_ptr := Ptr2ID(*sn.ID(), repositoryData)
-	repositoryData.MetaDirMap[id_ptr] = seen
-	// reset for GC
-	seen = nil
+	flatSet.Remove(EMPTY_NODE_ID_TRANSLATED)
 	to_be_processed = nil
+	return flatSet
 }
 
 // this methods runs through all the steps to gather the pertinent repository data
@@ -232,7 +231,10 @@ func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
 
 	// step 3: build topology structure for each snapshot in repository
 	for _, sn := range repositoryData.Snaps {
-		TopologyStructure(*sn, repositoryData, children)
+		tree_root := repositoryData.BlobToIndex[*sn.Tree]
+		seen := TopologyStructure(tree_root, children)
+		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+		repositoryData.MetaDirMap[id_ptr] = seen
 	}
 	return nil
 }
@@ -264,7 +266,7 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 	/*
 	repositoryData.rename_children = map[string]string{} // from_name -> to_name
 	var renameNames []RenameNames
-	data, err := ioutil.ReadFile("/home/wplapper/restic/directory_renames.json")
+	data, err := os.ReadFile("/home/wplapper/restic/directory_renames.json")
 	if err != nil {
 			Printf("I/O error while reading directory_renames.json - %v\n", err)
 			panic("Cannot read json rename configuration file!")
@@ -324,6 +326,8 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 						}
 						content = append(content, ix_data)
 					}
+				} else if node.Type == "dir" {
+					subt_ID = repositoryData.BlobToIndex[*node.Subtree]
 				}
 
 				blob_file := BlobFile2{name: node.Name,
@@ -440,6 +444,8 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 
 // depth first search using 'childrenMap' as the map, 'initials' as starting
 // points and 'repositoryData' is used for debugging
+// create a totlogical sort of all the tree nodes, starting a the various
+// tree roots
 func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (inverse_result []IntID) {
 
 	// define a stack entry
@@ -461,31 +467,32 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 			visited.Add(root)
 
 			// create a completely new stack
-			stak := stack.New()
-			stak.Push(StackEntry{parent: root, ChildrenIter: childrenMap[root].Iterator()})
+			myStack := stack.New()
+			myStack.Push(StackEntry{parent: root, ChildrenIter: childrenMap[root].Iterator()})
 
-			for true {
+			ever := true
+			for ever {
 				// this is the only exit from the loop
-				if stak.Len() == 0 { break }
+				if myStack.Len() == 0 { break }
 LOOP:
-				entry  := stak.Peek().(StackEntry)
+				entry  := myStack.Peek().(StackEntry)
 				parent := entry.parent
 				new_data := false
 				for child := range entry.ChildrenIter.C {
 					if ! visited.Contains(child) {
 						visited.Add(child)
-						stak.Push(StackEntry{parent: child, ChildrenIter: childrenMap[child].Iterator()})
+						myStack.Push(StackEntry{parent: child, ChildrenIter: childrenMap[child].Iterator()})
 						new_data = true
 					}
 				}
 				if new_data { goto LOOP }
 
-				stak.Pop()
-				if stak.Len() > 0 { results = append(results, parent) }
-			} // end LOOP
+				myStack.Pop()
+				if myStack.Len() > 0 { results = append(results, parent) }
+			} // end forever LOOP
 			results = append(results, root)
-		}
-	}
+		} // end if visited.Contains(root)
+	}	// end loop for all initials
 
 	// reverse 'results' so that the roots are at the relative beginning of the slice
 	l_result := len(results) - 1

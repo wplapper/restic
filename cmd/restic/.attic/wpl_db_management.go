@@ -50,6 +50,8 @@ var dbOptions DBOptions
 
 // the following types represent database tables and their contents
 // in the database and in memory
+
+
 type SnapshotRecordMem struct {
 	Id           int
 	Snap_id      string // == UNIQUE
@@ -153,15 +155,11 @@ type UpdateTable_index_repo struct {
 
 type Newcomers struct {
 	// the containers of various memory tables
-	Mem_snapshots       map[string]SnapshotRecordMem
-	Mem_index_repo      map[IntID]*IndexRepoRecordMem
-	Mem_packfiles       map[IntID]*PackfilesRecordMem
-	Mem_names           map[string]*NamesRecordMem
-	//Mem_idd_file        map[CompIddFile]*IddFileRecordMem
-	//Mem_meta_dir        map[CompMetaDir]*MetaDirRecordMem
-	//Mem_contents        map[CompContents]*ContentsRecordMem
-	//Mem_dir_path_id     map[IntID]*DirPathIdMem
-	Mem_fullname        map[string]*FullnameMem
+	Mem_snapshots      map[string]SnapshotRecordMem
+	Mem_index_repo     map[IntID]*IndexRepoRecordMem
+	Mem_packfiles      map[IntID]*PackfilesRecordMem
+	Mem_names          map[string]*NamesRecordMem
+	Mem_fullname       map[string]*FullnameMem
 	Mem_idd_file_slice []*IddFileRecordMem
 	Mem_meta_dir_slice []*MetaDirRecordMem
 	Mem_contents_slice []*ContentsRecordMem
@@ -306,18 +304,14 @@ func runDBManage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 // initialize new memory maps
 func InitNewcomers() *Newcomers {
 	var new_comers Newcomers
-	new_comers.Mem_snapshots = make(map[string]SnapshotRecordMem)
-	new_comers.Mem_index_repo = make(map[IntID]*IndexRepoRecordMem)
-	new_comers.Mem_packfiles = make(map[IntID]*PackfilesRecordMem)
-	new_comers.Mem_names = make(map[string]*NamesRecordMem)
-	//new_comers.Mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
-	//new_comers.Mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
-	//new_comers.Mem_contents = make(map[CompContents]*ContentsRecordMem)
-	//new_comers.Mem_dir_path_id = make(map[IntID]*DirPathIdMem)
-	new_comers.Mem_fullname = make(map[string]*FullnameMem)
-	new_comers.Mem_idd_file_slice = make([]*IddFileRecordMem, 0)
-	new_comers.Mem_meta_dir_slice = make([]*MetaDirRecordMem, 0)
-	new_comers.Mem_contents_slice = make([]*ContentsRecordMem, 0)
-	new_comers.Mem_dir_path_id_sl = make([]*DirPathIdMem, 0)
+	new_comers.Mem_snapshots = map[string]SnapshotRecordMem{}
+	new_comers.Mem_index_repo = map[IntID]*IndexRepoRecordMem{}
+	new_comers.Mem_packfiles = map[IntID]*PackfilesRecordMem{}
+	new_comers.Mem_names = map[string]*NamesRecordMem{}
+	new_comers.Mem_fullname = map[string]*FullnameMem{}
+	new_comers.Mem_idd_file_slice = []*IddFileRecordMem{}
+	new_comers.Mem_meta_dir_slice = []*MetaDirRecordMem{}
+	new_comers.Mem_contents_slice = []*ContentsRecordMem{}
+	new_comers.Mem_dir_path_id_sl = []*DirPathIdMem{}
 	return &new_comers
 }

@@ -154,7 +154,7 @@ data_map map[IntID]mapset.Set[FullSet]) {
 
 // This function creates a data map which is global for the repository. It
 // contains a mapping from a data blob to the containing meta blob a the
-// offset in the file list, used for gathering the file name to which this data
+// index into the file list, used for gathering the file name to which this data
 // blob belongs. Data blob can belong to multiple files.
 func map_data_blob_file(repositoryData *RepositoryData) (
 data_map map[IntID]mapset.Set[CompIddFile]) {

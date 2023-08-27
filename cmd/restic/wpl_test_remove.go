@@ -247,6 +247,7 @@ func print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 			}
 			deleted_files[filename] = file_info{size: 0}
 		} else if ih.Type == restic.DataBlob {
+
 			// in case of multiple entries this is an arbitrary choice!!
 			cmp_ix = data_map[blob].ToSlice()[0]
 			meta := repositoryData.DirectoryMap[cmp_ix.meta_blob][cmp_ix.position]

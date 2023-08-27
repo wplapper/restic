@@ -268,7 +268,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 
 	// we have tuple(node.DeviceID, node.Inode) which is unique
 	type content_ID struct {
-		content_ID [32]byte
+		content_ID [sha256.Size]byte
 		Size       uint64
 	}
 	inodes_meta := mapset.NewSet[DeviceInode]()
@@ -348,6 +348,8 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	var l_diff int
 	if ! set_index_handle.Equal(set_tree) {
 		Printf("\n*** Repository needs pruning! ***\n")
+		Printf("from index    %7d\n", set_index_handle.Cardinality())
+		Printf("from FullPath %7d\n", set_tree.Cardinality())
 
 		diff = set_tree.Difference(set_index_handle)
 		l_diff = diff.Cardinality()

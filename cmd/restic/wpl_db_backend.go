@@ -62,7 +62,7 @@ func database_via_cache(repo restic.Repository, ctx context.Context) (string, er
 	handle_ts := restic.Handle{Type: restic.WplFile, Name: "wpl/timestamp-db"}
 	be_stat, err := repo.Backend().Stat(ctx, handle_ts)
 
-	update_timestamp_file := false
+	//update_timestamp_file := false
 	if err == nil {
 		// Load() timestamp file from Backend()
 		wr := new(bytes.Buffer)
@@ -98,11 +98,11 @@ func database_via_cache(repo restic.Repository, ctx context.Context) (string, er
 	}
 
 	Verboseff("Need to read compressed database file from Backend\n")
-	update_timestamp_file = true
-	handle_cmp_db := restic.Handle{Type: restic.WplFile, Name: "wpl/restic.zstd"}
+	//update_timestamp_file = true
+	handle_cmp_db := restic.Handle{Type: restic.WplFile, Name: "wpl/restic.zst"}
 	be_stat, err = repo.Backend().Stat(ctx, handle_cmp_db)
 	if err == nil {
-		//Printf("size restic.zstd is %d bytes\n", be_stat.Size)
+		Printf("size restic.zst is %d bytes\n", be_stat.Size)
 		wr := new(bytes.Buffer)
 		err = repo.Backend().Load(ctx, handle_cmp_db, 0, 0, func(rd io.Reader) error {
 
@@ -168,45 +168,9 @@ func database_via_cache(repo restic.Repository, ctx context.Context) (string, er
 		}
 		Verboseff("VACUUM\n")
 		db_conn.MustExec("VACUUM")
-
-		// uncommitted READ for timestamp TABLE
-		var database_updated time.Time
-		sqll := "SELECT database_updated FROM timestamp WHERE id = 1"
-		err = db_conn.Get(&database_updated, sqll)
-		if err != nil {
-			Printf("Can't read timestamp TABLE, error is %+v. Ignored\n", err)
-		}
-		Verboseff("timestamp.database_updated at %s\n",
-			database_updated.Format("2006-01-02 15:04:05"))
 		db_conn.Close()
-
-		cstat, _ = os.Stat(db_name)
-		if update_timestamp_file {
-			// write back timestamp file with details about compressed database file
-			ts_db := TimeStampDatabase{
-				Uncompressed_size:  int(cstat.Size()),
-				Uncompressed_mtime: cstat.ModTime().String()[:19],
-				Compressed_size:    int(be_stat.Size),
-				Compressed_mtime:   time.Now().String()[:19],
-			}
-
-			// rewrite backend stats file
-			jsonString, err := json.Marshal(ts_db)
-			if err != nil {
-				Printf("Could not create JSON string for timestamp - error is %v\n", err)
-				return db_name, err
-			}
-
-			target := "wpl/timestamp-db"
-			handle := restic.Handle{Type: restic.WplFile, Name: target}
-			err = repo.Backend().Save(ctx, handle, restic.NewByteReader(jsonString, nil))
-			if err != nil {
-				Printf("repo.Backend().Save(timestamp) failed with %v\n", err)
-				return db_name, err
-			}
-			Verboseff("timestamp %s written\n", target)
-		}
 	} else {
+		Printf("backend error is '%v'\n", err)
 		Printf("Compressed database file not found in backend, create new.\n")
 	}
 	return db_name, nil
@@ -215,7 +179,7 @@ func database_via_cache(repo restic.Repository, ctx context.Context) (string, er
 // write cached database file back to backend
 func write_back_database(db_name string, repo restic.Repository, ctx context.Context) error {
 	// read database into buffer
-	//Printf("called write_back_database\n")
+	//Printf("called write_back_database\n")xqwszxdfcggggg	321`D
 	db_cache_info, err := os.Stat(db_name)
 	if err != nil {
 		Printf("Could not Stat() database from cache - error is '%v'\n", err)
@@ -230,6 +194,8 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		Printf("CompressEncoder failed with %v\n", err)
 		return err
 	}
+	//start := time.Now()
+	//Printf("%-30s %s\n", "Start CompressEncoder", start.String()[:29])
 
 	cmd := exec.Command("/usr/bin/sqlite3", db_name, ".dump")
 	stdout, err := cmd.StdoutPipe()
@@ -238,25 +204,34 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		return err
 	}
 	defer stdout.Close()
+	//start = time.Now()
+	//Printf("%-30s %s\n", "Start /usr/bin/sqlite3", start.String()[:29])
 
 	Verboseff("run /usr/bin/sqlite3 %s .dump\n", db_name)
 	if err := cmd.Start(); err != nil {
 		Printf("Can't start slqite3 .dump")
 		return err
 	}
+	//start = time.Now()
+	//Printf("%-30s %s\n", "Start cmd.Start()", start.String()[:29])
 
-	// here we execute "sqlite3 <db_name> .dump | zstd -8 - > <backend-file/wpl/restic.zstd>"
+	// here we execute "sqlite3 <db_name> .dump | zstd -8 - > <backend-file/wpl/restic.zst>"
 	go cmp_handle.ReadFrom(stdout)
 	if err := cmd.Wait(); err != nil {
 		Printf("Wait failed with error %v\n", err)
 		return err
 	}
+	//start = time.Now()
+	//Printf("%-30s %s\n", "Start cmd.Wait()", start.String()[:29])
+
 
 	err = cmp_handle.Close()
 	if err != nil {
 		Printf("CompressEncoder.Close() failed with %v\n", err)
 		return err
 	}
+	//start = time.Now()
+	//Printf("%-30s %s\n", "Start cmp_handle.Close()", start.String()[:29])
 
 	// compressed data is stored in 'buffer_writer'
 	dst := buffer_writer.Bytes()
@@ -274,26 +249,23 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		return err
 	}
 
-	backend_name := "wpl/timestamp-db"
-	handle := restic.Handle{Type: restic.WplFile, Name: backend_name}
+	handle := restic.Handle{Type: restic.WplFile, Name: "wpl/timestamp-db"}
 	err = repo.Backend().Save(ctx, handle, restic.NewByteReader(jsonString, nil))
 	if err != nil {
 		Printf("repo.Backend().Save(timestamp) failed with %v\n", err)
 		return err
 	}
-	Verboseff("timestamp file %s written.\n", backend_name)
+	Verboseff("timestamp file written.\n")
 
 	t1 := time.Now()
-	backend_name = "wpl/restic.zstd"
-	handle = restic.Handle{Type: restic.WplFile, Name: backend_name}
+	handle = restic.Handle{Type: restic.WplFile, Name: "wpl/restic.zst"}
 	err = repo.Backend().Save(ctx, handle, restic.NewByteReader(dst, nil))
 	if err != nil {
 		Printf("repo.Backend().Save(cmp_db) failed with %v\n", err)
 		return err
 	}
 
-	Verboseff("compressed database written back to %s, size is %d byes.\n",
-		backend_name, len(dst))
+	Verboseff("compressed database written back, size is %d byes.\n", len(dst))
 	t2 := time.Now().Sub(t1).Seconds()
 	if t2 > 0.0 {
 		speed := float64(len(dst)) / ONE_MEG / t2
@@ -319,7 +291,7 @@ func CompressEncoder() (*bytes.Buffer, *zstd.Encoder, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return buffer_writer, enc, err
+	return buffer_writer, enc, nil
 }
 
 // generic decompressor

@@ -21,7 +21,7 @@ func map_repo_names(name string) string {
 		"one_mass":       "rclone:onedrive:restic_massive",
 		"one_rasp_winxp": "rclone:onedrive:restic_rasp_winxp",
 		"one_rasp":       "rclone:onedrive:restic_rasp_winxp",
-		"onedrive":       "rclone:onedrive:restic_backups",
+		//"onedrive":       "rclone:onedrive:restic_backups",
 	}
 
 	if long_name, ok := short_to_long[name]; ok {

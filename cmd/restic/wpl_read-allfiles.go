@@ -1,3 +1,4 @@
+
 package main
 
 // read all data packfiles to check for errors
@@ -311,10 +312,10 @@ func ReadStatsFile(repo restic.Repository, ctx context.Context,
 }
 
 func PrettyStruct(data interface{}) []byte {
-		var error_byte []byte
     val, err := json.MarshalIndent(data, "", " ")
     if err != nil {
-        return error_byte
+        return []byte{}
     }
+    val = append(val, '\n')
     return val
 }
