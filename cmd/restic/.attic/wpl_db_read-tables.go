@@ -61,11 +61,12 @@ func ReadIndexRepoTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		}
 
 		// convert idd to ID
-		idd_as_ID, err := restic.ParseID(row.Blob)
-		if err != nil {
-			Printf("ReadIndexRepoTable:Parse failed for %s %v\n", row.Blob, err)
-			return err
+		idd_as_ID := restic.ID{}
+		if len(row.Blob) != 32 {
+			panic("Internal inconsistency for blob_bytes: length not 32. Aborting!")
 		}
+
+		copy(idd_as_ID[:], row.Blob)
 		Ptr2ID3(idd_as_ID, repositoryData, "ix_repo_DB")
 		idd_as_IntID := repositoryData.BlobToIndex[idd_as_ID]
 
@@ -227,8 +228,8 @@ func ReadContentsTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 		}
 
 		// convert P.id_blob to meta_blob via back pointer in index_repo
-		meta_blob := ptr_index_repo[row.Id_blob]
-		ix := CompContents{meta_blob: meta_blob, position: row.Position, offset: row.Offset}
+		meta_blob := ptr_index_repo[row.Blob__id]
+		ix := CompContents{Blob__id: meta_blob, Position: row.Position, Offset: row.Offset}
 		/* ContentsRecordMem:
 		Id          int
 		Id_data_idd int // map back to index_repo
@@ -299,9 +300,9 @@ func ReadDirPathIdTable(db_conn *sqlx.Tx, db_aggregate *DBAggregate) error {
 			panic("ReadDirPathIdTable No mapping of primary index")
 		}
 
-		_, ok = ptr_fullname[row.Id_pathname]
+		_, ok = ptr_fullname[row.Pathname__id]
 		if !ok {
-			Printf("No mapping for Id_pathname %d\n", row.Id_pathname)
+			Printf("No mapping for Id_pathname %d\n", row.Pathname__id)
 			panic("ReadDirPathIdTable - no mapping for Id_pathname")
 		}
 		db_aggregate.Table_dir_path_id[ix] = &row

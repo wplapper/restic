@@ -19,8 +19,8 @@ func check_db_snapshots_row(snap_id string, repositoryData *RepositoryData) Snap
 	// step 1: build memory table to allow the comparison
 	if sn, ok := repositoryData.SnapMap[snap_id]; ok {
 		return SnapshotRecordMem{Snap_time: sn.Time.String()[:19],
-			Id_snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
-			Snap_fsys: sn.Paths[0], Snap_id: snap_id, Id: 1, Status: ""}
+			Snap_root: sn.Tree.String(), Snap_host: sn.Hostname,
+			Snap_fsys: sn.Paths[0], Snap_id: snap_id, Id: 1, Status: DBDELETE}
 	} else {
 		return SnapshotRecordMem{}
 	}
@@ -46,7 +46,7 @@ func check_db_snapshots_v2(db_aggregate *DBAggregate, repositoryData *Repository
 		}
 
 		db_value.Id = 1
-		db_value.Status = ""
+		db_value.Status = DBDELETE
 		if mem_value != db_value {
 			compare_equals = false
 			if count_print < 10 {
@@ -124,7 +124,7 @@ func check_db_idd_file_row(db_key CompIddFile, repositoryData *RepositoryData,
 			// this row is lacking 'Id_blob' which will be inserted later
 			row := IddFileRecordMem{Size: int(meta.size),
 				Inode: int64(meta.inode), Mtime: mtime, Type: meta.Type[0:1],
-				Id_name: row_name.Id, Position: position, Status: "", Id: 1}
+				Name__id: row_name.Id, Position: position, Status: DBDELETE, Id: 1}
 			return row
 		}
 	}
@@ -153,15 +153,15 @@ func check_db_idd_file_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 		}
 
 		row.Mtime = strings.Replace(row.Mtime, "T", " ", 1) // replace T with " "
-		row.Status = ""
+		row.Status = DBDELETE
 		row.Type = row.Type[0:1] // shorten type to one rune
 		row.Id = 1
 
 		// need the back mapping repo_index
-		meta_blob := ptr_index_repo[row.Id_blob]
+		meta_blob := ptr_index_repo[row.Blob__id]
 		db_key := CompIddFile{meta_blob: meta_blob, position: row.Position}
 		mem_value := check_db_idd_file_row(db_key, repositoryData, db_aggregate)
-		mem_value.Id_blob = row.Id_blob
+		mem_value.Id_blob = row.Blob__id
 
 		if mem_value != row {
 			equal = false
@@ -198,8 +198,8 @@ func check_db_meta_dir_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 
 		// need the back mapping to snapshots and repo_index
 		// and a composite index
-		snap_id := ptr_snapshot[row.Id_snap_id]
-		meta_blob := ptr_index_repo[row.Id_idd]
+		snap_id := ptr_snapshot[row.Snap__id]
+		meta_blob := ptr_index_repo[row.Blob__id]
 		sn := repositoryData.SnapMap[snap_id]
 		id_ptr := Ptr2ID(*sn.ID(), repositoryData)
 		set_data, ok := repositoryData.MetaDirMap[id_ptr]
@@ -245,8 +245,8 @@ func check_db_contents_v2(db_aggregate *DBAggregate, repositoryData *RepositoryD
 		}
 
 		// convert P.id_blob to meta_blob via back pointer in index_repo
-		meta_blob := ptr_index_repo[row.Id_blob]
-		data_blob := ptr_index_repo[row.Id_data_idd]
+		meta_blob := ptr_index_repo[row.Blob__id]
+		data_blob := ptr_index_repo[row.Data__id]
 		position := row.Position
 		offset := row.Offset
 
@@ -293,20 +293,20 @@ func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *Repositor
 			return false
 		}
 		// create a new IndexRepoRecordMem
-		mem_value := IndexRepoRecordMem{Idd_size: 0,
-			Index_type: index_type, Id_pack_id: data3.Id, Idd: id.String(),
-			Status: "", Id: 1}
+		mem_value := IndexRepoRecordMem{Length: 0,
+			Type: index_type, Pack__id: data3.Id, Blob: id,
+			Status: DBDELETE, Id: 1}
 
 		// prepare row:
 		row := *ptr_row
-		row.Status = ""
+		row.Status = DBDELETE
 		row.Id = 1
-		row.Idd_size = 0
+		row.Length = 0
 
 		if row != mem_value {
 			equal = false
 			if print_count < 10 {
-				Printf("cmp_index_repo.blob = %s\n", mem_value.Idd[:12])
+				Printf("cmp_index_repo.blob = %s\n", mem_value.Blob.String()[:12])
 				Printf("db  %+v\n", row)
 				Printf("mem %+v\n", mem_value)
 				print_count++
@@ -314,6 +314,7 @@ func check_db_index_repo_v2(db_aggregate *DBAggregate, repositoryData *Repositor
 		}
 	}
 	return equal
+}
 }
 
 // check the pack_files table, the memory equivalent is repositoryData.IndexHandle

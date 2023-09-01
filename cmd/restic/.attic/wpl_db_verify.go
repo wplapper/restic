@@ -37,10 +37,42 @@ import (
 	//argparse
 	"github.com/spf13/cobra"
 
+	// sqlite
+	"github.com/jmoiron/sqlx"
+
 	// restic library
 	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/sqlite"
 )
+
+type DBOptions struct {
+	echo bool
+	timing bool
+	memory_use bool
+	print_count_tables bool
+}
+var dbOptions DBOptions
+
+type DBAggregate struct {
+	repositoryData    *RepositoryData
+	db_conn           *sqlx.DB
+	tx                *sqlx.Tx
+	table_counts      map[string]int // count of all tables
+	// the database tables - memory representation
+	Table_snapshots   map[string]SnapshotRecordMem
+	Table_index_repo  map[IntID]*IndexRepoRecordMem
+	Table_packfiles   map[IntID]*PackfilesRecordMem
+	Table_names       map[string]*NamesRecordMem
+	Table_meta_dir    map[CompMetaDir]*MetaDirRecordMem
+	Table_idd_file    map[CompIddFile]*IddFileRecordMem
+	Table_contents    map[CompContents]*ContentsRecordMem
+	Table_dir_path_id map[IntID]*DirPathIdMem
+	Table_fullname    map[string]*FullnameMem
+	// other tables reference these tables via FOREIGN KEY
+	pk_snapshots      map[int]string
+	pk_index_repo     map[int]IntID
+	pk_fullname       map[int]string
+}
 
 var cmdDBVerify = &cobra.Command{
 	Use:   "db-verify [flags]",
@@ -79,7 +111,10 @@ func runDBVerify(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, a
 	var (
 		db_name string
 		repo    restic.Repository
+		db_aggregate DBAggregate
+		newComers *Newcomers
 	)
+	newComers = InitNewcomers()
 
 	// step 1: open repository
 	repo, err := OpenRepository(ctx, gopts)
@@ -132,7 +167,7 @@ func run_db_verify(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 
 	names_and_counts := make(map[string]int)
 	// get count from all tables
-	readAllTablesAndCounts(tx, names_and_counts)
+	//readAllTablesAndCounts(tx, names_and_counts)
 	// sort table names ascending, map meesed the ordering up
 	tbl_names_sorted := make([]string, len(names_and_counts))
 	ix := 0
@@ -315,4 +350,32 @@ func GenericCompare(table_name string, db_aggregate *DBAggregate, comparator Com
 		Printf("checking table %s FAIL\n", table_name)
 	}
 	return nil
+}
+
+type Newcomers struct {
+	// the containers of various memory tables
+	Mem_snapshots   map[string]SnapshotRecordMem
+	Mem_index_repo  map[IntID]*IndexRepoRecordMem
+	Mem_packfiles   map[IntID]*PackfilesRecordMem
+	Mem_names       map[string]*NamesRecordMem
+	Mem_idd_file    map[CompIddFile]*IddFileRecordMem
+	Mem_meta_dir    map[CompMetaDir]*MetaDirRecordMem
+	Mem_contents    map[CompContents]*ContentsRecordMem
+	Mem_dir_path_id map[IntID]*DirPathIdMem
+	Mem_fullname    map[string]*FullnameMem
+}
+
+// initialize new memory maps
+func InitNewcomers() *Newcomers {
+	var new_comers Newcomers
+	new_comers.Mem_snapshots = make(map[string]SnapshotRecordMem)
+	new_comers.Mem_index_repo = make(map[IntID]*IndexRepoRecordMem)
+	new_comers.Mem_packfiles = make(map[IntID]*PackfilesRecordMem)
+	new_comers.Mem_names = make(map[string]*NamesRecordMem)
+	new_comers.Mem_idd_file = make(map[CompIddFile]*IddFileRecordMem)
+	new_comers.Mem_meta_dir = make(map[CompMetaDir]*MetaDirRecordMem)
+	new_comers.Mem_contents = make(map[CompContents]*ContentsRecordMem)
+	new_comers.Mem_dir_path_id = make(map[IntID]*DirPathIdMem)
+	new_comers.Mem_fullname = make(map[string]*FullnameMem)
+	return &new_comers
 }

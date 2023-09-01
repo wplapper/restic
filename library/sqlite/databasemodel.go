@@ -5,6 +5,7 @@ package sqlite
  * When no tables are found, the tables below and their indexes are created.
  * For INSERT functions, the highest Ids of each of the tables are exposed
  */
+
 import (
   "fmt"
   "os"
@@ -14,7 +15,7 @@ import (
   "github.com/deckarep/golang-set/v2"
 
   // sqlite3 interface
-  "database/sql"
+  //"database/sql"
   "github.com/jmoiron/sqlx"
   _ "github.com/mattn/go-sqlite3"
 )
@@ -24,7 +25,7 @@ type DBDescriptor struct {
   verbose         int
   echo            bool
   table_names     []string
-  table_names_map mapset.Set[string]
+  table_names_set mapset.Set[string]
 }
 
 type ListIndexMaps struct {
@@ -36,7 +37,7 @@ type ListIndexMaps struct {
 var db_descriptor *DBDescriptor
 
 var SQLITE_TABLES = map[string]string{
-  // primary table
+  // primary table - anchors for the backup system
 "snapshots": `CREATE TABLE snapshots (
   id INTEGER PRIMARY KEY,             -- ID of table row
   snap_id VARCHAR(8) NOT NULL,        -- snap ID, UNIQUE INDEX
@@ -46,11 +47,11 @@ var SQLITE_TABLES = map[string]string{
   snap_root TEXT NOT NULL             --  the root of the snap
 )`,
 
-  // primary tables
+  // primary table - derived from master index
 "index_repo": `CREATE TABLE index_repo (
   -- maintains the contents of the index/ * files
   id INTEGER PRIMARY KEY,             -- the primary key
-  blob BLOB NOT NULL,                 -- the idd, UNIQUE INDEX
+  blob BLOB NOT NULL,                 -- the idd, UNIQUE INDEX, as []byte, len 32
   type TEXT NOT NULL,                 -- type tree / data
   offset INTEGER NOT NULL,            -- offset in packfile
   length INTEGER NOT NULL,            -- length of blob
@@ -59,31 +60,14 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(pack__id)               REFERENCES packfiles(id)
 )`,
 
-  // more scondary table
-"names": `CREATE TABLE names (
-  id INTEGER PRIMARY KEY,             -- the primary key
-  name TEXT                           -- all names collected from restic system
-)`,
-
-  // semi primary, because of back reference from 'index_repo' to 'packfiles'
+  // primary, because of back reference from 'index_repo' to 'packfiles'
 "packfiles": `CREATE TABLE packfiles (
   -- needed for the relationship between packfiles and blobs
-  id INTEGER PRIMARY KEY,             -- the primary key
-  packfile_id BLOB                    -- the packfile ID, UNIQUE INDEX
+  id INTEGER PRIMARY KEY,  -- the primary key
+  packfile_id BLOB         -- the packfile ID, UNIQUE INDEX, as []byte, len 32
 )`,
 
-  //secondary, can be easily rebuilt
-"meta_dir": `CREATE TABLE meta_dir (
-  -- many to many relationship table between snaps and directory idds
-  id INTEGER PRIMARY KEY,             -- the primary key
-  snap__id INTEGER NOT NULL,          -- the snap_id , INDEX
-  blob__id INTEGER NOT NULL,          -- the idd pointer, INDEX
-  -- the tuple (id_snap_id, id_idd) is UNIQUE INDEX
-  FOREIGN KEY(snap__id)               REFERENCES snaphots(id),
-  FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
-)`,
-
-  // primary table
+  // primary table - contains all meta data about files, directories etc.
 "idd_file": `CREATE TABLE idd_file (
   id INTEGER PRIMARY KEY,             -- the primary key
   blob__id INTEGER NOT NULL,          -- ptr to blob table
@@ -98,7 +82,21 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(name__id)               REFERENCES names(id)
 )`,
 
-  //secondary table, can be easily rebuilt
+"names": `CREATE TABLE names (
+  id INTEGER PRIMARY KEY,             -- the primary key
+  name TEXT                           -- all names collected from restic system
+)`,
+
+"meta_dir": `CREATE TABLE meta_dir (
+  -- many to many relationship table between snaps and directory idds
+  id INTEGER PRIMARY KEY,             -- the primary key
+  snap__id INTEGER NOT NULL,          -- the snap_id , INDEX
+  blob__id INTEGER NOT NULL,          -- the idd pointer, INDEX
+  -- the tuple (id_snap_id, id_idd) is UNIQUE INDEX
+  FOREIGN KEY(snap__id)               REFERENCES snaphots(id),
+  FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
+)`,
+
 "contents": `CREATE TABLE contents (
   id INTEGER PRIMARY KEY,             -- the primary key
   data__id INTEGER NOT NULL,          -- ptr to data_idd, INDEX
@@ -110,13 +108,11 @@ var SQLITE_TABLES = map[string]string{
   FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
 )`,
 
-  //secondary table, can be easily rebuilt
 "fullname": `CREATE TABLE fullname (
     id INTEGER PRIMARY KEY,           -- the primary key, GENERIC ascending
     pathname TEXT NOT NULL            -- full pathname of directory UNIQUE INDEX
 )`,
 
-  //secondary table, can be easily rebuilt
 "dir_path_id": `CREATE TABLE dir_path_id (
     id INTEGER PRIMARY KEY,           -- the primary key
     pathname__id INTEGER NOT NULL,    -- ptr to "fullname", INDEX7
@@ -131,26 +127,26 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
 
   "index_repo": {
     ListIndexMaps{ixname: "ux_ix_blob",              on: "blob", unique: "UNIQUE"},
-    ListIndexMaps{ixname: "ix_ix_pack_id",           on: "pack__id", unique: ""},
+    ListIndexMaps{ixname: "ix_ix_pack",              on: "pack__id", unique: ""},
     ListIndexMaps{ixname: "ix_ix_type",              on: "type", unique: ""}},
 
   "packfiles": {
-    ListIndexMaps{ixname: "ux_packf_idd",            on: "packfile_id", unique: "UNIQUE"}},
+    ListIndexMaps{ixname: "ux_packfile",             on: "packfile_id", unique: "UNIQUE"}},
 
   "names": {
     ListIndexMaps{ixname: "ux_names_name",           on: "name", unique: "UNIQUE"}},
 
   "meta_dir": {
-    ListIndexMaps{ixname: "ux_meta_dir_snap_id_idd", on: "snap__id, blob__id", unique: "UNIQUE"},
-    ListIndexMaps{ixname: "ix_meta_dir_blob",        on: "blob__id", unique: ""}},
+    ListIndexMaps{ixname: "ux_metadir_snap_blob",    on: "snap__id, blob__id", unique: "UNIQUE"},
+    ListIndexMaps{ixname: "ix_metadir_blob",         on: "blob__id", unique: ""}},
 
   "idd_file": {
-    ListIndexMaps{ixname: "ux_idd_file_blob_pos",    on: "blob__id, position", unique: "UNIQUE"},
-    ListIndexMaps{ixname: "ix_idd_file_name",        on: "name__id", unique: ""}},
+    ListIndexMaps{ixname: "ux_iddfile_blob_pos",     on: "blob__id, position", unique: "UNIQUE"},
+    ListIndexMaps{ixname: "ix_iddfile_name",         on: "name__id", unique: ""}},
 
   "contents": {
     ListIndexMaps{ixname: "ux_cont_blob_pos_off",    on: "blob__id, position, offset", unique: "UNIQUE"},
-    ListIndexMaps{ixname: "ix_cont_data_idd",        on: "data__id", unique: ""}},
+    ListIndexMaps{ixname: "ix_cont_data_id",         on: "data__id", unique: ""}},
 
   "fullname": {
     ListIndexMaps{ixname: "ux_fname_path",           on: "pathname", unique: "UNIQUE"}},
@@ -168,7 +164,6 @@ func Printf(format string, args... interface{}) {
 }
 
 func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*sqlx.DB, error) {
-  //Printf("opening %s\n", data_base_path)
 
   var err error
   db := sqlx.MustOpen("sqlite3", data_base_path)
@@ -183,7 +178,7 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
     return nil, err
   }
 
-  db_descriptor.table_names_map = mapset.NewSet[string](db_descriptor.table_names ...)
+  db_descriptor.table_names_set = mapset.NewSet[string](db_descriptor.table_names ...)
   init_tables(echo)
   build_index(echo)
   return db, nil
@@ -204,7 +199,7 @@ func init_tables(echo bool) {
   */
   //SQLite tables and INDEX definitions
   for table_name, init_string := range SQLITE_TABLES {
-    if ok := db_descriptor.table_names_map.Contains(table_name); ok {
+    if ok := db_descriptor.table_names_set.Contains(table_name); ok {
       continue
     }
 
@@ -240,7 +235,7 @@ func build_index(echo bool) {
 }
 
 var tables_high_id map[string]int
-// collect highest Id frome ID column
+// collect highest Id for each TABLE from the Id column
 func Get_all_high_ids() error {
   tables_high_id = map[string]int{}
 
@@ -252,24 +247,20 @@ func Get_all_high_ids() error {
     return err
   }
 
-  var max sql.NullInt64
+  var max int
   for _, tbl_name := range table_names {
-    err := db_descriptor.DB_ptr.Get(&max, "SELECT max(id) from " + tbl_name)
+    err := db_descriptor.DB_ptr.Get(&max, "SELECT coalesce(max(id), 0) from " + tbl_name)
     if err != nil {
       Printf("Get_all_high_ids.Query error for Get max(id) is %v\n", err)
       return err
     }
-    if !max.Valid {
-      tables_high_id[tbl_name] = 1
-    } else {
-      tables_high_id[tbl_name] = int(max.Int64) + 1
-    }
+    tables_high_id[tbl_name] = max + 1
   }
   return nil
 }
 
 // return highest Id from a given input table
-//panic if wrong table name given
+// panics if wrong table name given
 func Get_high_id(tbl_name string) int {
   value, ok := tables_high_id[tbl_name]
   if !ok {
