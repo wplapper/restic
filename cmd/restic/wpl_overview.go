@@ -17,10 +17,10 @@ import (
 	"github.com/spf13/cobra"
 
 	// restic library
-	//"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/restic"
 
 	// sets
-	//"github.com/deckarep/golang-set/v2"
+	"github.com/deckarep/golang-set/v2"
 )
 
 type OverviewOptions struct {
@@ -64,7 +64,7 @@ func init() {
 	f.StringVarP(&overview_options.FileSystem, "file-system", "F", "", "filter for filesystem")
 	f.IntVarP(&overview_options.Cutoff, "cutoff", "C", 250, "filter for cutoff days")
 	f.StringVarP(&overview_options.MultiRepo, "multi-repo", "M", "", "base part of repositories local or onedrive")
-	f.StringVarP(&overview_options.ConfigFile, "config-file", "O", "backup_config.json", "json config file")
+	f.StringVarP(&overview_options.ConfigFile, "config-file", "O", "/home/wplapper/restic/backup_config.json", "json config file")
 }
 
 func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
@@ -75,11 +75,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	)
 
 	globalOptions.Quiet = true
-	globalOptions.Verbose = 0
 	globalOptions.verbosity = 0
-	gopts.Quiet = true
-	gopts.Verbose = 0
-	gopts.verbosity = 0
 	if overview_options.MultiRepo != "" {
 		return doRunMultiRepoOverview(ctx, cmd, gopts, overview_options)
 	}
@@ -91,9 +87,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	// step 1: open repository
 	start := time.Now()
 	repo, err := OpenRepository(ctx, gopts)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 	if overview_options.timing {
@@ -102,9 +96,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	}
 
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	if overview_options.Age {
 		ShowAge(&repositoryData, overview_options)
@@ -120,11 +112,6 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		"size[MiB]")
 	Printf("%s\n", strings.Repeat("=", 118))
 
-	total_count_meta_blobs := 0
-	total_count_data_blobs := 0
-	total_count_snaps := 0
-	total_count_inodes := 0
-	total_sizes := 0
 	for _, group := range groups_sorted {
 		summary_data := group_summary[group]
 		Hostname := group.Hostname
@@ -137,17 +124,38 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 			Hostname, FileSystem, len(groups[group]), count_meta_blobs,
 			inodes,
 			count_data_blobs, float64(group_size)/ONE_MEG)
-		total_count_meta_blobs += count_meta_blobs
-		total_count_data_blobs += count_data_blobs
-		total_count_snaps      += len(groups[group])
-		total_count_inodes     += inodes
-		total_sizes            += group_size
 	}
-	// XXX the sums for data blobs etc are incorrect because some files are
-	// XXX just mapped on top of one another - in different filesystems!
+
+	// total counts and sizes for repository
+	total_count_meta_blobs := 0
+	total_count_data_blobs := 0
+	total_count_snaps := len(repositoryData.Snaps)
+	total_sizes := 0
+	for _, ih := range repositoryData.IndexHandle {
+		if ih.Type == restic.TreeBlob {
+			total_count_meta_blobs++
+
+		} else if ih.Type == restic.DataBlob {
+			total_count_data_blobs++
+		}
+		total_sizes += ih.size
+	}
+
+	// count all inodes, don't cross filesystems
+	inodeSet := mapset.NewSet[DeviceAndInode]()
+	for _, file_list := range repositoryData.DirectoryMap {
+		for _, meta := range file_list {
+			if meta.Type == "file" {
+				inodeSet.Add(DeviceAndInode{meta.DeviceID, meta.inode})
+			}
+		}
+	}
+	total_count_inodes := inodeSet.Cardinality()
+	inodeSet = nil
+
 	Printf("%s\n", strings.Repeat("=", 118))
 	Printf("%-22s %-50s %5d %11d %7d %7d %10.1f\n",
-		"", "", total_count_snaps, total_count_meta_blobs,
+		"repo total", "", total_count_snaps, total_count_meta_blobs,
 		total_count_inodes,
 		total_count_data_blobs, float64(total_sizes) / ONE_MEG)
 	if overview_options.timing {
@@ -225,7 +233,7 @@ options OverviewOptions) error {
 	_, ok = json_config["BASE_CONFIG"][options.MultiRepo]
 	if ! ok {
 		Printf("Can't current deal with other base_parts %s\n", overview_options.MultiRepo)
-		return errors.New("Can't current deal with other multiple repositories")
+		return errors.New("Can't currently deal with other multiple repositories")
 	}
 	target := json_config["BASE_CONFIG"][options.MultiRepo][0]
 

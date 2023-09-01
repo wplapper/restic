@@ -4,17 +4,19 @@ package main
 
 import (
 	// system
+	"os"
 	"context"
 	"sort"
 	"strings"
+	"io"
 	"io/fs"
 	"path/filepath"
 	"time"
-
-	// sha256
+	"encoding/hex"
+//	"encoding/binary"
+	"errors"
 	"crypto/sha256"
-	"encoding/binary"
-	"bytes"
+//	"bytes"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -195,11 +197,6 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	pack_set_meta = nil
 }
 
-type DeviceInode struct {
-	DeviceID uint64
-	Inode    uint64
-}
-
 // count index, snapshot and meta file counts and sizes
 func countFiles(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
@@ -271,19 +268,21 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 		content_ID [sha256.Size]byte
 		Size       uint64
 	}
-	inodes_meta := mapset.NewSet[DeviceInode]()
-	inodes_data := mapset.NewSet[[sha256.Size]byte]()
+	inodes_meta  := mapset.NewSet[DeviceAndInode]()
+	inodes_datac := mapset.NewSet[[sha256.Size]byte]()
+	inodes_datan := mapset.NewSet[DeviceAndInode]()
 	names       := mapset.NewSet[string]()
 
 	// map inodes back to 'meta_blob_int'
 	for _, file_list := range repositoryData.DirectoryMap {
 		count_directory_map_entries += len(file_list)
 		for _, meta := range file_list {
-			device_inode := DeviceInode{Inode: meta.inode, DeviceID: meta.DeviceID}
+			device_inode := DeviceAndInode{meta.DeviceID, meta.inode}
 			if meta.Type == "dir" {
 				inodes_meta.Add(device_inode)
 			} else if meta.Type == "file" {
-				inodes_data.Add(convertContent2(meta.content))
+				inodes_datac.Add(convertContent2(meta.content))
+				inodes_datan.Add(device_inode)
 			}
 			names.Add(meta.name)
 		}
@@ -294,7 +293,8 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	Printf("%-25s %10d\n", "sum meta_dir", count_meta_dir_entries)
 	Printf("%-25s %10d\n", "sum directory_map", count_directory_map_entries)
 	Printf("%-25s %10d\n", "meta inodes", inodes_meta.Cardinality())
-	Printf("%-25s %10d\n", "data inodes", inodes_data.Cardinality())
+	Printf("%-25s %10d (unique content)\n", "data inodes", inodes_datac.Cardinality())
+	Printf("%-25s %10d (inode count)\n", "data inodes", inodes_datan.Cardinality())
 	Printf("%-25s %10d\n", "base names", names.Cardinality())
 
 	// report 2:
@@ -337,7 +337,6 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 			set_index_handle.Add(ih.blob_index)
 		}
 	}
-	set_index_handle.Remove(EMPTY_NODE_ID_TRANSLATED)
 
 	set_tree := mapset.NewSet[IntID]()
 	for meta_blob_int := range repositoryData.FullPath {
@@ -355,8 +354,10 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 		l_diff = diff.Cardinality()
 		if l_diff > 0 {
 			Printf("tree  has %5d more records than the index_records\n", l_diff)
-			panic("\n*** This is catastrophic inconsistency in the set management!! ***")
+			panic("\n*** This is a catastrophic inconsistency in the set management!! ***")
 		}
+
+
 		diff = set_index_handle.Difference(set_tree)
 		l_diff = diff.Cardinality()
 
@@ -374,7 +375,8 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	diff         = nil
 	names        = nil
 	inodes_meta  = nil
-	inodes_data  = nil
+	inodes_datac = nil
+	inodes_datan = nil
 	data_map     = nil
 	data_map_org = nil
 	set_tree     = nil
@@ -456,18 +458,29 @@ repositoryData *RepositoryData, root string) {
 		}
 
 		basename := filepath.Base(path)
-		Verboseff("checking %s\n", basename)
 		if pack_set.Contains(basename) {
-			return nil
-		}
+			sha256sum, err2 := Sha256File(path)
+			if err2 != nil {
+				Printf("Failed to calculate sha256 for file %s - reason is '%v'\n", path, err2)
+				return err2
+			}
 
-		Printf("missing entry %s\n", basename)
-		missing = true
-		return nil
+			if hex.EncodeToString(sha256sum) != basename {
+				Printf("sha256(file %s\n", hex.EncodeToString(sha256sum))
+				Printf("basename    %s\n", basename)
+				return errors.New("sha256 mismatch!")
+			}
+			Verboseff("checking %s\n", basename)
+			return nil
+		} else {
+			Printf("missing entry %s\n", basename)
+			missing = true
+			return errors.New("missing entry!")
+		}
 	})
 
 	if err != nil {
-		Printf("Walk returned '%v'\n", err)
+		Printf("FAIL!\n")
 		return
 	}
 
@@ -612,9 +625,6 @@ repositoryData *RepositoryData) {
 	// step 4: generate the rest of the names
 	// output the directory names found as absolute directories
 	for parent := range missing_blobs.Iter() {
-		if parent == EMPTY_NODE_ID_TRANSLATED {
-			continue
-		}
 		if _, ok := repositoryData.FullPath[parent]; ! ok {
 			repositoryData.FullPath[parent] = "/./" + repositoryData.IndexToBlob[parent].String()[:12]
 		}
@@ -622,7 +632,7 @@ repositoryData *RepositoryData) {
 	parents = nil
 }
 
-// currently not used in favour of 'convertContent2'
+/* currently not used in favour of 'convertContent2'
 // convert content slice to temp hash, so it can be compared against other content
 func convertContentsToSha256(content []IntID) [sha256.Size]byte {
 	buf := new(bytes.Buffer)
@@ -631,6 +641,7 @@ func convertContentsToSha256(content []IntID) [sha256.Size]byte {
 	}
 	return sha256.Sum256(buf.Bytes())
 }
+*/
 
 // serialize 'content' step by step into sha256 by Write() to it
 func convertContent2(content []IntID) (result [sha256.Size]byte) {
@@ -650,4 +661,20 @@ func convertContent2(content []IntID) (result [sha256.Size]byte) {
 	// 'copy' can copy between different types
 	copy(result[:], sha256sum.Sum(nil))
 	return result
+}
+
+func Sha256File(filename string) ([]byte, error) {
+	f, err := os.Open(filename)
+  if err != nil {
+    return []byte{}, err
+  }
+  defer f.Close()
+
+  h := sha256.New()
+  _, err = io.Copy(h, f) // copy from 'f' to 'h'.
+  if err != nil {
+    return []byte{}, err
+  }
+
+  return h.Sum(nil), nil
 }

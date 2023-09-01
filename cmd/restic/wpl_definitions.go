@@ -88,3 +88,13 @@ type CompIddFile struct {
 	meta_blob IntID
 	position  int
 }
+
+type CompPackfile struct {
+	PackBlobSet  mapset.Set[IntID]
+	PackfileType restic.BlobType
+}
+
+type DeviceAndInode struct {
+	DeviceID   uint64
+	Inode      uint64
+}

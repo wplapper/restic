@@ -24,10 +24,9 @@ reverse_fullpath map[string]mapset.Set[IntID]) {
 	return reverse_fullpath
 }
 
-// map blob_int to its packID (int)
+// map blob_int to its packfile identifier (int)
 func GetPackIDs(repositoryData *RepositoryData) (result map[IntID]IntID) {
 
-	// setup return map
 	result = map[IntID]IntID{}
 	for _, ih := range repositoryData.IndexHandle {
 		result[ih.blob_index] = ih.pack_index
@@ -35,14 +34,13 @@ func GetPackIDs(repositoryData *RepositoryData) (result map[IntID]IntID) {
 	return result
 }
 
+// create a map of all children belonging to one parent
 func CreateAllChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set[IntID]){
 
-	// setup return map
-	children = map[IntID]mapset.Set[IntID]{}
+	children = map[IntID]mapset.Set[IntID]{EMPTY_NODE_ID_TRANSLATED: mapset.NewSet[IntID]()}
 	for parent, idd_file_list := range repositoryData.DirectoryMap {
 		children[parent] = mapset.NewSet[IntID]()
 		for _, node := range idd_file_list {
-			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED { continue	}
 			children[parent].Add(node.subtree_ID)
 		}
 	}
@@ -50,16 +48,16 @@ func CreateAllChildren(repositoryData *RepositoryData) (children map[IntID]mapse
 }
 
 // return a map which points to each blob for all packfiles entries
+// in addition the type of packfiles is indicated in the 'PackfileType' field
 func MakeBlobsPerPackID(repositoryData *RepositoryData) (
-blobs_per_packID map[IntID]mapset.Set[IntID]) {
+blobs_per_packID map[IntID]CompPackfile) {
 
-	// setup return map
-	blobs_per_packID = map[IntID]mapset.Set[IntID]{}
+	blobs_per_packID = map[IntID]CompPackfile{}
 	for _, ih := range repositoryData.IndexHandle {
 		if _, ok := blobs_per_packID[ih.pack_index]; !ok {
-			blobs_per_packID[ih.pack_index] = mapset.NewSet[IntID]()
+			blobs_per_packID[ih.pack_index] = CompPackfile{mapset.NewSet[IntID](), ih.Type}
 		}
-		blobs_per_packID[ih.pack_index].Add(ih.blob_index)
+		blobs_per_packID[ih.pack_index].PackBlobSet.Add(ih.blob_index)
 	}
 	return blobs_per_packID
 }
@@ -120,44 +118,11 @@ data_map map[restic.ID]mapset.Set[CompIndexOffet]) {
 	return data_map
 }
 
-// XXX currently not used!
-// go through all contents and generate unique triples &
-// additional string info for sorting
-/*
-func MakeFullContentsMap3(repositoryData *RepositoryData) (
-data_map map[IntID]mapset.Set[FullSet]) {
-
-	// setup return map
-	data_map = map[IntID]mapset.Set[FullSet]{}
-  for ID, meta_blob_sett := range repositoryData.MetaDirMap {
-    snap_id := ID.String()[:8]
-    for meta_blob_int := range meta_blob_sett.Iter() {
-      for _, meta := range repositoryData.DirectoryMap[meta_blob_int] {
-        for _, data_blob_int := range meta.content {
-          // this data_blob can appear multiple times in different meta_blobs
-          cmp_ix := FullSet{
-            meta_blob_int: meta_blob_int,
-            data_blob_int: data_blob_int,
-            snap_id: snap_id,
-          }
-          if _, ok := data_map[data_blob_int]; ! ok {
-            data_map[data_blob_int] = mapset.NewSet[FullSet]()
-          }
-          data_map[data_blob_int].Add(cmp_ix)
-        }
-      }
-    }
-	}
-	return data_map
-}
-*/
-
 // This function creates a data map which is global for the repository. It
 // contains a mapping from a data blob to the containing meta blob a the
 // index into the file list, used for gathering the file name to which this data
 // blob belongs. Data blob can belong to multiple files.
-func map_data_blob_file(repositoryData *RepositoryData) (
-data_map map[IntID]mapset.Set[CompIddFile]) {
+func map_data_blob_file(repositoryData *RepositoryData) (data_map map[IntID]mapset.Set[CompIddFile]) {
 	// map data blobs back to meta_blob, position in directory_map
 	data_map = map[IntID]mapset.Set[CompIddFile]{}
 	for meta_blob, file_list := range repositoryData.DirectoryMap {

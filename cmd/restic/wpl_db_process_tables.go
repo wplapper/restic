@@ -10,6 +10,9 @@ import (
 	"encoding/hex"
 	"io"
 	"path/filepath"
+	"fmt"
+	"reflect"
+	"time"
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -40,7 +43,7 @@ changes_made *bool) (SnapshotsTable map[string]SnapshotRecordMem, err error) {
 			Printf("select snap_id.StructScan failed %v\n", err)
 			return nil, err
 		}
-		row.Status = DBOK
+		row.Status = DBDELETE
 		SnapshotsTable[row.Snap_id] = row
 	}
 
@@ -64,7 +67,10 @@ changes_made *bool) (SnapshotsTable map[string]SnapshotRecordMem, err error) {
 		snTime   := components[4]
 
 		snapIDShort := snap_id[:8]
-		if _, ok := SnapshotsTable[snapIDShort]; ok {
+		row, ok := SnapshotsTable[snapIDShort]
+		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+			row.Status = DBOK
+			SnapshotsTable[snapIDShort] = row
 			continue
 		}
 
@@ -110,7 +116,7 @@ changes_made *bool) (PackfilesTable map[string]PackfilesRecordMem, err error) {
 			Printf("select packfiles.StructScan failed %v\n", err)
 			return nil, err
 		}
-		row.Status = DBOK
+		row.Status = DBDELETE
 		PackfilesTable[hex.EncodeToString(row.Packfile_id)] = row
 	}
 
@@ -129,7 +135,10 @@ changes_made *bool) (PackfilesTable map[string]PackfilesRecordMem, err error) {
 		if err == io.EOF { break }
 
 		packfile := line[0]
-		if _, ok := PackfilesTable[packfile]; ok {
+		row, ok := PackfilesTable[packfile]
+		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+			row.Status = DBOK
+			PackfilesTable[packfile] = row
 			continue
 		}
 
@@ -168,7 +177,6 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 		return nil, nil, err
 	}
 
-	count := 0
 	for rows.Next() {
 		var row IndexRepoRecordMem
 		err = rows.StructScan(&row)
@@ -176,7 +184,7 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 			Printf("select index_repo.StructScan failed %v\n", err)
 			return nil, nil, err
 		}
-		row.Status = DBOK
+		row.Status = DBDELETE
 		IndexRepoTable[hex.EncodeToString(row.Blob)] = row
 
 		if len(row.Blob) != 32 {
@@ -200,12 +208,16 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 
 	// insert new rows
 	highID := sqlite.Get_high_id("index_repo")
-	//count = 0
 	for {
 		components, err := csvReader.Read()
 		if err == io.EOF { break }
 		blob := components[0]
-		_, ok := IndexRepoTable[blob]; if ok { continue }
+		row, ok := IndexRepoTable[blob]
+		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+			row.Status = DBOK
+			IndexRepoTable[blob] = row
+			continue
+		}
 
 		Type := components[1]
 		offset, err1 := strconv.Atoi(components[2])
@@ -235,8 +247,30 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 			Pack__id: packfiles[packfile].Id,
 			Status: DBNEW,
 		}
+
+		blobAsID := restic.ID{}
+		if len(blob_bytes) != 32 {
+			panic("Internal inconsistency for blob_bytes: length not 32. Aborting!")
+		}
+
+		copy(blobAsID[:], blob_bytes)
+		//blobAsID[:] = blob_bytes  // this does NOT compile
+		reverseIndexRepo[highID] = blobAsID
 		highID++
-		count++
+	}
+
+	// deal with EMPTY_NODE_ID
+	EMPTY_NODE_ID = restic.Hash([]byte("{\"nodes\":[]}\n"))
+	var empty_bytes []byte
+	empty_bytes = EMPTY_NODE_ID[:]
+	empty, ok := IndexRepoTable[EMPTY_NODE_ID.String()]
+	if ! ok {
+		row := IndexRepoRecordMem{Id: 999999999, Blob: empty_bytes, Type: "tree",
+			Offset: 0, Length: 54, UncompressedLength: 13, Pack__id: 1, Status: DBNEW}
+		IndexRepoTable[EMPTY_NODE_ID.String()] = row
+		EMPTY_NODE_ID_TRANSLATED = IntID(999999999)
+	} else {
+		EMPTY_NODE_ID_TRANSLATED = IntID(empty.Id)
 	}
 
 	if len(IndexRepoTable) > 0 {
@@ -314,7 +348,7 @@ metaDirTable map[CompMetaDir]MetaDirRecordMem, err error) {
 			Printf("select meta_dir.StructScan failed %v\n", err)
 			return nil, err
 		}
-		row.Status = DBOK
+		row.Status = DBDELETE
 		cmpix := CompMetaDir{row.Snap__id, IntID(row.Blob__id)}
 		metaDirTable[cmpix] = row
 	}
@@ -329,11 +363,14 @@ metaDirTable map[CompMetaDir]MetaDirRecordMem, err error) {
 		}
 		for blob := range blobSet.Iter() {
 			cmpix := CompMetaDir{snapRow.Id, blob}
-			if _, ok := metaDirTable[cmpix]; ok {
+			row, ok := metaDirTable[cmpix]
+			if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+				row.Status = DBOK
+				metaDirTable[cmpix] = row
 				continue
 			}
 
-			row := MetaDirRecordMem{
+			row = MetaDirRecordMem{
 				Status: DBNEW,
 				Id: highID,
 				Snap__id: snapRow.Id,
@@ -374,7 +411,7 @@ changes_made *bool, metaDataAll map[IntID]*restic.Tree) (namesTable map[string]N
 			return nil, err
 		}
 
-		row.Status = DBOK
+		row.Status = DBDELETE
 		namesTable[row.Name] = row
 	}
 
@@ -383,9 +420,13 @@ changes_made *bool, metaDataAll map[IntID]*restic.Tree) (namesTable map[string]N
 	for _, tree := range metaDataAll {
 		for _, node := range tree.Nodes {
 			name := node.Name
-			if _, ok := namesTable[name]; ok {
+			row, ok := namesTable[name]
+			if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+				row.Status = DBOK
+				namesTable[name] = row
 				continue
 			}
+
 			namesTable[name] = NamesRecordMem{Status: DBNEW, Id: highID, Name: name}
 			highID++
 		}
@@ -407,6 +448,8 @@ reverseIndexRepo map[int]restic.ID,
 metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsRecordMem, err error) {
 	contentsTable = map[CompContents]ContentsRecordMem{}
 
+	// NOTE: for the time being 'reverseIndexRepo' is not needed
+	// keep it for now
 	// step 1: read mata_dir table
 	sql := "SELECT * FROM contents"
 	rows, err := tx.Queryx(sql)
@@ -423,8 +466,9 @@ metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsReco
 			return nil, err
 		}
 
-		cmpix := CompContents{Blob__id: IntID(row.Blob__id), Position: row.Position, Offset: row.Offset}
-		row.Status = DBOK
+		cmpix := CompContents{Blob__id: IntID(row.Blob__id), Position: row.Position,
+			Offset: row.Offset}
+		row.Status = DBDELETE
 		contentsTable[cmpix] = row
 	}
 
@@ -440,12 +484,16 @@ metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsReco
 					panic("Internal inconsistency for data_blob. Aborting!")
 				}
 
-				cmpix := CompContents{Blob__id: parent_int, Position: position, Offset: offset}
-				if _, ok := contentsTable[cmpix]; ok {
+				cmpix := CompContents{Blob__id: parent_int, Position: position,
+					Offset: offset}
+				row, ok := contentsTable[cmpix]
+				if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+					row.Status = DBOK
+					contentsTable[cmpix] = row
 					continue
 				}
 
-				row := ContentsRecordMem{Status: DBNEW, Id: highID, Data__id: row_ix_repo.Id,
+				row = ContentsRecordMem{Status: DBNEW, Id: highID, Data__id: row_ix_repo.Id,
 					Blob__id: int(parent_int), Position: position, Offset: offset}
 				contentsTable[cmpix] = row
 				highID++
@@ -485,7 +533,7 @@ metaDataAll map[IntID]*restic.Tree) (fileDataTable map[CompIddFile]IddFileRecord
 		}
 
 		cmpix := CompIddFile{meta_blob: IntID(row.Blob__id), position: row.Position}
-		row.Status = DBOK
+		row.Status = DBDELETE
 		fileDataTable[cmpix] = row
 	}
 
@@ -494,7 +542,10 @@ metaDataAll map[IntID]*restic.Tree) (fileDataTable map[CompIddFile]IddFileRecord
 	for parent_int, tree := range metaDataAll {
 		for position, node := range tree.Nodes {
 			cmpix := CompIddFile{meta_blob: parent_int, position: position}
-			if _, ok := fileDataTable[cmpix]; ok {
+			row, ok := fileDataTable[cmpix]
+			if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+				row.Status = DBOK
+				fileDataTable[cmpix] = row
 				continue
 			}
 			name_row, ok := namesTable[node.Name]
@@ -503,7 +554,7 @@ metaDataAll map[IntID]*restic.Tree) (fileDataTable map[CompIddFile]IddFileRecord
 				panic("Internal inconsistency for namesTable. Aborting!")
 			}
 
-			row := IddFileRecordMem{Status: DBNEW, Id: highID, Blob__id: int(parent_int),
+			row = IddFileRecordMem{Status: DBNEW, Id: highID, Blob__id: int(parent_int),
 				Position: position, Name__id: name_row.Id, Size: int(node.Size),
 				Inode: int64(node.Inode), Mtime: node.ModTime.String()[:19], Type: node.Type}
 			fileDataTable[cmpix] = row
@@ -554,17 +605,20 @@ fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err err
 			return nil, nil, err
 		}
 
-		row.Status = DBOK
+		row.Status = DBDELETE
 		fullnameTable[row.Pathname] = row
 	}
 
 	// step 3: construct new fullname table rows
 	highID := sqlite.Get_high_id("fullname")
 	for _, path := range fullname {
-		if _, ok := fullnameTable[path]; ok {
+		row, ok := fullnameTable[path]
+		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+			row.Status = DBOK
+			fullnameTable[path] = row
 			continue
 		}
-		row := FullnameMem{Status: DBNEW, Id: highID, Pathname: path}
+		row = FullnameMem{Status: DBNEW, Id: highID, Pathname: path}
 		fullnameTable[path] = row
 		highID++
 	}
@@ -586,7 +640,7 @@ fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err err
 			return nil, nil, err
 		}
 
-		row.Status = DBOK
+		row.Status = DBDELETE
 		pathDirTable[row.Id] = row
 	}
 
@@ -596,10 +650,13 @@ fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err err
 			Printf("Internal inconsistency for fullname %s. Aborting!\n", path)
 			panic("Internal inconsistency fullname. Aborting!")
 		}
-		if _, ok := pathDirTable[int(meta_int)]; ok {
+		row, ok := pathDirTable[int(meta_int)];
+		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
+			row.Status = DBOK
+			pathDirTable[int(meta_int)] = row
 			continue
 		}
-		row := DirPathIdMem{Status: DBNEW, Id: int(meta_int), Pathname__id: fullnameTable[path].Id}
+		row = DirPathIdMem{Status: DBNEW, Id: int(meta_int), Pathname__id: fullnameTable[path].Id}
 		pathDirTable[int(meta_int)] = row
 	}
 
@@ -620,3 +677,204 @@ fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err err
 	}
 	return fullnameTable, pathDirTable, nil
 }
+
+func ManageDeleteRows[KEY comparable, MEM any](tx *sqlx.Tx, any_table map[KEY]MEM,
+table_name string, changes_made *bool) (err error) {
+
+	// brute force attack: DELETE table rows via sql DELETE single row interface
+
+	sql := fmt.Sprintf("DELETE FROM %s WHERE id=:id", table_name)
+	delete_stmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("Error Prepare %s error is %v\n", sql, err)
+		return err
+	}
+
+	count := 0
+	for _, row := range any_table {
+		// Field(0) == Status
+		if reflect.ValueOf(row).Field(0).Interface().(uint8) == DBDELETE {
+			// Field(1) == Id
+			_, err = delete_stmt.Exec(reflect.ValueOf(row).Field(1).Interface().(int))
+			if err != nil {
+				Printf("Eror deleting row from %s - error is '%v'\n", table_name, err)
+				return err
+			}
+			count++
+		}
+	}
+	delete_stmt.Close()
+	if count > 0 {
+		Printf("DELETE FROM %-15s - %7d rows.\n", table_name, count)
+		*changes_made = true
+	}
+	return nil
+}
+
+func CheckForeignKeys(tx *sqlx.Tx, echo bool) bool {
+	type ForeignKeys struct {
+		check_table string
+		column_name string
+		ref_table   string // the implied column is always "Id" for ref_table
+	}
+	var check_tables = []ForeignKeys{
+		{"meta_dir",  "snap__id", "snapshots"},
+		{"meta_dir",  "blob__id", "index_repo"},
+		{"idd_file",  "blob__id", "index_repo"},
+		{"contents",  "data__id", "index_repo"},
+		{"contents",  "blob__id", "index_repo"},
+		{"idd_file",  "name__id", "names"},
+		{"index_repo", "pack__id", "packfiles"},
+		{"dir_path_id", "id", "index_repo"},
+		{"dir_path_id", "pathname__id", "fullname"},
+	}
+
+	type RemoveTable struct {
+		Id int
+	}
+
+	Printf("\n*** Check Foreign Key relationship ***\n")
+	all_good := true
+	for _, action := range check_tables {
+		check_table := true
+		// true subset test
+		sql := fmt.Sprintf(`SELECT DISTINCT %s.%s AS id FROM %s
+	LEFT OUTER JOIN %s ON %s.%s = %s.id WHERE %s.id IS NULL`,
+			action.check_table, action.column_name, action.check_table, action.ref_table,
+			action.check_table, action.column_name, action.ref_table, action.ref_table)
+
+		if echo {
+			Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.000"), sql)
+		}
+		rows, err := tx.Queryx(sql)
+		if err != nil {
+			Printf("Error in sql %s, error is %v\n", sql, err)
+			check_table = false
+		}
+
+		count_rows := 0
+		for rows.Next() {
+			var row RemoveTable
+			err = rows.StructScan(&row)
+			if err != nil {
+				Printf("CheckForeinKeys:StructScan for sql %s failed %v\n", sql, err)
+				check_table = false
+				return false
+			}
+
+			if count_rows < 10 {
+				Printf("Id=%6d in %s is not related to %s\n", row.Id,
+					action.check_table, action.ref_table)
+			}
+			count_rows++
+			check_table = false
+		}
+		rows.Close()
+		if !check_table {
+			Printf("check failed for %s.%s, - found %5d rows\n", action.check_table, action.column_name, count_rows)
+			all_good = false
+		}
+	}
+
+	if all_good {
+		Printf("All foreign key checks are OK!\n")
+	} else {
+		Printf("Some foreign key checks failed!\n")
+	}
+
+	// part 2: check consistency of keys (idem potence)  in the following tables
+	var err error
+	var compareTables = [][]string{
+		{"snapshots", "id", "", "meta_dir",  "snap__id"},
+
+		{"index_repo", "id", "type='tree'", "meta_dir",  "blob__id"}, // 1
+		{"index_repo", "id", "type='tree'", "idd_file",  "blob__id"},
+		{"index_repo", "id", "type='data'", "contents",  "data__id"}, // 3
+		{"index_repo", "id", "type='tree'", "contents",  "blob__id"}, // 4
+		{"index_repo", "id", "type='tree'", "dir_path_id", "id"},
+
+		{"names", "id",       "", "idd_file", "name__id" },           // 5
+		{"packfiles", "id",   "", "index_repo", "pack__id", },
+		//{"dir_path_id", "pathname__id", "", "fullname", "id"},        // 7
+	}
+
+	sql := "SELECT id FROM index_repo WHERE blob=:blob"
+	var emptyID int
+	var empty_bytes []byte
+	empty_bytes = EMPTY_NODE_ID[:]
+	err = tx.Get(&emptyID, sql, empty_bytes)
+	if err != nil {
+		Printf("Can't get EMPTY_NODE_ID - error is %v\n", err)
+		return false
+	}
+
+	for ix_compare, ctable := range compareTables {
+		var sql1, sql2 string
+		table1 := ctable[0]
+		col1   := ctable[1]
+		table2 := ctable[3]
+		col2   := ctable[4]
+		cond   := ctable[2]
+		// sql1 forces the two database sets to be equal - otherwise this will show
+		//  up as a difference in the two sets.
+		// sql2 tests for the right side(t2.c2) to be a subset of the left hand side(t1.c1)
+		if cond == "" {
+			sql1 = fmt.Sprintf(`SELECT %s.%s from %s EXCEPT SELECT DISTINCT %s.%s from %s`,
+				table1, col1, table1, table2, col2, table2)
+			sql2 = fmt.Sprintf(`SELECT DISTINCT %s.%s from %s EXCEPT SELECT %s.%s from %s`,
+				table2, col2, table2, table1, col1, table1)
+		} else {
+			sql1 = fmt.Sprintf(`SELECT %s.%s from %s WHERE %s EXCEPT SELECT DISTINCT %s.%s from %s`,
+				table1, col1, table1, cond, table2, col2, table2)
+			sql2 = fmt.Sprintf(`SELECT DISTINCT %s.%s As id from %s EXCEPT SELECT %s.%s from %s WHERE %s`,
+				table2, col2, table2, table1, col1, table1, cond)
+		}
+
+
+		rows := []int{}
+		if ix_compare != 4 {
+			if echo {
+				Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.000"), sql1)
+			}
+			err = tx.Select(&rows, sql1)
+			if err != nil {
+				Printf("\nsql1:\n%s\n", sql1)
+				Printf("SELECT error in sql1 - error is %v\n", err)
+				return false
+			}
+			if len(rows) > 0 {
+				if len(rows) > 1 || rows[0] != emptyID {
+					Printf("\nsql1:\n%s\n", sql1)
+					Printf("Inconsistency sql1 in %s.%s - found %5d rows\n", table2, col2, len(rows))
+					all_good = false
+					for ix, row := range rows {
+						Printf("row.Id %7d\n", row)
+						if ix > 10 { break }
+					}
+				}
+			}
+		}
+
+		rows = []int{}
+		if echo {
+			Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.000"), sql2)
+		}
+		err = tx.Select(&rows, sql2)
+		if err != nil {
+			Printf("\nsql2:\n%s\n", sql2)
+			Printf("SELECT error in sql2 - error is %v\n", err)
+			return false
+		}
+		if len(rows) > 0 {
+			Printf("\nsql2:\n%s\n", sql2)
+			Printf("Inconsistency sql2 in %s.%s - found %5d rows\n", table2, col2, len(rows))
+			all_good = false
+			for ix, row := range rows {
+				Printf("row.Id %7d\n", row)
+				if ix > 10 { break }
+			}
+		}
+	}
+	return all_good
+}
+

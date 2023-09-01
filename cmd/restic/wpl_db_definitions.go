@@ -13,7 +13,6 @@ import (
 	// sqlite
 	"github.com/jmoiron/sqlx"
 	"github.com/wplapper/restic/library/sqlite"
-	//"github.com/wplapper/restic/library/restic"
 )
 
 const (
@@ -24,6 +23,9 @@ const (
 	DBDELETE = iota
 )
 
+//==============================================================================
+// golang structs for database rows
+//==============================================================================
 type SnapshotRecordMem struct {
 	Status       uint8
 	Id           int
@@ -32,6 +34,12 @@ type SnapshotRecordMem struct {
 	Snap_host    string
 	Snap_fsys    string
 	Snap_root    string // tree root, is actually a restic.ID
+}
+
+type PackfilesRecordMem struct {
+	Status      uint8
+	Id          int
+	Packfile_id []byte // == UNIQUE
 }
 
 type IndexRepoRecordMem struct {
@@ -80,12 +88,6 @@ type IddFileRecordMem struct {
 	Type     string
 }
 
-type PackfilesRecordMem struct {
-	Status      uint8
-	Id          int
-	Packfile_id []byte // == UNIQUE
-}
-
 type FullnameMem struct {
 	Status   uint8
 	Id       int
@@ -98,7 +100,9 @@ type DirPathIdMem struct {
 	Pathname__id int // back pointer to fullpath, INDEX
 }
 
+//==============================================================================
 // Composite indices for maps
+//==============================================================================
 type CompMetaDir struct {
 	// composite index on MetaDirRecordMem
 	snap_id   int
@@ -109,6 +113,10 @@ type CompContents struct {
 	Blob__id  IntID
 	Position  int
 	Offset    int
+}
+type CompChildMapIndex struct {
+	Parent__id IntID
+	Child__id  IntID
 }
 
 type TableInfo struct {
@@ -122,6 +130,9 @@ type TableInfo struct {
 	Pk         int
 }
 
+//==============================================================================
+
+//==============================================================================
 // read all tables counts
 func readAllTablesAndCounts(db_conn *sqlx.Tx) (table_counts map[string]int, err error) {
 	// get table names
@@ -175,59 +186,7 @@ func PrintTableCounts(tx *sqlx.Tx) {
 	}
 }
 
-func InsertTable[KEY comparable, MEM any](tbl_name string, mem_table map[KEY]MEM,
-	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
-
-	// build INSERT statement - bulk INSERT is the only SQL statement which
-	// does not need a loop over all new rows
-	column_list := column_names[tbl_name]
-
-	// copy all (new) rows from 'mem_table' (values) to 't_insert' which are NEW
-	t_insert := make([]MEM, 0, len(mem_table))
-	for _, data := range mem_table {
-		// dynamic check via 'reflect'
-		//check data.Status, Status is always the very first field of all these structs
-		if reflect.ValueOf(data).Field(0).Interface().(uint8) == DBNEW {
-			t_insert = append(t_insert, data)
-		}
-	}
-	if len(t_insert) == 0 { return nil }
-
-	Printf("INSERT INTO %-15s with %6d rows.\n", tbl_name, len(t_insert))
-	sql := fmt.Sprintf("INSERT INTO %s(%s) VALUES(:%s)", tbl_name,
-		strings.Join(column_list, ","), strings.Join(column_list, ",:"))
-
-	// PREPAREd statement do not work here, since the number of columns to
-	// be inserted is dependent on the table to be inserted into.
-
-	// do the INSERT
-	// the splitting into segments could a bit more dynamic
-	// its is limited by the product 'number-of-columns' * 'rows_inserted'
-	const OFFSET = 4000 // max 8 columns * 4000 = 32000 < 32k
-	max := len(t_insert)
-	var count int64
-	for offset := 0; offset < len(t_insert); offset += OFFSET {
-		if max > OFFSET {
-			max = OFFSET
-		}
-		if offset+max > len(t_insert) {
-			max = len(t_insert) - offset
-		}
-		r, err := tx.NamedExec(sql, t_insert[offset:offset+max])
-		if err != nil {
-			Printf("error INSERT %s error is: %v\n", tbl_name, err)
-			return err
-		}
-		count, _ = r.RowsAffected()
-	}
-
-	if count > 0 {
-		*changes_made = true
-	}
-	return nil
-}
-
-// GetColumnNames creates a slice of all column names per table in the database
+// GetColumnNames: creates a slice of all column names per table in the database
 func GetColumnNames(tx *sqlx.Tx) (table_column_names map[string][]string, err error) {
 	// utilize the pseudo table pragma_table_info to retrieve the column names
 	table_column_names = map[string][]string{}
@@ -261,4 +220,70 @@ func GetColumnNames(tx *sqlx.Tx) (table_column_names map[string][]string, err er
 		rows.Close()
 	}
 	return table_column_names, nil
+}
+
+func InsertTable[KEY comparable, MEM any](tbl_name string, mem_table map[KEY]MEM,
+	tx *sqlx.Tx, column_names map[string][]string, changes_made *bool) error {
+
+	// build INSERT statement - bulk INSERT is the only SQL statement which
+	// does not need a loop over all new rows
+	column_list := column_names[tbl_name]
+
+	// copy all (new) rows from 'mem_table' (values) to 't_insert' which are NEW
+	t_insert := make([]MEM, 0, len(mem_table))
+	for _, data := range mem_table {
+		// dynamic check via 'reflect'
+		//check data.Status, Status is always the very first field of all these structs
+		if reflect.ValueOf(data).Field(0).Interface().(uint8) == DBNEW {
+			t_insert = append(t_insert, data)
+		}
+	}
+	if len(t_insert) == 0 { return nil }
+
+	Printf("INSERT INTO %-15s with %6d rows.\n", tbl_name, len(t_insert))
+	sql := fmt.Sprintf("INSERT INTO %s(%s) VALUES(:%s)", tbl_name,
+		strings.Join(column_list, ","), strings.Join(column_list, ",:"))
+
+	// PREPAREd statement do not work here, since the number of columns to
+	// be inserted is dependent on the table to be inserted into.
+
+	// do the INSERT
+	// the splitting into segments could a bit more dynamic
+	// it is limited by the product 'number-of-columns' * 'rows_inserted'
+	const OFFSET = 4000 // max 8 columns * 4000 = 32000 < 32k
+	max := len(t_insert)
+	var count int64
+	//count_print := 0
+	for offset := 0; offset < len(t_insert); offset += OFFSET {
+		if max > OFFSET {
+			max = OFFSET
+		}
+		if offset+max > len(t_insert) {
+			max = len(t_insert) - offset
+		}
+
+		/*
+		if tbl_name == "fullname" && count_print < 10 {
+			for ix := 0; ix < max; ix++ {
+				Printf("new name %+v\n", t_insert[ix])
+				count_print++
+				if count_print >= 10 {
+					break
+				}
+			}
+		}
+		*/
+
+		r, err := tx.NamedExec(sql, t_insert[offset:offset+max])
+		if err != nil {
+			Printf("error INSERT %s error is: %v\n", tbl_name, err)
+			return err
+		}
+		count, _ = r.RowsAffected()
+	}
+
+	if count > 0 {
+		*changes_made = true
+	}
+	return nil
 }

@@ -79,6 +79,9 @@ func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions)
 		repoUnpackedName = globalOptions.Repo + "_unpacked"
 	}
 
+	// clean any old remaining files from 'repoUnpackedName'
+	_ = CleanDirectory(repoUnpackedName)
+
 	// step: build the directrory structure
 	err = MakeDirectoryStructure(repoUnpackedName, true)
 	if err != nil {
@@ -88,6 +91,7 @@ func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions)
 	type procFunc func(context.Context, *repository.Repository, string) error
 	var processList = []procFunc{
 		ProcessSnapshots, ProcessIndexFiles, ProcessMetaData, CreatePackList,
+		ConfigFile,
 	}
 
 	// run through the file lists: snapshots, index, metablobs, packlists
@@ -281,4 +285,27 @@ func CreatePackList(ctx context.Context, repo *repository.Repository, repoUnpack
 	packIDs = nil
 	packList = nil
 	return nil
+}
+
+// gather config .ID from repo for verification purposes
+func ConfigFile(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
+
+	// don't need ctx here
+
+	config := repo.Config()
+	target := fmt.Sprintf("%s/config", repoUnpackedName)
+	fd, _ := os.Create(target)
+	handle := bufio.NewWriter(fd)
+	handle.WriteString(fmt.Sprintf("%s\n", config.ID))
+	handle.Flush()
+	fd.Close()
+	return nil
+}
+
+func CleanDirectory(repoUnpackedName string) error {
+	err := os.RemoveAll(repoUnpackedName)
+	if err != nil {
+		Printf("os.RemoveAll(%s) failed - reason '%v'\n", repoUnpackedName, err)
+	}
+	return err
 }

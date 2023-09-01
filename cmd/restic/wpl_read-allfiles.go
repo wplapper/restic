@@ -224,6 +224,7 @@ func do_check(repo restic.Repository, ctx context.Context,
 	Printf("%-19s %-6s %10s %9s %13s\n", "time", "#packs", "size [MiB]", "delta [s]", "speed [MiB/s]")
 
 	// outer loop
+	handle := restic.Handle{Type: restic.WplFile, Name: "wpl/packfiles.stat"}
 	for count_checked_packs < packs_to_process {
 		selected_packs := make(map[restic.ID]int64)
 		now := time.Now()
@@ -269,6 +270,14 @@ func do_check(repo restic.Repository, ctx context.Context,
 			checked_packs[ID.String()] = true
 		}
 		count_checked_packs += len(selected_packs)
+
+		// whenever a block of packfiles has been done, write a checkpoint
+		jsonString := PrettyStruct(checked_packs)
+		err := repo.Backend().Save(ctx, handle, restic.NewByteReader(jsonString, nil))
+		if err != nil {
+			Printf("repo.Backend().Save failed with %v\n", err)
+			return err
+		}
 	} // end outer loop
 
 	// final display record

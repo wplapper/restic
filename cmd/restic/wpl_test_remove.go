@@ -13,12 +13,13 @@ import (
 	"sort"
 	"time"
 	"strings"
+	"os"
+	"encoding/json"
 
 	//argparse
 	"github.com/spf13/cobra"
 
 	// restic library
-	"github.com/wplapper/restic/library/repository"
 	"github.com/wplapper/restic/library/restic"
 
 	// mapset
@@ -33,6 +34,8 @@ type TRemoveOptions struct {
 	memory_use bool
 	lost       bool
 	repacked   bool
+	MultiRepo  string
+	ConfigFile string
 }
 
 var tremoveOptions TRemoveOptions
@@ -66,6 +69,8 @@ func init() {
 	cmdRoot.AddCommand(cmdTRemove)
 	f := cmdTRemove.Flags()
 	f.IntVarP(&tremoveOptions.cutoff, "cutoff", "C", 270, "cutoff snaps which are older than <cutoff> days")
+	f.StringVarP(&tremoveOptions.MultiRepo, "multi-repo", "M", "", "base part of repositories local or onedrive")
+	f.StringVarP(&tremoveOptions.ConfigFile, "config-file", "O", "/home/wplapper/restic/backup_config.json", "json config file")
 	f.CountVarP(&tremoveOptions.detail, "detail", "D", "print dir/file details")
 	f.BoolVarP(&tremoveOptions.lost, "lost", "L", false, "print lost file details")
 	f.BoolVarP(&tremoveOptions.repacked, "repack", "R", false, "more info on repacks")
@@ -73,115 +78,35 @@ func init() {
 	f.BoolVarP(&tremoveOptions.memory_use, "memory", "m", false, "produce memory usage")
 }
 
-func runTRemove(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
-	args []string) error {
+func runTRemove(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, args []string) error {
 
 	// setup global data
-	var repositoryData RepositoryData
 	gOptions = gopts
-	init_repositoryData(&repositoryData)
 
-	// analyse cutoff date
-	cutoff   := tremoveOptions.cutoff
-	detail   := tremoveOptions.detail
-	lost     := tremoveOptions.lost
-	repacked := tremoveOptions.repacked
-	if lost {
-		detail = 1
+	if tremoveOptions.MultiRepo != "" {
+		// quieten system talk
+		globalOptions.Quiet = true
+		globalOptions.verbosity = 0
 	}
 
-	// step 1: open repository
-	start := time.Now()
-	repo, err := OpenRepository(ctx, gopts)
-	if err != nil {
-		return err
-	}
-	Verboseff("Repository is %s\n", globalOptions.Repo)
-	if tremoveOptions.timing {
-		timeMessage(tremoveOptions.memory_use, "%-30s %10.1f seconds\n", "open repository",
-			time.Now().Sub(start).Seconds())
-	}
-	repositoryData.repo = repo
-
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, tremoveOptions.timing)
-	if err != nil {
-		return err
-	}
-
-	// push 'cutoff' high if any snaps are given in the parameter list
-	if len(args) > 0 {
-		cutoff = 9999
-	}
-	snaps_from_cli := mapset.NewSet(args...)
-
-	// step 3: compare against cutoff date
-	now := time.Now()
-	snaps_to_be_deleted := []*restic.Snapshot{}
-	snap_slice := []string{}
-	Printf("snapshots selected for deletion in repository %s\n", gopts.Repo)
-	for _, sn := range repositoryData.Snaps {
-		// move snap_time clock back to midnight
-		sn_year, sn_month, sn_day := sn.Time.Date()
-		days := int(now.Sub(time.Date(sn_year, sn_month, sn_day,
-			0, 0, 0, 0, time.UTC)).Hours() / 24)
-
-		if days >= cutoff || snaps_from_cli.Contains(sn.ID().Str()) {
-			Printf("snap_ID %s %d days old %s:%s at %s\n", sn.ID().Str(),
-				days, sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-			snaps_to_be_deleted = append(snaps_to_be_deleted, sn)
-		}
-		snap_slice = append(snap_slice, sn.ID().Str())
-	}
-
-	if len(snaps_to_be_deleted) == 0 {
-		return errors.New("No snapshots selected.")
-	}
-
-	if tremoveOptions.timing {
-		timeMessage(tremoveOptions.memory_use, "%-30s %10.1f seconds\n",
-			"selected all snapshots", time.Now().Sub(start).Seconds())
-	}
-	snap_set := mapset.NewSet(snap_slice...)
-	Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
-
-	// calculate data_map once
-	var data_map map[IntID]mapset.Set[CompIddFile]
-	if detail > 0 {
-		data_map = map_data_blob_file(&repositoryData)
-	}
-
-	// step 6.1: loop over the snap_id's to be removed individually
-	var selected = []*restic.Snapshot{nil}
-
-	// sort 'snaps_to_be_deleted' by sn.
-	sort.SliceStable(snaps_to_be_deleted, func(i, j int) bool {
-		return snaps_to_be_deleted[i].Time.After(snaps_to_be_deleted[j].Time)
-	})
-	for _, sn := range snaps_to_be_deleted {
-		selected[0] = sn
-		Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
-			sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
-		CalculatePruneSize(selected, &repositoryData, detail, lost, false, snap_set,
-			ctx, repo, data_map)
-	}
-
-	Printf("\n*** ALL ***\n")
-	CalculatePruneSize(snaps_to_be_deleted, &repositoryData, 0, false, repacked,
-		snap_set, ctx, repo, data_map)
-	if tremoveOptions.timing {
-		timeMessage(tremoveOptions.memory_use, "%-30s %10.1f seconds\n",
-			"group summary", time.Now().Sub(start).Seconds())
+	// select action to take
+	if tremoveOptions.MultiRepo != "" {
+		DoMultiRepository(ctx, gopts, tremoveOptions)
+	} else if gopts.Repo != "" && len(args) > 0 {
+		DoOneRepositoryWithSnaps(ctx, gopts, tremoveOptions, args)
+	} else {
+		DoOneRepository(ctx, gopts, tremoveOptions, nil)
 	}
 	return nil
 }
 
 // calculate sizes for 'selected' snapshots
 func CalculatePruneSize(selected []*restic.Snapshot, repositoryData *RepositoryData,
-	detail int, lost bool, repacked bool, snap_set mapset.Set[string], ctx context.Context,
-	repo *repository.Repository, data_map map[IntID]mapset.Set[CompIddFile]) error {
+	detail int, lost bool, repacked bool, allSnapsAsSet mapset.Set[string],
+	data_map map[IntID]mapset.Set[CompIddFile]) error {
 
 	// step 1: find all meta- and data-blobs in given 'selected' snapshot
-	all_other_snapshots := snap_set.Clone() // = all_snapshots - selected
+	all_other_snapshots := allSnapsAsSet.Clone() // = all_snapshots - selected
 	for _, sn := range selected {
 		all_other_snapshots.Remove(sn.ID().Str())
 	}
@@ -194,7 +119,7 @@ func CalculatePruneSize(selected []*restic.Snapshot, repositoryData *RepositoryD
 		for meta_blob := range repositoryData.MetaDirMap[id_ptr].Iter() {
 			used_blobs.Add(meta_blob)
 			for _, meta := range repositoryData.DirectoryMap[meta_blob] {
-				used_blobs.Append(meta.content...)
+				used_blobs.Append(meta.content ...)
 			}
 		}
 	}
@@ -542,8 +467,6 @@ selected []*restic.Snapshot) {
 		// intersected with the meta_blobs which have to be repacked
 		multi := full_map[repositoryData.IndexToBlob[data_blob]].Cardinality()
 		data_sett := full_map[repositoryData.IndexToBlob[data_blob]].ToSlice()[0]
-		//for elem := range full_map[repositoryData.IndexToBlob[data_blob]].Iter() {
-		//	if elem.meta_blob ==
 		dblob := repositoryData.IndexToBlob[data_blob]
 		output_slice2 = append(output_slice2, SortableMoreMulti{
 			meta_blob:     data_sett.meta_blob,
@@ -590,7 +513,7 @@ selected []*restic.Snapshot) {
 			elem.size, elem.multi, elem.name)
 	}
 
-	// reset
+	// reset for GC
 	result = nil
 	full_map = nil
 	root_set = nil
@@ -604,13 +527,10 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 
 	// step 1: find packs which are going to be deleted (partial/full)
 	//         map 'unused_blobs' back to their packfiles
-	delete_packs := make(map[IntID]mapset.Set[IntID], unused_blobs.Cardinality())
-	repack_blobs_meta := mapset.NewSet[IntID]()
-	repack_blobs_data := mapset.NewSet[IntID]()
+	pack_info    := GetPackIDs(repositoryData)
+	delete_packs := map[IntID]mapset.Set[IntID]{}
 	for blob := range unused_blobs.Iter() {
-		ix := repositoryData.IndexToBlob[blob]
-		pack_index := repositoryData.IndexHandle[ix].pack_index
-		//initializef pack_index
+		pack_index := pack_info[blob]
 		if _, ok := delete_packs[pack_index]; !ok {
 			delete_packs[pack_index] = mapset.NewSet[IntID]()
 		}
@@ -620,104 +540,68 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 	// collect all blobs which belong to the same pack (for repacking calculation)
 	blobs_per_packID := MakeBlobsPerPackID(repositoryData)
 
-	// step 2: summarize
-	count_delete_packs := 0
-	count_repack_blobs := 0
-	count_delete_blobs := 0
-	count_partial_blobs := 0
-	size_repack_blobs := 0
-	size_delete_blobs := 0
-	size_partial_blobs := 0
-	count_del_meta := 0
-	count_del_data := 0
-	size_del_meta := 0
-	size_del_data := 0
-	count_rep_meta := 0
-	count_rep_data := 0
-	size_rep_meta := 0
-	size_rep_data := 0
-	pack_del_meta := 0
-	pack_del_data := 0
-	pack_rep_meta := 0
-	pack_rep_data := 0
+	var (
+	  count_del_meta,      size_del_meta,     count_del_data,     size_del_data     int
+	  count_rep_meta,      size_rep_meta,     count_rep_data,     size_rep_data     int
+		count_partial_meta,  size_partial_meta, count_partial_data, size_partial_data int
+		count_delete_meta,   size_delete_meta,  count_delete_data,  size_delete_data  int
+		pack_del_meta,       pack_del_data,     pack_rep_meta,      pack_rep_data     int
+	)
 
 	// step 3: count in 'delete_packs'
+	count_del_meta, size_del_meta, count_del_data, size_del_data = CountAndSizesMap(
+		delete_packs, repositoryData)
+	repack_blobs_meta := mapset.NewSet[IntID]()
+	repack_blobs_data := mapset.NewSet[IntID]()
+	repackPacks       := mapset.NewSet[IntID]()
 	for pack_index := range delete_packs {
-		for blob := range delete_packs[pack_index].Iter() {
-			ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
-			if ih.Type == restic.TreeBlob {
-				count_del_meta++
-				size_del_meta += ih.size
-			} else if ih.Type == restic.DataBlob {
-				count_del_data++
-				size_del_data += ih.size
+		if delete_packs[pack_index].Cardinality() != blobs_per_packID[pack_index].PackBlobSet.Cardinality() {
+			repackPacks.Add(pack_index)
+			if blobs_per_packID[pack_index].PackfileType == restic.TreeBlob {
+				repack_blobs_meta = repack_blobs_meta.Union(blobs_per_packID[pack_index].PackBlobSet)
+			} else if blobs_per_packID[pack_index].PackfileType == restic.DataBlob {
+				repack_blobs_data = repack_blobs_data.Union(blobs_per_packID[pack_index].PackBlobSet)
 			}
 		}
 	}
 
-	repackPacks := mapset.NewSet[IntID]()
 	for pack_index := range delete_packs {
+		pType := blobs_per_packID[pack_index].PackfileType
 		// is it a full pack?
+		if delete_packs[pack_index].Cardinality() == blobs_per_packID[pack_index].PackBlobSet.Cardinality() {
+			// === straight delete ===
+			CountAndSizesSet(delete_packs[pack_index], repositoryData,
+				&count_delete_meta, &size_delete_meta, &count_delete_data, &size_delete_data)
 
-		if _, ok := delete_packs[pack_index]; ! ok {
-			Printf("delete_packs.pack_index %7d missing\n", pack_index)
-		}
-		if _, ok := blobs_per_packID[pack_index]; ! ok {
-			Printf("blobs_per_packID.pack_index %7d missing\n", pack_index)
-		}
-
-		if delete_packs[pack_index].Cardinality() == blobs_per_packID[pack_index].Cardinality() {
-			// straight delete!
-			count_delete_packs++
-			// get sizes
-			for blob := range delete_packs[pack_index].Iter() {
-				ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
-				count_delete_blobs++
-				size_delete_blobs += ih.size
-			}
-
-			a_blob := blobs_per_packID[pack_index].ToSlice()[0]
-			pType := repositoryData.IndexHandle[repositoryData.IndexToBlob[a_blob]].Type
 			if pType == restic.TreeBlob {
 				pack_del_meta++
 			} else if pType == restic.DataBlob {
 				pack_del_data++
 			}
 		} else {
-			// needs repacking, get sizes and counts
-			repackPacks.Add(pack_index)
-			a_blob := blobs_per_packID[pack_index].ToSlice()[0]
-			psType := repositoryData.IndexHandle[repositoryData.IndexToBlob[a_blob]].Type
-			if psType == restic.TreeBlob {
+			// === repacking ===
+			CountAndSizesSet(blobs_per_packID[pack_index].PackBlobSet, repositoryData,
+				&count_rep_meta, &size_rep_meta, &count_rep_data, &size_rep_data)
+			CountAndSizesSet(delete_packs[pack_index], repositoryData,
+				&count_partial_meta, &size_partial_meta, &count_partial_data, &size_partial_data)
+
+			if pType == restic.TreeBlob {
 				pack_rep_meta++
-			} else if psType == restic.DataBlob {
+			} else if pType == restic.DataBlob {
 				pack_rep_data++
-			}
-
-			for blob := range blobs_per_packID[pack_index].Iter() {
-				ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
-				size_repack_blobs += ih.size
-				count_repack_blobs++
-
-				if ih.Type == restic.TreeBlob {
-					count_rep_meta++
-					size_rep_meta += ih.size
-					repack_blobs_meta.Add(blob)
-				} else if ih.Type == restic.DataBlob {
-					count_rep_data++
-					size_rep_data += ih.size
-					repack_blobs_data.Add(blob)
-				}
-			}
-
-			// count partial packs
-			for blob := range delete_packs[pack_index].Iter() {
-				ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
-				size_partial_blobs += ih.size
-				count_partial_blobs++
 			}
 		}
 	}
+
+	// sum up
+	count_partial_blobs := count_partial_meta + count_partial_data
+	size_partial_blobs  := size_partial_meta  + size_partial_data
+	count_repack_blobs  := count_rep_meta     + count_rep_data
+	size_repack_blobs   := size_rep_meta      + size_rep_data
+
+	count_delete_blobs  := count_delete_meta  + count_delete_data
+	size_delete_blobs   := size_delete_meta   + size_delete_data
+	count_delete_packs  := pack_del_meta      + pack_del_data
 
 	// report
 	Printf("\nstraight delete %10d blobs %7d packs %10.3f MiB\n",
@@ -758,4 +642,227 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 		}
 		Printf("\n")
 	}
+
+	// for GC
+	delete_packs = nil
+	repack_blobs_meta = nil
+	repack_blobs_data = nil
+	blobs_per_packID = nil
+	repackPacks = nil
+	pack_info = nil
+}
+
+func DoOneRepository(ctx context.Context, gopts GlobalOptions,
+options TRemoveOptions, snapList mapset.Set[string]) error {
+	// local vars
+	cutoff := options.cutoff
+	detail := options.detail
+	repacked := options.repacked
+	lost     := tremoveOptions.lost
+	if lost {
+		detail = 1
+	}
+
+	repo, err := OpenRepository(ctx, gopts)
+	if err != nil {
+		return err
+	}
+	var repositoryData RepositoryData
+	init_repositoryData(&repositoryData)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, options.timing)
+	if err != nil {
+		return err
+	}
+
+	// step 3: compare against cutoff date
+	now := time.Now()
+	start := now
+	snaps_to_be_deleted := []*restic.Snapshot{}
+	allSnaps := []string{}
+	Printf("snapshots selected for deletion in repository %s\n", gopts.Repo)
+
+	var days int
+	for _, sn := range repositoryData.Snaps {
+		// move snap_time clock back to midnight
+		sn_year, sn_month, sn_day := sn.Time.Date()
+		takeIt := false
+		days = int(now.Sub(time.Date(sn_year, sn_month, sn_day,
+			0, 0, 0, 0, time.UTC)).Hours() / 24)
+		if snapList == nil {
+			takeIt = days >= cutoff
+		} else {
+		 takeIt = snapList.Contains(sn.ID().Str())
+		}
+
+		if takeIt {
+			Printf("snap_ID %s %d days old %s:%s at %s\n", sn.ID().Str(),
+				days, sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
+			snaps_to_be_deleted = append(snaps_to_be_deleted, sn)
+		}
+		allSnaps = append(allSnaps, sn.ID().Str())
+	}
+
+	if len(snaps_to_be_deleted) == 0 {
+		Printf("No snapshots selected.\n")
+		return errors.New("No snapshots selected.")
+	}
+
+	if options.timing {
+		timeMessage(tremoveOptions.memory_use, "%-30s %10.1f seconds\n",
+			"selected all snapshots", time.Now().Sub(start).Seconds())
+	}
+	allSnapsAsSet := mapset.NewSet(allSnaps...)
+	Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
+
+	// calculate data_map once
+	var data_map map[IntID]mapset.Set[CompIddFile]
+	if detail > 0 {
+		data_map = map_data_blob_file(&repositoryData)
+	}
+
+	// step 6.1: loop over the snap_id's to be removed individually
+	var selected = []*restic.Snapshot{nil}
+
+	// sort 'snaps_to_be_deleted' by sn.
+	sort.SliceStable(snaps_to_be_deleted, func(i, j int) bool {
+		return snaps_to_be_deleted[i].Time.After(snaps_to_be_deleted[j].Time)
+	})
+	for _, sn := range snaps_to_be_deleted {
+		selected[0] = sn
+		Printf("\n*** snap_ID %s %s:%s at %s\n", sn.ID().Str(),
+			sn.Hostname, sn.Paths[0], sn.Time.String()[:19])
+		CalculatePruneSize(selected, &repositoryData, detail, lost, false, allSnapsAsSet,
+			data_map)
+	}
+
+	Printf("\n*** ALL ***\n")
+	CalculatePruneSize(snaps_to_be_deleted, &repositoryData, 0, false, repacked,
+		allSnapsAsSet, data_map)
+	if options.timing {
+		timeMessage(options.memory_use, "%-30s %10.1f seconds\n",
+			"group summary", time.Now().Sub(start).Seconds())
+	}
+	return nil
+}
+
+// do all repositories defined as a group in the configuration file
+func DoMultiRepository(ctx context.Context, gopts GlobalOptions, options TRemoveOptions) error {
+	if gopts.Repo != "" {
+		Printf("Repository specified as well! repo is %s. Terminating\n", gopts.Repo)
+		return errors.New("repo specified as well!")
+	}
+
+	var (
+		err error
+		json_config map[string]map[string]StringSlice
+		ok bool
+	)
+
+	// read json from file
+	json_string, err := os.ReadFile(options.ConfigFile)
+	if err != nil {
+		Printf("Cant read json config file '%s' - %v\n", options.ConfigFile, err)
+		return err
+	}
+
+	err = json.Unmarshal(json_string, &json_config)
+	if err != nil {
+		Printf("Cant decode config file %v\n", err)
+		return err
+	}
+
+	// we need the target
+	_, ok = json_config["BASE_CONFIG"][options.MultiRepo]
+	if ! ok {
+		Printf("Can't currently deal with other base_parts '%s'\n", options.MultiRepo)
+		return errors.New("Can't currently deal with other multiple repositories")
+	}
+	target := json_config["BASE_CONFIG"][options.MultiRepo][0]
+
+	// loop over all repositories
+	for _, repo_basename := range json_config["BASE_CONFIG"]["repos"] {
+		Printf("\n")
+		gopts.Repo = target + repo_basename
+		DoOneRepository(ctx, gopts, options, nil)
+	}
+	return nil
+}
+
+// Do one Repository with given snapshots
+func DoOneRepositoryWithSnaps(ctx context.Context, gopts GlobalOptions,
+options TRemoveOptions, args []string) error {
+
+	saveQuiet := globalOptions.Quiet
+	saveVerbo := globalOptions.verbosity
+	globalOptions.Quiet = true
+	globalOptions.verbosity = 0
+	repo, err := OpenRepository(ctx, gopts)
+	if err != nil { return err }
+
+	_, snapMap, err := GatherAllSnapshots(gopts, ctx, repo)
+	if err != nil { return err }
+	repo.Close()
+	globalOptions.Quiet = saveQuiet
+	globalOptions.verbosity = saveVerbo
+
+	// all snaps in repo as Set
+	allSnapSet := mapset.NewSet[string]()
+	for snap_id := range snapMap {
+		allSnapSet.Add(snap_id)
+	}
+
+	// check for existence in allSnapIDs
+	toBeConsidered := mapset.NewSet[string]()
+	for _, snap_id := range args {
+		if allSnapSet.Contains(snap_id) {
+			toBeConsidered.Add(snap_id)
+		}
+	}
+
+	if toBeConsidered.Cardinality() == 0 {
+		Printf("No valid snaps found. Terminating!\n")
+		return errors.New("No valid snaps found. Terminating!")
+	}
+	//Printf("toBeConsidered %s\n", toBeConsidered.String())
+	DoOneRepository(ctx, gopts, tremoveOptions, toBeConsidered)
+
+	// for GC
+	toBeConsidered = nil
+	allSnapSet = nil
+	return nil
+}
+
+func CountAndSizesMap(inputMap map[IntID]mapset.Set[IntID], repositoryData *RepositoryData) (
+cm int, sm int, cd int, sd int) {
+
+	//cm, cd, sm, sd = 0,0,0,0
+	for _, dataSet := range inputMap {
+		for metaBlob := range dataSet.Iter() {
+			ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[metaBlob]]
+			if ih.Type == restic.TreeBlob {
+				cm++
+				sm += ih.size
+			} else if ih.Type == restic.DataBlob {
+				cd++
+				sd += ih.size
+			}
+		}
+	}
+	return cm, sm, cd, sd
+}
+
+func CountAndSizesSet(inputSet mapset.Set[IntID], repositoryData *RepositoryData,
+cm *int, sm *int, cd *int, sd *int) {
+
+	for metaBlob := range inputSet.Iter() {
+		ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[metaBlob]]
+		if ih.Type == restic.TreeBlob {
+			*cm = *cm + 1
+			*sm += ih.size
+		} else if ih.Type == restic.DataBlob {
+			*cd = *cd + 1
+			*sd += ih.size
+		}
+	}
+	return
 }

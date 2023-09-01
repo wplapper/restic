@@ -195,14 +195,18 @@ children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
-	flatSet = mapset.NewSet(tree_root, EMPTY_NODE_ID_TRANSLATED)
+	flatSet = mapset.NewSet(tree_root)
 
 	// use 'queue' as a FIFO queue to create the flattened tree structure
 	to_be_processed := queue.New()
 	// prime queue with tree root
 	to_be_processed.Enqueue(tree_root)
 	for to_be_processed.Len() > 0 {
-		for child := range children[to_be_processed.Dequeue().(IntID)].Iter() {
+		next := to_be_processed.Dequeue().(IntID)
+		_, ok := children[next]; if ! ok {
+			continue
+		}
+		for child := range children[next].Iter() {
 			if ! flatSet.Contains(child) {
 				flatSet.Add(child)
 				to_be_processed.Enqueue(child)
@@ -212,7 +216,6 @@ children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 
 	// at the end of the loop, 'flatSet' contains all directories
 	// referenced in the snapshot
-	flatSet.Remove(EMPTY_NODE_ID_TRANSLATED)
 	to_be_processed = nil
 	return flatSet
 }
@@ -454,12 +457,9 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 		ChildrenIter *mapset.Iterator[IntID]
 	}
 
-	// get rid of this entry!
-	initials.Remove(EMPTY_NODE_ID_TRANSLATED)
-
 	// set up temp storage an results
 	visited := mapset.NewSet[IntID]()
-	results := make([]IntID, 0)
+	results := []IntID{}
 
 	for root := range initials.Iter() {
 		// prime the search
@@ -468,7 +468,13 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 
 			// create a completely new stack
 			myStack := stack.New()
-			myStack.Push(StackEntry{parent: root, ChildrenIter: childrenMap[root].Iterator()})
+			_, ok := childrenMap[root]
+			if ! ok {
+				// this should NOT happen!
+				Printf("root entry to children map missing root=%7d. Skipping!\n", root)
+				continue
+			}
+			myStack.Push(StackEntry{root, childrenMap[root].Iterator()})
 
 			ever := true
 			for ever {
@@ -481,7 +487,7 @@ LOOP:
 				for child := range entry.ChildrenIter.C {
 					if ! visited.Contains(child) {
 						visited.Add(child)
-						myStack.Push(StackEntry{parent: child, ChildrenIter: childrenMap[child].Iterator()})
+						myStack.Push(StackEntry{child, childrenMap[child].Iterator()})
 						new_data = true
 					}
 				}

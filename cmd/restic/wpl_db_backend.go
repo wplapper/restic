@@ -194,8 +194,8 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		Printf("CompressEncoder failed with %v\n", err)
 		return err
 	}
-	//start := time.Now()
-	//Printf("%-30s %s\n", "Start CompressEncoder", start.String()[:29])
+	start := time.Now()
+	Printf("%-30s %s\n", "Start CompressEncoder", start.Format("2006-01-02 15:04:05.000000"))
 
 	cmd := exec.Command("/usr/bin/sqlite3", db_name, ".dump")
 	stdout, err := cmd.StdoutPipe()
@@ -204,16 +204,17 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		return err
 	}
 	defer stdout.Close()
-	//start = time.Now()
-	//Printf("%-30s %s\n", "Start /usr/bin/sqlite3", start.String()[:29])
+	start = time.Now()
+	// .Format("2006-01-02 15:04:05.000000")
+	Printf("%-30s %s\n", "exec.command /usr/bin/sqlite3", start.Format("2006-01-02 15:04:05.000000"))
 
 	Verboseff("run /usr/bin/sqlite3 %s .dump\n", db_name)
 	if err := cmd.Start(); err != nil {
 		Printf("Can't start slqite3 .dump")
 		return err
 	}
-	//start = time.Now()
-	//Printf("%-30s %s\n", "Start cmd.Start()", start.String()[:29])
+	start = time.Now()
+	Printf("%-30s %s\n", "cmd.Start()", start.Format("2006-01-02 15:04:05.000000"))
 
 	// here we execute "sqlite3 <db_name> .dump | zstd -8 - > <backend-file/wpl/restic.zst>"
 	go cmp_handle.ReadFrom(stdout)
@@ -221,8 +222,8 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		Printf("Wait failed with error %v\n", err)
 		return err
 	}
-	//start = time.Now()
-	//Printf("%-30s %s\n", "Start cmd.Wait()", start.String()[:29])
+	start = time.Now()
+	Printf("%-30s %s\n", "after cmd.Wait()", start.Format("2006-01-02 15:04:05.000000"))
 
 
 	err = cmp_handle.Close()
@@ -230,8 +231,8 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		Printf("CompressEncoder.Close() failed with %v\n", err)
 		return err
 	}
-	//start = time.Now()
-	//Printf("%-30s %s\n", "Start cmp_handle.Close()", start.String()[:29])
+	start = time.Now()
+	Printf("%-30s %s\n", "after cmp_handle.Close()", start.Format("2006-01-02 15:04:05.000000"))
 
 	// compressed data is stored in 'buffer_writer'
 	dst := buffer_writer.Bytes()
@@ -272,6 +273,8 @@ func write_back_database(db_name string, repo restic.Repository, ctx context.Con
 		Verboseff("time diff is %.1f seconds for %.1f MiB with speed %.1f MiB/s\n",
 			t2, float64(len(dst))/ONE_MEG, speed)
 	}
+	start = time.Now()
+	Printf("%-30s %s\n", "all done!", start.Format("2006-01-02 15:04:05.000000"))
 	return nil
 }
 

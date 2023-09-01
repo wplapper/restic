@@ -368,9 +368,7 @@ func PrintFileData(repositoryData *RepositoryData, options *WplDumpOptions) {
 	// generate sorted keys
 	meta_blob_keys := make([]MetaBlobKeys, 0, len(repositoryData.DirectoryMap))
 	for meta_blob := range repositoryData.DirectoryMap {
-		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
-			continue
-		}
+		if meta_blob == EMPTY_NODE_ID_TRANSLATED { continue }
 
 		var meta_blob_str string
 		if ! options.fullID {
@@ -417,7 +415,7 @@ func PrintFileData(repositoryData *RepositoryData, options *WplDumpOptions) {
 func PrintTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 	// we need to sort the snapshot, because they contain the root of the
 	// individual trees
-	seen := mapset.NewSet[IntID](EMPTY_NODE_ID_TRANSLATED)
+	seen := mapset.NewSet(EMPTY_NODE_ID_TRANSLATED)
 	to_be_sorted := repositoryData.Snaps[:]
 	sort.Slice(to_be_sorted, func(i, j int) bool {
 		if to_be_sorted[i].Hostname < to_be_sorted[j].Hostname {
@@ -452,20 +450,13 @@ func PrintTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 func PrintSubTree(blob IntID, ID *restic.ID, seen mapset.Set[IntID],
 	repositoryData *RepositoryData, options *WplDumpOptions, level int) {
 	// print node, then descend if not seen before, other print ... and return
-	if blob == EMPTY_NODE_ID_TRANSLATED {
-		return
-	}
-	has_been_seen := seen.Contains(blob)
-
 	SIZE := 12
-	if options.fullID {
-		SIZE = 64
-	}
+	if options.fullID { SIZE = 64 }
 
+	if blob == EMPTY_NODE_ID_TRANSLATED { return }
+	has_been_seen := seen.Contains(blob)
 	filename := repositoryData.FullPath[blob]
-	if len(filename) > 2 {
-		filename = filename[2:]
-	}
+	if len(filename) > 2 { filename = filename[2:] }
 
 	Printf("%s %s ", ID.String()[:SIZE], filename)
 	if has_been_seen {
