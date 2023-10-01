@@ -8,13 +8,17 @@ require (
 	github.com/anacrolix/fuse v0.2.0
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/cespare/xxhash/v2 v2.2.0
+	github.com/deckarep/golang-set/v2 v2.3.1
 	github.com/elithrar/simple-scrypt v1.3.0
 	github.com/go-ole/go-ole v1.2.6
+	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3
 	github.com/google/go-cmp v0.5.9
 	github.com/hashicorp/golang-lru/v2 v2.0.4
+	github.com/jmoiron/sqlx v1.3.5
 	github.com/juju/ratelimit v1.0.2
 	github.com/klauspost/compress v1.16.7
 	github.com/kurin/blazer v0.5.4-0.20230113224640-3887e1ec64b5
+	github.com/mattn/go-sqlite3 v1.14.17
 	github.com/minio/minio-go/v7 v7.0.61
 	github.com/minio/sha256-simd v1.0.1
 	github.com/ncw/swift/v2 v2.0.2
@@ -31,7 +35,7 @@ require (
 	golang.org/x/sync v0.3.0
 	golang.org/x/sys v0.10.0
 	golang.org/x/term v0.10.0
-	golang.org/x/text v0.11.0
+	golang.org/x/text v0.13.0
 	google.golang.org/api v0.134.0
 )
 
@@ -43,10 +47,8 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
-	github.com/deckarep/golang-set/v2 v2.3.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/fgprof v0.9.3 // indirect
-	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
@@ -56,12 +58,10 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.2.5 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jmoiron/sqlx v1.3.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/mattn/go-sqlite3 v1.14.17 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
