@@ -65,6 +65,9 @@ var SQLITE_TABLES = map[string]string{
   -- needed for the relationship between packfiles and blobs
   id INTEGER PRIMARY KEY,  -- the primary key
   packfile_id BLOB         -- the packfile ID, UNIQUE INDEX, as []byte, len 32
+  -- should also have
+  -- length INTEGER NOT NULL -- length of packfile
+  -- type TEXT NOT NULL      -- type of packfile data/tree
 )`,
 
   // primary table - contains all meta data about files, directories etc.
@@ -89,24 +92,24 @@ var SQLITE_TABLES = map[string]string{
 
 "meta_dir": `CREATE TABLE meta_dir (
   -- many to many relationship table between snaps and directory idds
-  id INTEGER PRIMARY KEY,             -- the primary key
   snap__id INTEGER NOT NULL,          -- the snap_id , INDEX
   blob__id INTEGER NOT NULL,          -- the idd pointer, INDEX
-  -- the tuple (id_snap_id, id_idd) is UNIQUE INDEX
+  PRIMARY KEY(snap__id, blob__id),
   FOREIGN KEY(snap__id)               REFERENCES snaphots(id),
   FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
-)`,
+) WITHOUT ROWID`,
 
 "contents": `CREATE TABLE contents (
-  id INTEGER PRIMARY KEY,             -- the primary key
+  -- id INTEGER PRIMARY KEY,             -- the primary key
   data__id INTEGER NOT NULL,          -- ptr to data_idd, INDEX
   blob__id  INTEGER NOT NULL,         -- ptr to idd_file, needs INDEX
   position INTEGER NOT NULL,          -- position in idd_file
   offset   INTEGER NOT NULL,          -- the offset of the contents list
   -- the triple (id_blob, position, offset) is a UNIQUE INDEX
+  PRIMARY KEY(blob__id, position, offset),
   FOREIGN KEY(data__id)               REFERENCES index_repo(id),
   FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
-)`,
+) WITHOUT ROWID`,
 
 "fullname": `CREATE TABLE fullname (
     id INTEGER PRIMARY KEY,           -- the primary key, GENERIC ascending
@@ -119,6 +122,14 @@ var SQLITE_TABLES = map[string]string{
     FOREIGN KEY(pathname__id)         REFERENCES fullname(id),
     FOREIGN KEY(id)                   REFERENCES index_repo(id)
 )`,
+
+"children": `CREATE TABLE children (
+    parent__id INTEGER NOT NULL,      -- parent entry
+    child__id  INTEGER NOT NULL,      -- child  entry
+    FOREIGN KEY(parent__id)           REFERENCES index_repo(id),
+    FOREIGN KEY(child__id)            REFERENCES index_repo(id),
+    PRIMARY KEY(parent__id, child__id)
+) WITHOUT ROWID`,
 }
 
 var SQLITE_INDEX = map[string][]ListIndexMaps{
@@ -137,7 +148,6 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
     ListIndexMaps{ixname: "ux_names_name",           on: "name", unique: "UNIQUE"}},
 
   "meta_dir": {
-    ListIndexMaps{ixname: "ux_metadir_snap_blob",    on: "snap__id, blob__id", unique: "UNIQUE"},
     ListIndexMaps{ixname: "ix_metadir_blob",         on: "blob__id", unique: ""}},
 
   "idd_file": {
@@ -145,14 +155,19 @@ var SQLITE_INDEX = map[string][]ListIndexMaps{
     ListIndexMaps{ixname: "ix_iddfile_name",         on: "name__id", unique: ""}},
 
   "contents": {
-    ListIndexMaps{ixname: "ux_cont_blob_pos_off",    on: "blob__id, position, offset", unique: "UNIQUE"},
-    ListIndexMaps{ixname: "ix_cont_data_id",         on: "data__id", unique: ""}},
+    //ListIndexMaps{ixname: "ux_cont_blob_pos_off",    on: "blob__id, position, offset", unique: "UNIQUE"},
+    ListIndexMaps{ixname: "ix_cont_data_id",         on: "data__id", unique: ""},
+    ListIndexMaps{ixname: "ix_cont_blob_id",         on: "blob__id", unique: ""}},
 
   "fullname": {
     ListIndexMaps{ixname: "ux_fname_path",           on: "pathname", unique: "UNIQUE"}},
 
   "dir_path_id": {
     ListIndexMaps{ixname: "ix_dpath_path",           on: "pathname__id", unique: ""}},
+
+  "children": {
+    ListIndexMaps{ixname: "ix_ch_parent",           on: "parent__id", unique: ""},
+    ListIndexMaps{ixname: "ix_ch_child",            on: "child__id", unique: ""}},
 }
 
 // Printf writes the message to the configured stdout stream.
@@ -251,8 +266,9 @@ func Get_all_high_ids() error {
   for _, tbl_name := range table_names {
     err := db_descriptor.DB_ptr.Get(&max, "SELECT coalesce(max(id), 0) from " + tbl_name)
     if err != nil {
-      Printf("Get_all_high_ids.Query error for Get max(id) is %v\n", err)
-      return err
+      //Printf("Get_all_high_ids.Query error for Get max(id) is %v\n", err)
+      tables_high_id[tbl_name] = 0
+      continue
     }
     tables_high_id[tbl_name] = max + 1
   }

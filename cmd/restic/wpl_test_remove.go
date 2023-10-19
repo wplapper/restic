@@ -41,9 +41,9 @@ type TRemoveOptions struct {
 var tremoveOptions TRemoveOptions
 
 var cmdTRemove = &cobra.Command{
-	Use:   "tremove [flags]",
-	Short: "wpl test temove one or more snapshots from the repo",
-	Long: `wpl test remove one or more snapshots from the repo.
+	Use:   "wpl-remove [flags]",
+	Short: "test temove one or more snapshots from the repository",
+	Long: `test remove one or more snapshots from the repository.
 Print repackaging information.
 
 OPTIONS

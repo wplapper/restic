@@ -38,9 +38,9 @@ type OverviewOptions struct {
 var overview_options OverviewOptions
 
 var cmdOverview = &cobra.Command{
-	Use:   "overview [flags]",
-	Short: "wpl show summary of snapshots by Hostname and filesystems",
-	Long: `wpl show summary of snapshots by Hostname and filesystems.
+	Use:   "wpl-overview [flags]",
+	Short: "show summary of snapshots by Hostname and filesystems",
+	Long: `show summary of snapshots by Hostname and filesystems.
 
 EXIT STATUS
 ===========

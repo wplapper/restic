@@ -15,8 +15,9 @@ import (
 )
 
 type CopyFilesystemOptions struct {
-	doit bool
-	path string
+	Doit     bool
+	Path     string
+	Hostname string
 	secondaryRepoOptions
 }
 
@@ -44,8 +45,9 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
 	cmdRoot.AddCommand(cmdResticCopy)
 	f := cmdResticCopy.Flags()
-	f.BoolVarP(&copy_filesys_opts.doit, "doit", "", false, "execute command")
-	f.StringVarP(&copy_filesys_opts.path, "path", "P", "", "filter fpr filesystem")
+	f.BoolVarP(&copy_filesys_opts.Doit, "doit", "", false, "execute command")
+	f.StringVarP(&copy_filesys_opts.Path, "path", "P", "", "filter by filesystem")
+	f.StringVarP(&copy_filesys_opts.Hostname, "Host", "H", "", "filter by hostname")
 	initSecondaryRepoOptions(f, &copy_filesys_opts.secondaryRepoOptions, "destination", "to copy snapshots from")
 }
 
@@ -76,41 +78,46 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 	// open repositories
 	src_repo, err := OpenRepository(ctx, src_gopts)
 	if err != nil {
-		Printf("FAIL src %v\n", err)
+		Printf("FAIL open source repository - %v\n", err)
 		return err
 	}
 
 	dst_repo, err := OpenRepository(ctx, dst_gopts)
 	if err != nil {
-		Printf("FAIL dst %v\n", err)
+		Printf("FAIL open target repository - %v\n", err)
 		return err
 	}
 
 	// load snapshots
 	_, src_snap_map, err := GatherAllSnapshots(src_gopts, ctx, src_repo)
 	if err != nil {
-		Printf("GatherAllSnapshots src %v\n", err)
+		Printf("GatherAllSnapshots source - %v\n", err)
 		return err
 	}
 	_, dst_snap_map, err := GatherAllSnapshots(dst_gopts, ctx, dst_repo)
 	if err != nil {
-		Printf("GatherAllSnapshots dst %v\n", err)
+		Printf("GatherAllSnapshots target - %v\n", err)
 		return err
 	}
 
 	// create triples which describe snapshot independently of snap_id
-	file_system := copy_filesys_opts.path
-	src_map := make(map[SnapTriple]string)
+	file_system := copy_filesys_opts.Path
+	hostname := copy_filesys_opts.Hostname
+	src_map := map[SnapTriple]string{}
 	for snap_id, sn := range src_snap_map {
 		if file_system != ""  && sn.Paths[0] != file_system {
 			continue
 		}
+		if hostname != "" && sn.Hostname != hostname {
+			continue
+		}
+
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.String()[:19]}
 		src_map[triple] = snap_id
 	}
 
-	dst_map := make(map[SnapTriple]string)
+	dst_map := map[SnapTriple]string{}
 	for snap_id, sn := range dst_snap_map {
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.String()[:19]}
@@ -152,7 +159,7 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 		// prepare to copy
 		Printf("\n%s %s: %s  %s:%s\n", time.Now().String()[:19], snap_id, triple.Snap_time,
 			triple.Snap_host, triple.Snap_fsys)
-		if copy_filesys_opts.doit {
+		if copy_filesys_opts.Doit {
 			// run restic copy [...]
 			Printf("restic copy %s -s %s -t %s\n", snap_id, src_gopts.Repo, dst_gopts.Repo)
 			// call command in cmd_copy.go for a single snap_id `snap_id`

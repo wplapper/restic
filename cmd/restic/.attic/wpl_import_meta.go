@@ -4,6 +4,7 @@ import (
 	// system
 	"context"
 	"os"
+	"io"
 	"errors"
 	"fmt"
 	"bufio"
@@ -53,13 +54,34 @@ func init() {
 
 func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, args []string) error {
 	var err error
+	var repoUnpackedName string
 
-	if len(args) == 0 {
-		Printf("Need to specify import directory. Abort!\n")
-		return errors.New("Need to specify import directory. Abort!")
+	// need to open the repository in order to access the database
+	repo, err := OpenRepository(ctx, gopts)
+	if err != nil {
+		return err
+	}
+	defer repo.Close()
+	Verboseff("Repository is %s\n", globalOptions.Repo)
+
+	// check for given repo name
+	repoLongName := map_repo_names(gopts.Repo)
+	if len(args) > 0  {
+		dirname := args[0]
+		fileInfo, err := os.Stat(dirname)
+		if err == nil && ! fileInfo.IsDir() {
+			Printf("Export name exists, but not a directory %s\n", dirname)
+			return errors.New("export name exists, but not a directory. Aborting!")
+		}
+		repoUnpackedName = args[0]
+	} else if repoLongName != gopts.Repo {
+		repoUnpackedName = fmt.Sprintf("/home/wplapper/restic/.repositoryExports/%s-new", gopts.Repo)
+	} else {
+		Printf("No name given for export directory. Aborting!\n")
+		return errors.New("no name for export directory. Aborting!")
 	}
 
-	importDirectory := args[0]
+	importDirectory := repoUnpackedName
 	info, err := os.Stat(importDirectory)
 	if err != nil {
 		Printf("Import directory %s does not exist. Abort!\n", importDirectory)
@@ -80,19 +102,13 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		}
 	}
 
-	// need to open the repository in order to access the database
-		// step 1: open repository
-	repo, err := OpenRepository(ctx, gopts)
-	if err != nil {
-		return err
-	}
-	Verboseff("Repository is %s\n", globalOptions.Repo)
 
 	// verify that we opened the correct repository
 	handle, err := os.Open(importDirectory + "/config")
 	if err != nil {
 		Printf("Can't open config file %s. Aborting! - error is '%v'\n",
 			importDirectory + "/config", err)
+		return errors.New("Can't open import config file")
 	}
   defer handle.Close()
 
@@ -115,9 +131,9 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		return err
 	}
 
-	if importMetaOptions.New {
-		os.Remove(db_name)
-	}
+	//if importMetaOptions.New {
+	os.Remove(db_name)
+	//}
 
 	// step 4.2: open selected database
 	db_conn, err := sqlite.OpenDatabase(db_name, true, gopts.Verbose, true)
@@ -129,7 +145,7 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 
 	tx, err := db_conn.Beginx()
 	if err != nil {
-		Printf("Cant start transaction. Error is %v\n", err)
+		Printf("Can't start transaction. Error is %v\n", err)
 		return err
 	}
 
@@ -143,6 +159,7 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 	if err != nil {
 		return err
 	}
+	//ManageDeleteRows(tx, SnapshotsTable, "snapshots",  &changes_made)
 
 	PackfilesTable, err := ProcessPackfilesTable(tx, importDirectory + "/all_packfiles",
 		table_column_names, &changes_made)
@@ -163,17 +180,16 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 	}
 
 	// make DirectoryMap
-	//children, directoryNamesMap := MakeChildrenMap(metaDataAll, IndexRepoTable)
 	children, directoryNamesMapUnq := MakeChildrenMapUnique(metaDataAll, IndexRepoTable)
 	metaDirMap := BuildMetaDirMap(SnapshotsTable, IndexRepoTable, children)
 
-	metaDirTable, err := ProcessMetaDirTable(tx, table_column_names, &changes_made,
+	_, err = ProcessMetaDirTable(tx, table_column_names, &changes_made,
 		metaDirMap, SnapshotsTable)
 	if err != nil {
 		return err
 	}
 
-	contentsTable, err := ProcessContentsTable(tx, table_column_names, &changes_made, IndexRepoTable,
+	_, err = ProcessContentsTable(tx, table_column_names, &changes_made, IndexRepoTable,
 		reverseIndexRepo, metaDataAll)
 	if err != nil {
 		return err
@@ -184,7 +200,8 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		return err
 	}
 
-	fileDataTable, err := ProcessFileDataTable(tx, table_column_names, &changes_made, namesTable, metaDataAll)
+	//fileDataTable, err := ProcessFileDataTable(tx, table_column_names, &changes_made, namesTable, metaDataAll)
+	_, err = ProcessFileDataTable(tx, table_column_names, &changes_made, namesTable, metaDataAll)
 	if err != nil {
 		return err
 	}
@@ -192,34 +209,58 @@ func runImportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 	fullpath := MakeFullPath(children, directoryNamesMapUnq, SnapshotsTable, IndexRepoTable,
 		metaDataAll)
 
-	_, pathDirTable, err := ProcessFullNameTable(tx, table_column_names, &changes_made, fullpath, children)
+	//_, pathDirTable, err := ProcessFullNameTable(tx, table_column_names, &changes_made, fullpath, children)
+	_, _, err = ProcessFullNameTable(tx, table_column_names, &changes_made, fullpath, children)
 	if err != nil {
 		return err
 	}
 
-	// DELETE FROM tables
-	ManageDeleteRows(tx, SnapshotsTable, "snapshots", &changes_made)
-	ManageDeleteRows(tx, PackfilesTable, "packfiles", &changes_made)
-	ManageDeleteRows(tx, metaDirTable,   "meta_dir",  &changes_made)
-	ManageDeleteRows(tx, namesTable,     "names",     &changes_made)
-	ManageDeleteRows(tx, contentsTable,  "contents",  &changes_made)
-	ManageDeleteRows(tx, fileDataTable,  "idd_file",  &changes_made)
+	/* DELETE FROM tables
+	ManageDeleteRows(tx, PackfilesTable, "packfiles",  &changes_made)
+	ManageDeleteRows(tx, IndexRepoTable, "index_repo", &changes_made)
+	//ManageDeleteRows(tx, metaDirTable,   "meta_dir",   &changes_made)
+	ManageDeleteRows(tx, namesTable,     "names",      &changes_made)
+	//ManageDeleteRows(tx, contentsTable,  "contents",   &changes_made)
+	ManageDeleteRows(tx, fileDataTable,  "idd_file",   &changes_made)
 	ManageDeleteRows(tx, pathDirTable,   "dir_path_id", &changes_made)
+	ManageDeleteRows(tx, IndexRepoTable, "index_repo", &changes_made)
+	*/
 
 	// consistency check
 	res := CheckForeignKeys(tx, importMetaOptions.Echo)
 	Printf("Consistency check %v\n", res)
 
-	err = tx.Commit()
 	if changes_made {
+		err = tx.Commit()
 		if err != nil {
 			Printf("COMMIT error %v\n", err)
 			return err
 		}
 		Printf("COMMIT\n")
+
 		err = write_back_database(db_name, repo, ctx)
 		if err != nil {
 			Printf("write_back_database failed - error is %v\n", err)
+			return err
+		}
+
+		// copy cached database to /home/wplapper/restic/db/<repo-name>.db
+		filename := fmt.Sprintf("/home/wplapper/restic/db/%s.db", gopts.Repo)
+		Printf("database filename is %s\n", filename)
+		source, err := os.Open(db_name)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+
+		destination, err := os.Create(filename)
+		if err != nil {
+			return err
+		}
+		defer destination.Close()
+
+    _, err = io.Copy(destination, source)
+		if err != nil {
 			return err
 		}
 	} else {
@@ -248,39 +289,6 @@ children map[IntID]mapset.Set[IntID]) (metaDirMap map[string]mapset.Set[IntID]) 
 			children)
 	}
 	return metaDirMap
-}
-
-func MakeChildrenMap(metaDataAll map[IntID]*restic.Tree,
-IndexRepoTable map[string]IndexRepoRecordMem) (childrenMap map[IntID]mapset.Set[IntID],
-directoryNamesMap map[IntID]string) {
-	childrenMap = map[IntID]mapset.Set[IntID]{}
-	directoryNamesMap = map[IntID]string{}
-
-	for parent_int, tree := range metaDataAll {
-		childrenMap[parent_int] = mapset.NewSet[IntID]()
-		for _, node := range tree.Nodes {
-			if node.Type == "dir" {
-				child := node.Subtree.String()
-				child_row, ok := IndexRepoTable[child]
-				if ! ok {
-					Printf("internal inconsistency for child %s\n", child[:12])
-					panic("internal inconsistency for child")
-				}
-				if IntID(child_row.Id) == EMPTY_NODE_ID_TRANSLATED { continue }
-
-				childrenMap[parent_int].Add(IntID(child_row.Id))
-				/*
-				oldname, ok := directoryNamesMap[IntID(child_row.Id)]
-				if ok && oldname != node.Name {
-					Printf("dual name for directory: old '%s' - new '%s'\n", oldname, node.Name)
-				}*/
-				// Here it is assumed that the mapping from child (node.Subtree)
-				// to node.Name is UNIQUE, but this is NOT always correct!!
-				directoryNamesMap[IntID(child_row.Id)] = node.Name
-			}
-		}
-	}
-	return childrenMap, directoryNamesMap
 }
 
 // build a topology structure for one snapshot
@@ -332,10 +340,13 @@ IndexRepoTable map[string]IndexRepoRecordMem, metaDataAll map[IntID]*restic.Tree
 func MakeChildrenMapUnique(metaDataAll map[IntID]*restic.Tree,
 IndexRepoTable map[string]IndexRepoRecordMem) (childrenMap map[IntID]mapset.Set[IntID],
 directoryNamesMap map[IntID]map[IntID]string) {
+
+	// setup empty maps
 	childrenMap = map[IntID]mapset.Set[IntID]{}
 	directoryNamesMap = map[IntID]map[IntID]string{}
 
 	for parent_int, tree := range metaDataAll {
+		// setup new empty map for 'parent_int'
 		childrenMap[parent_int] = mapset.NewSet[IntID]()
 		for _, node := range tree.Nodes {
 			if node.Type == "dir" {
@@ -356,24 +367,6 @@ directoryNamesMap map[IntID]map[IntID]string) {
 			}
 		}
 	}
-
-	/*
-	// post process directoryNamesMap: count multiple entries
-	count_unq := 0
-	for _, parent_map := range directoryNamesMap {
-		multiNames := mapset.NewSet[string]()
-		for _, name := range parent_map {
-			multiNames.Add(name)
-		}
-		if multiNames.Cardinality() == 1 {
-			count_unq++
-		} else {
-			Printf("multi parents
-			*  %s\n", multiNames.String())
-		}
-	}
-	Printf("directoryNamesMap all %7d unq %7d\n", len(directoryNamesMap), count_unq)
-	*/
 	return childrenMap, directoryNamesMap
 }
 

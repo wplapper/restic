@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	skip     = iota
+	s_k_i_p  = iota
 	DBOK     = iota
 	DBNEW    = iota
 	DBUPDATE = iota
@@ -60,8 +60,7 @@ type NamesRecordMem struct {
 }
 
 type MetaDirRecordMem struct {
-	Status uint8
-	Id         int
+	Status     uint8
 	Snap__id   int // map back to snapshots
 	Blob__id   int // map back to index_repo
 	// tuple (Snap__id, Blob__id) == UNIQUE
@@ -69,7 +68,6 @@ type MetaDirRecordMem struct {
 
 type ContentsRecordMem struct {
 	Status      uint8
-	Id          int
 	Data__id    int // map back to index_repo.id (data)
 	Blob__id    int // map back to index_repo.id (owning directory / meta_blob)
 	Position    int // with triple (Id_blob, Position, Offset) == UNIQUE
@@ -98,6 +96,13 @@ type DirPathIdMem struct {
 	Status      uint8
 	Id          int
 	Pathname__id int // back pointer to fullpath, INDEX
+}
+
+type ChildrenMem struct {
+	Status      uint8
+	Parent__id	int
+	Child__id   int
+	// tuple (Parent__id, Child__id) UNIQUE
 }
 
 //==============================================================================
@@ -261,18 +266,6 @@ func InsertTable[KEY comparable, MEM any](tbl_name string, mem_table map[KEY]MEM
 		if offset+max > len(t_insert) {
 			max = len(t_insert) - offset
 		}
-
-		/*
-		if tbl_name == "fullname" && count_print < 10 {
-			for ix := 0; ix < max; ix++ {
-				Printf("new name %+v\n", t_insert[ix])
-				count_print++
-				if count_print >= 10 {
-					break
-				}
-			}
-		}
-		*/
 
 		r, err := tx.NamedExec(sql, t_insert[offset:offset+max])
 		if err != nil {

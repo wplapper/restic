@@ -41,9 +41,9 @@ type RepoDetailsOptions struct {
 var repo_details_options RepoDetailsOptions
 
 var cmdRepoDetails = &cobra.Command{
-	Use:   "repo-details [flags]",
-	Short: "wpl counts various tables and reort usage",
-	Long: `wpl counts various tables and reort usage.
+	Use:   "wpl-repo [flags]",
+	Short: "counts various tables and reort usage",
+	Long: `counts various tables and reort usage.
 
 EXIT STATUS
 ===========
@@ -78,17 +78,13 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 1: open repository
 	repo, err := OpenRepository(ctx, gopts)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
 		repo_details_options.timing)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	// step 3: decide what to do
 	if repo_details_options.same_tree {
@@ -243,14 +239,6 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	tree_set = nil
 }
 
-// for contents mapping
-type MetaPositionOffet struct {
-	// the following triple uniquely identifies temp data blob
-	meta_blob_int IntID // unique, part1
-	position      int   // unique, part2
-	offset        int   // unique, part3
-}
-
 // count table contents and other interesting information
 func countTables(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
@@ -264,14 +252,10 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_directory_map_entries := 0
 
 	// we have tuple(node.DeviceID, node.Inode) which is unique
-	type content_ID struct {
-		content_ID [sha256.Size]byte
-		Size       uint64
-	}
 	inodes_meta  := mapset.NewSet[DeviceAndInode]()
-	inodes_datac := mapset.NewSet[[sha256.Size]byte]()
 	inodes_datan := mapset.NewSet[DeviceAndInode]()
-	names       := mapset.NewSet[string]()
+	inodes_datac := mapset.NewSet[[sha256.Size]byte]()
+	names        := mapset.NewSet[string]()
 
 	// map inodes back to 'meta_blob_int'
 	for _, file_list := range repositoryData.DirectoryMap {
@@ -315,8 +299,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	for data_blob, sets := range data_map_org {
 		if sets.Cardinality() == 1 {
 			count_singles++
-			ih := repositoryData.IndexHandle[data_blob]
-			size_singles += int(ih.size)
+			size_singles += int(repositoryData.IndexHandle[data_blob].size)
 		}
 	}
 
@@ -352,11 +335,13 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 
 		diff = set_tree.Difference(set_index_handle)
 		l_diff = diff.Cardinality()
-		if l_diff > 0 {
+		if l_diff > 1 {
 			Printf("tree  has %5d more records than the index_records\n", l_diff)
 			panic("\n*** This is a catastrophic inconsistency in the set management!! ***")
+		} else if l_diff == 1 && diff.ToSlice()[0] == EMPTY_NODE_ID_TRANSLATED {
+			Printf("The differnce is EMPTY_NODE_ID\n")
+			return
 		}
-
 
 		diff = set_index_handle.Difference(set_tree)
 		l_diff = diff.Cardinality()
@@ -440,8 +425,8 @@ repositoryData *RepositoryData, root string) {
 	})
 
 	// prepare to walk down the data subdirectory
-	// Walk will fail if you try to Walk temp rclone structure
-	// will only work on local filesystems
+	// Walk will fail if you try to Walk an rclone structure
+	// this will only work on local filesystems
 	missing := false
 	err := filepath.Walk(root + "/data",
 		func(path string, info fs.FileInfo, err error) error {
@@ -506,7 +491,7 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 		fullpath[k] = v
 	}
 
-	// this amends the repositoryData.FullPath
+	// this updates repositoryData.FullPath
 	diagnoseAndRepairOrphans(meta_diff, repositoryData)
 
 	// 1. - get all data blobs from Index()
@@ -517,7 +502,7 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 		}
 	}
 
-	// 2. - data all blobs from the mapped tree blobs - as in used blobs
+	// 2. - find all data blobs from the mapped tree blobs - as in used blobs
 	set_data_tree := mapset.NewSet[IntID]()
 	for meta_blob_int := range fullpath {
 		for _, meta := range repositoryData.DirectoryMap[meta_blob_int] {
@@ -528,7 +513,7 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 
 	// 3. - in order to make details useful for blobs which are marked "to be deleted"
-	//      but are not pruned yet one has to discover the lost meta blobs
+	//      but are not pruned yet, one has to discover the lost meta blobs
 	diff_data := set_data_handle.Difference(set_data_tree)
 	unused_blobs := diff_data.Union(meta_diff)
 	SizePrune(repositoryData, unused_blobs, false, nil, options.detail)

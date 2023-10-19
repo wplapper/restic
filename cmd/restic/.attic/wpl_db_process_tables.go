@@ -11,7 +11,7 @@ import (
 	"io"
 	"path/filepath"
 	"fmt"
-	"reflect"
+	//"reflect"
 	"time"
 
 	// restic library
@@ -161,13 +161,20 @@ changes_made *bool) (PackfilesTable map[string]PackfilesRecordMem, err error) {
 	return PackfilesTable, nil
 }
 
+type IndexUpdate struct {
+	Id       int
+	Pack__id int
+}
+
+
 func ProcessIndexRecordsTable(tx *sqlx.Tx, filename string, table_column_names map[string][]string,
 changes_made *bool, packfiles map[string]PackfilesRecordMem) (
 IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID, err error) {
 
 	// initialize return maps
-	IndexRepoTable = map[string]IndexRepoRecordMem{}
-	reverseIndexRepo = map[int]restic.ID{}
+	IndexRepoTable      = map[string]IndexRepoRecordMem{}
+	reverseIndexRepo    = map[int]restic.ID{}
+	IndexRepoUpdateMap := map[string]IndexUpdate{}
 
 	// step 1: read from TABLE index_repo
 	sql := "SELECT * FROM index_repo"
@@ -212,23 +219,31 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 		components, err := csvReader.Read()
 		if err == io.EOF { break }
 		blob := components[0]
+		packfile := components[5]
 		row, ok := IndexRepoTable[blob]
-		if ok && (row.Status == DBDELETE || row.Status == DBOK) {
-			row.Status = DBOK
+		if ok && row.Status == DBDELETE {
+			newPack__id := packfiles[packfile].Id
+			oldPack__id := row.Pack__id
+			if newPack__id == oldPack__id {
+				// if packfile is identical, every is ok
+				row.Status = DBOK
+			} else {
+				row.Status = DBUPDATE
+				IndexRepoUpdateMap[blob] = IndexUpdate{Id: row.Id, Pack__id: packfiles[packfile].Id}
+				row.Pack__id = packfiles[packfile].Id
+			}
 			IndexRepoTable[blob] = row
 			continue
 		}
 
 		Type := components[1]
-		offset, err1 := strconv.Atoi(components[2])
-		length, err2 := strconv.Atoi(components[3])
+		offset,   err1 := strconv.Atoi(components[2])
+		length,   err2 := strconv.Atoi(components[3])
 		UCLength, err3 := strconv.Atoi(components[4])
-		packfile := components[5]
-		_ = packfile
 
 		if err1 != nil || err2 != nil || err3 != nil {
 			Printf("Conversion error of str->int\n")
-			return nil, nil, errors.New("Int Conversion error")
+			return nil, nil, errors.New("Int Conversion error: offset/length/UClength")
 		}
 
 		if _, ok := packfiles[packfile]; ! ok {
@@ -254,7 +269,6 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 		}
 
 		copy(blobAsID[:], blob_bytes)
-		//blobAsID[:] = blob_bytes  // this does NOT compile
 		reverseIndexRepo[highID] = blobAsID
 		highID++
 	}
@@ -279,6 +293,12 @@ IndexRepoTable map[string]IndexRepoRecordMem, reverseIndexRepo map[int]restic.ID
 			Printf("InsertTable(index_repo) %v\n", err)
 			return nil, nil, err
 		}
+	}
+
+	if len(IndexRepoUpdateMap) > 0 {
+		err := runIndexRepoUpdate(tx, IndexRepoUpdateMap)
+		if err != nil { return nil, nil, err }
+		*changes_made = true
 	}
 	return IndexRepoTable, reverseIndexRepo, nil
 }
@@ -354,7 +374,7 @@ metaDirTable map[CompMetaDir]MetaDirRecordMem, err error) {
 	}
 
 	// step 2: compare with data from maetadata export as create new rows
-	highID := sqlite.Get_high_id("meta_dir")
+	//highID := sqlite.Get_high_id("meta_dir")
 	for snap_id, blobSet := range metaDirMap {
 		snapRow, ok := SnapshotsTable[snap_id]
 		if ! ok {
@@ -370,14 +390,8 @@ metaDirTable map[CompMetaDir]MetaDirRecordMem, err error) {
 				continue
 			}
 
-			row = MetaDirRecordMem{
-				Status: DBNEW,
-				Id: highID,
-				Snap__id: snapRow.Id,
-				Blob__id: int(blob),
-			}
+			row = MetaDirRecordMem{Status: DBNEW, Snap__id: snapRow.Id, Blob__id: int(blob)}
 			metaDirTable[cmpix] = row
-			highID++
 		}
 	}
 
@@ -473,10 +487,10 @@ metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsReco
 	}
 
 	// step 2: look for new rows
-	highID := sqlite.Get_high_id("contents")
 	for parent_int, tree := range metaDataAll {
 		for position, node := range tree.Nodes {
 			if node.Type != "file" || len(node.Content) == 0 { continue }
+
 			for offset, data_blob := range node.Content {
 				row_ix_repo, ok := IndexRepoTable[data_blob.String()]
 				if ! ok {
@@ -484,8 +498,7 @@ metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsReco
 					panic("Internal inconsistency for data_blob. Aborting!")
 				}
 
-				cmpix := CompContents{Blob__id: parent_int, Position: position,
-					Offset: offset}
+				cmpix := CompContents{Blob__id: parent_int, Position: position,	Offset: offset}
 				row, ok := contentsTable[cmpix]
 				if ok && (row.Status == DBDELETE || row.Status == DBOK) {
 					row.Status = DBOK
@@ -493,10 +506,9 @@ metaDataAll map[IntID]*restic.Tree) (contentsTable map[CompContents]ContentsReco
 					continue
 				}
 
-				row = ContentsRecordMem{Status: DBNEW, Id: highID, Data__id: row_ix_repo.Id,
+				row = ContentsRecordMem{Status: DBNEW, Data__id: row_ix_repo.Id,
 					Blob__id: int(parent_int), Position: position, Offset: offset}
 				contentsTable[cmpix] = row
-				highID++
 			}
 		}
 	}
@@ -678,6 +690,7 @@ fullnameTable map[string]FullnameMem, pathDirTable map[int]DirPathIdMem, err err
 	return fullnameTable, pathDirTable, nil
 }
 
+/*
 func ManageDeleteRows[KEY comparable, MEM any](tx *sqlx.Tx, any_table map[KEY]MEM,
 table_name string, changes_made *bool) (err error) {
 
@@ -710,80 +723,16 @@ table_name string, changes_made *bool) (err error) {
 	}
 	return nil
 }
+*/
 
 func CheckForeignKeys(tx *sqlx.Tx, echo bool) bool {
-	type ForeignKeys struct {
-		check_table string
-		column_name string
-		ref_table   string // the implied column is always "Id" for ref_table
-	}
-	var check_tables = []ForeignKeys{
-		{"meta_dir",  "snap__id", "snapshots"},
-		{"meta_dir",  "blob__id", "index_repo"},
-		{"idd_file",  "blob__id", "index_repo"},
-		{"contents",  "data__id", "index_repo"},
-		{"contents",  "blob__id", "index_repo"},
-		{"idd_file",  "name__id", "names"},
-		{"index_repo", "pack__id", "packfiles"},
-		{"dir_path_id", "id", "index_repo"},
-		{"dir_path_id", "pathname__id", "fullname"},
-	}
-
 	type RemoveTable struct {
 		Id int
 	}
 
-	Printf("\n*** Check Foreign Key relationship ***\n")
-	all_good := true
-	for _, action := range check_tables {
-		check_table := true
-		// true subset test
-		sql := fmt.Sprintf(`SELECT DISTINCT %s.%s AS id FROM %s
-	LEFT OUTER JOIN %s ON %s.%s = %s.id WHERE %s.id IS NULL`,
-			action.check_table, action.column_name, action.check_table, action.ref_table,
-			action.check_table, action.column_name, action.ref_table, action.ref_table)
-
-		if echo {
-			Printf("%s %s\n", time.Now().Format("2006-01-02 15:04:05.000"), sql)
-		}
-		rows, err := tx.Queryx(sql)
-		if err != nil {
-			Printf("Error in sql %s, error is %v\n", sql, err)
-			check_table = false
-		}
-
-		count_rows := 0
-		for rows.Next() {
-			var row RemoveTable
-			err = rows.StructScan(&row)
-			if err != nil {
-				Printf("CheckForeinKeys:StructScan for sql %s failed %v\n", sql, err)
-				check_table = false
-				return false
-			}
-
-			if count_rows < 10 {
-				Printf("Id=%6d in %s is not related to %s\n", row.Id,
-					action.check_table, action.ref_table)
-			}
-			count_rows++
-			check_table = false
-		}
-		rows.Close()
-		if !check_table {
-			Printf("check failed for %s.%s, - found %5d rows\n", action.check_table, action.column_name, count_rows)
-			all_good = false
-		}
-	}
-
-	if all_good {
-		Printf("All foreign key checks are OK!\n")
-	} else {
-		Printf("Some foreign key checks failed!\n")
-	}
-
-	// part 2: check consistency of keys (idem potence)  in the following tables
+	// check consistency of keys (idem potence) in the following tables
 	var err error
+	all_good := true
 	var compareTables = [][]string{
 		{"snapshots", "id", "", "meta_dir",  "snap__id"},
 
@@ -878,3 +827,22 @@ func CheckForeignKeys(tx *sqlx.Tx, echo bool) bool {
 	return all_good
 }
 
+func runIndexRepoUpdate(tx *sqlx.Tx, IndexRepoUpdateMap map[string]IndexUpdate) error {
+	// run UPDATE on index_repo
+	sql := "UPDATE index_repo SET pack__id=:pack__id WHERE id=:id"
+	updateStmt, err := tx.Prepare(sql)
+	if err != nil {
+		Printf("Error in prepare '%s' - error is '%v'\n", sql, err)
+		return err
+	}
+
+	for _, row := range IndexRepoUpdateMap {
+		_, err := updateStmt.Exec(row.Pack__id, row.Id)
+		if err != nil {
+			Printf("Can't run UPDATE - error is '%v'\n", err)
+			return err
+		}
+	}
+	Printf("UPDATE index_repo           with %7d rows.\n", len(IndexRepoUpdateMap))
+	return nil
+}

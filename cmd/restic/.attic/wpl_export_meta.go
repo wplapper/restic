@@ -19,7 +19,7 @@ import (
 )
 
 var cmdExportMeta = &cobra.Command{
-	Use:   "wpl-export [flags]",
+	Use:   "wpl-export",
 	Short: "export metadata of repo to plaintext directory structure",
 	Long: `export metadata of repo to plaintext directory structure.
 
@@ -30,24 +30,17 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 `,
 	DisableAutoGenTag: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runExportMeta(cmd.Context(), cmd, globalOptions)
+		return runExportMeta(cmd.Context(), cmd, globalOptions, args)
 	},
 }
 
-type ExportMetaOptions struct {
-	Repo string
-}
-var exportMetaOptions ExportMetaOptions
-
 func init() {
 	cmdRoot.AddCommand(cmdExportMeta)
-	f := cmdExportMeta.Flags()
-	f.StringVarP(&exportMetaOptions.Repo, "alt-repo", "A", "", "repository name")
 }
 
 // convert all the metadata into plain files with a directory strcuture like
 // a repository
-func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
+func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, args []string) error {
 	var (
 		err              error
 		repositoryData   RepositoryData
@@ -62,25 +55,33 @@ func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions)
 	if err != nil {
 		return err
 	}
+	defer repo.Close()
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 
-	if globalOptions.Repo[:1] != "/" && exportMetaOptions.Repo == "" {
-		return errors.New("Need a local filesystem directory to map repo!")
-	}
-
-	// check for alternative repo name
-	if exportMetaOptions.Repo != "" {
-		repoUnpackedName = exportMetaOptions.Repo
-	} else {
-		lenRepoName := len(globalOptions.Repo)
-		if globalOptions.Repo[lenRepoName-1 : lenRepoName] == "/" {
-			globalOptions.Repo = globalOptions.Repo[:lenRepoName-1]
+	// check for given repo name
+	repoLongName := map_repo_names(gopts.Repo)
+	if len(args) > 0  {
+		dirname := args[0]
+		fileInfo, err := os.Stat(dirname)
+		if err == nil && ! fileInfo.IsDir() {
+			Printf("export name exists, but not a directory %s\n", dirname)
+			return errors.New("export name exists, but not a directory. Aborting!")
+		} else if err != nil {
+			errx := os.MkdirAll(dirname, 0o755)
+			if errx != nil {
+				Printf("Cant create directory %s - reason %v\n", dirname, errx)
+				return errx
+			}
 		}
-		repoUnpackedName = globalOptions.Repo + "_unpacked"
+		repoUnpackedName = dirname
+	} else if repoLongName != gopts.Repo {
+		repoUnpackedName = fmt.Sprintf("/home/wplapper/restic/.repositoryExports/%s-new", gopts.Repo)
+	} else {
+		Printf("no name given for export directory. Aborting!\n")
+		return errors.New("no name for export directory. Aborting!")
 	}
 
-	// clean any old remaining files from 'repoUnpackedName'
-	_ = CleanDirectory(repoUnpackedName)
+	CleanDirectory(repoUnpackedName)
 
 	// step: build the directrory structure
 	err = MakeDirectoryStructure(repoUnpackedName, true)
@@ -90,8 +91,8 @@ func runExportMeta(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions)
 
 	type procFunc func(context.Context, *repository.Repository, string) error
 	var processList = []procFunc{
-		ProcessSnapshots, ProcessIndexFiles, ProcessMetaData, CreatePackList,
-		ConfigFile,
+		ProcessSnapshots, //ProcessIndexFiles, ProcessMetaData, CreatePackList,
+		//ConfigFile,
 	}
 
 	// run through the file lists: snapshots, index, metablobs, packlists
@@ -131,25 +132,36 @@ func MakeDirectoryStructure(dirname string, toplevel bool) error {
 }
 
 func ProcessSnapshots(ctx context.Context, repo *repository.Repository, repoUnpackedName string) error {
-	// get snapshots list
-	snaps, _, err := GatherAllSnapshots(gOptions, ctx, repo)
-	if err != nil {
-		return err
+	type RawSnap struct{
+		id restic.ID
+		data []byte
 	}
+
+	snaps := []RawSnap{}
+	// get snapshots list
+	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
+		buf, err := repo.LoadUnpacked(ctx, restic.SnapshotFile, id)
+		if err != nil {
+			Printf("LoadUnpacked.skip loading snap record %s! - reason: %v\n", id, err)
+			return err
+		}
+		snaps = append(snaps, RawSnap{id, buf})
+		return nil
+	})
 
 	// loop over all snapshots, write one file
 	target := fmt.Sprintf("%s/all_snapshots", repoUnpackedName)
 	Verboseff("target is %s\n", target)
 	fd, _ := os.Create(target)
 	handle := bufio.NewWriter(fd)
-	for _, sn := range snaps {
-		handle.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s\n", sn.ID().String(),
-			sn.Tree.String(), sn.Hostname, sn.Paths[0], sn.Time.String()[:19]))
+	for _, raw_snap := range snaps {
+		handle.WriteString(fmt.Sprintf("%s,%s\n", raw_snap.id.String(),
+			raw_snap.data))
 	}
 
 	handle.Flush()
 	fd.Close()
-	snaps =nil
+	snaps = nil
 	return nil
 }
 
@@ -182,8 +194,8 @@ type IndexHandleExpo struct {
 	PackID              string
 }
 
-func CreateIndexInfo(ctx context.Context, repo *repository.Repository) ([]IndexHandleExpo) {
-	MetaBlobInfo := []IndexHandleExpo{}
+func CreateIndexInfo(ctx context.Context, repo *repository.Repository) (MetaBlobInfo []IndexHandleExpo) {
+	MetaBlobInfo = []IndexHandleExpo{}
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
 		MetaBlobInfo = append(MetaBlobInfo, IndexHandleExpo{
 			blob.ID.String(),        blob.Type.String(),
@@ -213,14 +225,14 @@ func ProcessMetaData(ctx context.Context, repo *repository.Repository, repoUnpac
 	}
 
 	// gather all metablobs
-	metaBlobList  := []restic.ID{}
+	metaBlobList := []restic.ID{}
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
 		if blob.Type == restic.TreeBlob {
 			metaBlobList = append(metaBlobList, blob.ID)
 		}
 	})
 
-	// get all trees and write them to the metadat directory
+	// get all trees and write them to the metadata directory
 	type MyTree struct {
 		MetaBlob restic.ID `json:"metablob"`
 		*restic.Tree
@@ -235,7 +247,7 @@ func ProcessMetaData(ctx context.Context, repo *repository.Repository, repoUnpac
 
 		filename := meta_blob.String()
 		target := fmt.Sprintf("%s/metadata/%s/%s", repoUnpackedName, filename[:2], filename)
-		subdir := fmt.Sprintf("%s/metadata/%s", repoUnpackedName, filename[:2])
+		subdir := fmt.Sprintf("%s/metadata/%s",    repoUnpackedName, filename[:2])
 		_, err = os.Stat(subdir)
 		if err != nil {
 			err2 := os.Mkdir(subdir, 0o755)
@@ -258,6 +270,7 @@ func ProcessMetaData(ctx context.Context, repo *repository.Repository, repoUnpac
 			return err
 		}
 	}
+	metaBlobList = nil
 	return nil
 }
 

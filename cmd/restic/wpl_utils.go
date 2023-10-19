@@ -9,8 +9,7 @@ import (
 	"sort"
 	"sync"
 	"time"
-	//"encoding/json"
-	//"os"
+
 
 	// restic library
 	"github.com/wplapper/restic/library/restic"
@@ -266,26 +265,6 @@ func ForAllMyTrees(gopts GlobalOptions, ctx context.Context,
 	wg, ctx := errgroup.WithContext(ctx)
 	chan_tree_blob := make(chan restic.ID)
 
-	/*
-	repositoryData.rename_children = map[string]string{} // from_name -> to_name
-	var renameNames []RenameNames
-	data, err := os.ReadFile("/home/wplapper/restic/directory_renames.json")
-	if err != nil {
-			Printf("I/O error while reading directory_renames.json - %v\n", err)
-			panic("Cannot read json rename configuration file!")
-	}
-	err = json.Unmarshal(data, &renameNames)
-	if err != nil {
-			Printf("json error %v\n", err)
-			panic("Cannot Unmarshal json rename  file!")
-	}
-
-	for _, elem := range renameNames {
-		repositoryData.rename_children[elem.From_name] = elem.To_name
-	}
-	renameNames = nil
-	*/
-
 	wg.Go(func() error {
 		defer close(chan_tree_blob)
 
@@ -471,6 +450,8 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 			_, ok := childrenMap[root]
 			if ! ok {
 				// this should NOT happen!
+				// but happens when restic forget was executed and the database is not
+				// udpated yet!
 				Printf("root entry to children map missing root=%7d. Skipping!\n", root)
 				continue
 			}
