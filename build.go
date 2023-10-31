@@ -140,8 +140,8 @@ func build(cwd string, env map[string]string, args ...string) error {
 		// wpl 2023-08-14
 		//cmd.Env = append(cmd.Env, "CGO_ENABLED=1")
         // wpl 2024-08-18, 2023-08-23
-        // wpl 2024-08-18, 2023-08-23
-		cmd.Env = append(cmd.Env, "CGO_ENABLED=1")
+        // wpl 2024-08-18, 2023-10-31
+		cmd.Env = append(cmd.Env, "CGO_ENABLED=0")
 	}
 
 	printEnv(cmd.Env)
