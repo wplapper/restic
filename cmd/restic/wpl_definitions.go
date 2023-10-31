@@ -60,7 +60,6 @@ type RepositoryData struct {
 	// more data on demand
 	roots                 []RootOfTree
 	repo                  *repository.Repository
-	rename_children       map[string]string
 }
 
 type CompIndexOffet struct {

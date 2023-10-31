@@ -10,17 +10,16 @@ import (
 	"sync"
 	"time"
 
-
 	// restic library
-	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
 
 	// sets
 	"github.com/deckarep/golang-set/v2"
 
 	// stack and queue
-	"github.com/golang-collections/collections/stack"
 	"github.com/golang-collections/collections/queue"
+	"github.com/golang-collections/collections/stack"
 )
 
 // system wide variables and containers
@@ -32,14 +31,14 @@ var (
 )
 
 func init_repositoryData(repositoryData *RepositoryData) {
-	repositoryData.Snaps        = []*restic.Snapshot{}
-	repositoryData.SnapMap      = map[string]*restic.Snapshot{}
+	repositoryData.Snaps = []*restic.Snapshot{}
+	repositoryData.SnapMap = map[string]*restic.Snapshot{}
 	repositoryData.DirectoryMap = map[IntID][]BlobFile2{}
-	repositoryData.FullPath     = map[IntID]string{}
-	repositoryData.MetaDirMap   = map[*restic.ID]mapset.Set[IntID]{}
-	repositoryData.IndexHandle  = map[restic.ID]Index_Handle{}
-	repositoryData.BlobToIndex  = map[restic.ID]IntID{}
-	repositoryData.IndexToBlob  = []restic.ID{}
+	repositoryData.FullPath = map[IntID]string{}
+	repositoryData.MetaDirMap = map[*restic.ID]mapset.Set[IntID]{}
+	repositoryData.IndexHandle = map[restic.ID]Index_Handle{}
+	repositoryData.BlobToIndex = map[restic.ID]IntID{}
+	repositoryData.IndexToBlob = []restic.ID{}
 }
 
 // GatherAllSnapshots retrieves all snapshots from the repository
@@ -102,14 +101,14 @@ func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo *repository.R
 	// loop over each index record by calling unnamed func for every entry
 	// 'blob' is set by 'Each'
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
-		if _, ok := repositoryData.BlobToIndex[blob.ID]; ! ok {
+		if _, ok := repositoryData.BlobToIndex[blob.ID]; !ok {
 			repositoryData.BlobToIndex[blob.ID] = pos
 			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.ID)
 			pos++
 		}
 
 		// add packID from packfiles to 'blob_to_index' and 'index_to_blob',
-		if _, ok := repositoryData.BlobToIndex[blob.PackID]; ! ok {
+		if _, ok := repositoryData.BlobToIndex[blob.PackID]; !ok {
 			repositoryData.BlobToIndex[blob.PackID] = pos
 			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.PackID)
 			pos++
@@ -127,7 +126,7 @@ func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo *repository.R
 	// add the *restic.IDs from the snapshots list to these list / maps
 	for _, sn := range repositoryData.Snaps {
 		snap := *sn.ID()
-		if _, ok := repositoryData.BlobToIndex[snap]; ! ok {
+		if _, ok := repositoryData.BlobToIndex[snap]; !ok {
 			repositoryData.BlobToIndex[snap] = pos
 			repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, snap)
 			pos++
@@ -147,12 +146,13 @@ func ConverToIntSet(gopts GlobalOptions, ctx context.Context, repo *repository.R
 // FindChildren steps through the directory_map and finds subdirectories.
 // The children get attached their parent
 func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set[IntID]) {
-	//Print("FindChildren start\n")
 	children = CreateAllChildren(repositoryData)
-	names  := make(map[IntID]string)
+	names := make(map[IntID]string)
 	for _, idd_file_list := range repositoryData.DirectoryMap {
 		for _, node := range idd_file_list {
-			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED { continue }
+			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
+				continue
+			}
 			names[node.subtree_ID] = node.name
 		}
 	}
@@ -162,7 +162,7 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
 	initials := mapset.NewSet[IntID]()
 	for _, sn := range repositoryData.Snaps {
 		tree := repositoryData.BlobToIndex[*sn.Tree]
-		repositoryData.FullPath[tree] = "/."
+		repositoryData.FullPath[tree] = "/"
 		repositoryData.roots = append(repositoryData.roots,
 			RootOfTree{meta_blob: tree, name: "/", multiplicity: 1})
 		initials.Add(tree)
@@ -172,25 +172,34 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
 	// dfs sorts the children topologically, so parents appear before their children
 	dfs_res := dfs(children, initials)
 	for _, meta_blob := range dfs_res {
+		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
+			continue
+		}
 		for child := range children[meta_blob].Iter() {
-			repositoryData.FullPath[child] = repositoryData.FullPath[meta_blob] + "/" +
-				names[child]
+			if child == EMPTY_NODE_ID_TRANSLATED {
+				continue
+			}
+			if repositoryData.FullPath[meta_blob] == "/" {
+				repositoryData.FullPath[child] = "/" + names[child]
+			} else {
+				repositoryData.FullPath[child] = repositoryData.FullPath[meta_blob] + "/" +
+					names[child]
+			}
 		}
 	}
 
 	// rename repository root entries after fullpath has been set
 	for _, sn := range repositoryData.Snaps {
 		ix := repositoryData.BlobToIndex[*sn.Tree]
-		repositoryData.FullPath[ix] = fmt.Sprintf("/./ (root of %s)", sn.ID().Str())
+		repositoryData.FullPath[ix] = fmt.Sprintf("/ (root of %s)", sn.ID().Str())
 	}
-	initials = nil
 	return children
 }
 
 // build a topology structure for one snapshot
 // the function relies on 'children' being initialized properly
 func TopologyStructure(tree_root IntID,
-children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
+	children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 
 	// for each snapshot, there are always 2 fixed elements:
 	// the tree root and the empty directory
@@ -202,11 +211,8 @@ children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 	to_be_processed.Enqueue(tree_root)
 	for to_be_processed.Len() > 0 {
 		next := to_be_processed.Dequeue().(IntID)
-		_, ok := children[next]; if ! ok {
-			continue
-		}
 		for child := range children[next].Iter() {
-			if ! flatSet.Contains(child) {
+			if !flatSet.Contains(child) {
 				flatSet.Add(child)
 				to_be_processed.Enqueue(child)
 			}
@@ -215,7 +221,6 @@ children map[IntID]mapset.Set[IntID]) (flatSet mapset.Set[IntID]) {
 
 	// at the end of the loop, 'flatSet' contains all directories
 	// referenced in the snapshot
-	to_be_processed = nil
 	return flatSet
 }
 
@@ -244,7 +249,7 @@ func GatherAllRepoData(gopts GlobalOptions, ctx context.Context,
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for parallel processing
 func DeliverTreeBlobs(ctx context.Context, repo *repository.Repository,
-repositoryData *RepositoryData, fn func(id restic.ID) error) error {
+	repositoryData *RepositoryData, fn func(id restic.ID) error) error {
 
 	for blob_ID, data := range repositoryData.IndexHandle {
 		if data.Type == restic.TreeBlob {
@@ -393,7 +398,7 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	start := time.Now()
 	if timing {
 		timeMessage(true, "%-30s %10.1f seconds\n", "repository is open",
-			time.Now().Sub(start).Seconds())
+			time.Since(start).Seconds())
 	}
 
 	// step 2: gather all snapshots
@@ -403,7 +408,7 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	}
 	if timing {
 		timeMessage(true, "%-30s %10.1f seconds\n", "gather snapshots",
-			time.Now().Sub(start).Seconds())
+			time.Since(start).Seconds())
 	}
 
 	// step 3: manage Index Records
@@ -412,14 +417,14 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	}
 	if timing {
 		timeMessage(true, "%-30s %10.1f seconds\n", "read index records",
-			time.Now().Sub(start).Seconds())
+			time.Since(start).Seconds())
 	}
 
 	// step 4: read all meta blobs and create the incore tables
 	GatherAllRepoData(gopts, ctx, repo, repositoryData)
 	if timing {
 		timeMessage(true, "%-30s %10.1f seconds\n", "GatherAllRepoData",
-			time.Now().Sub(start).Seconds())
+			time.Since(start).Seconds())
 	}
 	return nil
 }
@@ -432,7 +437,7 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 
 	// define a stack entry
 	type StackEntry struct {
-		parent IntID
+		parent       IntID
 		ChildrenIter *mapset.Iterator[IntID]
 	}
 
@@ -442,16 +447,16 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 
 	for root := range initials.Iter() {
 		// prime the search
-		if ! visited.Contains(root) {
+		if !visited.Contains(root) {
 			visited.Add(root)
 
 			// create a completely new stack
 			myStack := stack.New()
 			_, ok := childrenMap[root]
-			if ! ok {
+			if !ok {
 				// this should NOT happen!
 				// but happens when restic forget was executed and the database is not
-				// udpated yet!
+				// updated yet!
 				Printf("root entry to children map missing root=%7d. Skipping!\n", root)
 				continue
 			}
@@ -460,32 +465,38 @@ func dfs(childrenMap map[IntID]mapset.Set[IntID], initials mapset.Set[IntID]) (i
 			ever := true
 			for ever {
 				// this is the only exit from the loop
-				if myStack.Len() == 0 { break }
-LOOP:
-				entry  := myStack.Peek().(StackEntry)
-				parent := entry.parent
-				new_data := false
-				for child := range entry.ChildrenIter.C {
-					if ! visited.Contains(child) {
-						visited.Add(child)
-						myStack.Push(StackEntry{child, childrenMap[child].Iterator()})
-						new_data = true
+				if myStack.Len() == 0 {
+					break
+				}
+
+				var parent IntID
+				new_data := true
+				for new_data {
+					new_data = false
+					entry := myStack.Peek().(StackEntry)
+					parent = entry.parent
+					for child := range entry.ChildrenIter.C {
+						if !visited.Contains(child) {
+							visited.Add(child)
+							myStack.Push(StackEntry{child, childrenMap[child].Iterator()})
+							new_data = true
+						}
 					}
 				}
-				if new_data { goto LOOP }
-
 				myStack.Pop()
-				if myStack.Len() > 0 { results = append(results, parent) }
+				if myStack.Len() > 0 {
+					results = append(results, parent)
+				}
 			} // end forever LOOP
 			results = append(results, root)
 		} // end if visited.Contains(root)
-	}	// end loop for all initials
+	} // end loop for all initials
 
 	// reverse 'results' so that the roots are at the relative beginning of the slice
 	l_result := len(results) - 1
-	inverse_result = make([]IntID, 0, l_result + 1)
+	inverse_result = make([]IntID, 0, l_result+1)
 	for ix := range results {
-		inverse_result = append(inverse_result, results[l_result - ix])
+		inverse_result = append(inverse_result, results[l_result-ix])
 	}
 
 	// reset for GC and return

@@ -8,8 +8,8 @@ import (
 	"context"
 	"io/fs"
 	"os"
-	"strings"
 	"path/filepath"
+	//"golang.org/x/sync/errgroup"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -23,6 +23,11 @@ import (
 	"github.com/deckarep/golang-set/v2"
 )
 
+type PreloadOptions struct {
+	DryRun bool
+}
+var preloadOptions PreloadOptions
+
 var cmdPreloadCache = &cobra.Command{
 	Use:   "preload-cache [flags]",
 	Short: "wpl make sure that the cache is current",
@@ -35,27 +40,47 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 `,
 	DisableAutoGenTag: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runPreloadCache(cmd.Context())
+		return runPreloadCache(cmd.Context(), cmd, globalOptions)
 	},
 }
 
 func init() {
 	cmdRoot.AddCommand(cmdPreloadCache)
+	f := cmdPreloadCache.Flags()
+	f.BoolVarP(&preloadOptions.DryRun, "dry-run", "N", false, "dry-run the command")
+
 }
 
-// make sure that all index and snapshot files have a copy in the cache
-// as a consequence, all metablob packs are loaded as well
-func runPreloadCache(ctx context.Context) error {
+func runPreloadCache(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
+	to_be_deleted := mapset.NewSet[string]()
+	err := runPreloadCache1(ctx, gopts, to_be_deleted)
+	if err != nil {
+		return err
+	}
 
-	var err error
+	// delete the files which can only be found in the local cache.
+ 	for filename := range to_be_deleted.Iter() {
+		if ! preloadOptions.DryRun {
+			err := os.Remove(filename)
+			if err == nil {
+				Printf("file %s deleted\n", filepath.Base(filename))
+			} else {
+				Printf("%s faild with %v\n", filename, err)
+			}
+		} else {
+			Printf("rm %s\n", filename)
+		}
+	}
+	return nil
+}
 
-	// step 1: open repository
-	repo, err := OpenRepository(ctx, globalOptions)
+func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted mapset.Set[string]) error {
+	repo, err := OpenRepository(ctx, gopts)
 	if err != nil {
 		Printf("repository %s is busted!\n", globalOptions.Repo)
 		return err
 	}
-	Printf("repo is %s\n", globalOptions.Repo)
+	Verboseff("repo is %s\n", globalOptions.Repo)
 
 	var cache_dir string
 	config := repo.Config()
@@ -100,6 +125,8 @@ func runPreloadCache(ctx context.Context) error {
 		return nil
 	})
 	snaps_in_cache := walk_cache_dir(subdir_name + "/snapshots")
+	Verbosef("%7d snapshot files in cache\n", snaps_in_cache.Cardinality())
+	Verbosef("%7d snapshot files in repo \n", snap_set.Cardinality())
 
 	// step 6: match front end and backend files for the following types
 	// index, meta_blobs
@@ -114,21 +141,27 @@ func runPreloadCache(ctx context.Context) error {
 		Printf("OK\n")
 	}
 
+	processed, err := restic.RemoveAllLocks(ctx, repo)
+	if err != nil {
+		Printf("Could not unlock - reason %v\n", err)
+		return err
+	}
+
+	if processed > 0 {
+		Verbosef("successfully removed %d locks\n", processed)
+	}
+	repo.Close()
+
 	Printf("Check snaps ... ")
 	if snap_set.Equal(snaps_in_cache) {
 		Printf("OK\n")
 	} else {
 		Print("not OK!\n")
-		diff_set := snap_set.Difference(snaps_in_cache)
-		Printf("\ndiff_set %+v\n\n", diff_set)
-		remove_old_snaps(diff_set, subdir_name + "/snapshots")
-		Printf("There are %d differences in the snapshots!\n", diff_set.Cardinality())
-		for snap := range diff_set.Iter() {
-			if snap_set.Contains(snap) {
-				Printf("%s in snap_set\n", snap[:12])
-			} else if snaps_in_cache.Contains(snap) {
-				Printf("%s in snaps_in_cache\n", snap[:12])
-			}
+		diff_set2 := snaps_in_cache.Difference(snap_set)
+		for snapshotLong := range diff_set2.Iter() {
+			subdir := snapshotLong[0:2]
+			filename := subdir_name + "/snapshots/" + subdir + "/" + snapshotLong
+			to_be_deleted.Add(filename)
 		}
 	}
 	return nil
@@ -175,9 +208,8 @@ func walk_cache(ctx context.Context, repo *repository.Repository, root string,
 }
 
 // function to check loaded snapshots vs cached snapshots
-func walk_cache_dir(root string) mapset.Set[string] {
-	result := mapset.NewSet[string]()
-	error_set := mapset.NewSet[string]()
+func walk_cache_dir(root string) (result mapset.Set[string]) {
+	result = mapset.NewSet[string]()
 	err := filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
 		// skip on error
 		if err != nil {
@@ -187,55 +219,15 @@ func walk_cache_dir(root string) mapset.Set[string] {
 		}
 
 		// skip directories
-		if info.IsDir() {
-			return nil
-		}
+		if info.IsDir() { return nil }
 
-		// check for major inconsistency
-		components := strings.Split(path, "/")
-		lcomp := len(components)
-		if lcomp >= 2 {
-			before := components[lcomp - 2]
-			lastst := components[lcomp - 1]
-			prefix := lastst[0:2]
-			if prefix != before {
-				Printf("before is '%s', last[0:2] is '%s' last is %s\n", before, prefix,
-					lastst)
-				panic("some logic inconsistency")
-			}
-		}
 		result.Add(filepath.Base(path))
 		return nil
 	})
 
 	if err != nil {
 		Printf("Could not walk cache -reason '%v'\n", err)
-		return error_set
+		return mapset.NewSet[string]()
 	}
 	return result
-}
-
-func remove_old_snaps(snaps mapset.Set[string], base_path string) {
-	// remove entries in 'snaps' from cache
-
-	Printf("remove_old_snaps.start\n")
-	for elem := range snaps.Iter() {
-		subdir := elem[0:2]
-		filename := base_path + "/" + subdir + "/" + elem
-		Printf("Statting %s\n", filename)
-		if _, err := os.Stat(filename); err == nil {
-			Printf("remove %s\n", filename)
-			err2 := os.Remove(filename)
-			if err2 != nil {
-				Printf("Can't remove file %s - reason %v\n", filename, err2)
-				continue
-			}
-		} else {
-			Printf("File %s not found in cache!\n", filename)
-			continue
-		}
-		snaps.Remove(elem)
-		Printf("dropped %s\n", elem)
-	}
-	Printf("remove_old_snaps.ended\n")
 }

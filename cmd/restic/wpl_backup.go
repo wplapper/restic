@@ -1,3 +1,4 @@
+
 package main
 
 // run backup on host for selected filesystem.
@@ -103,7 +104,7 @@ func step_backup(ctx context.Context, gopts GlobalOptions, cmd *cobra.Command) e
 		}
 
 		Printf("\n%s *** backing up file system '%s' ***\n",
-			time.Now().String()[:19], logical_backup)
+			time.Now().Format(time.DateTime), logical_backup)
 		backup_excl := json_config["BACKUP_EXCLUDES"]
 		backup_basedirs := json_config["BACKUP_BASEDIRS"]
 		if _, ok = backup_basedirs[logical_backup]; ! ok {
@@ -129,12 +130,11 @@ func step_backup(ctx context.Context, gopts GlobalOptions, cmd *cobra.Command) e
 		}
 
 		the_command := "/usr/bin/restic"
-		Printf("%s %s %s\n", time.Now().String()[:19], the_command,
+		Printf("%s %s %s\n", time.Now().Format(time.DateTime), the_command,
 			strings.Join(command_args, " "))
 
 		start := time.Now()
 		cmd := exec.Command(the_command, command_args ...)
-		diff := time.Now().Sub(start).Seconds()
 		stdoutStderr, err := cmd.CombinedOutput()
 		if err != nil {
 			Printf("Backup %s does not want to run - error is '%v'\n",
@@ -142,7 +142,7 @@ func step_backup(ctx context.Context, gopts GlobalOptions, cmd *cobra.Command) e
 			return err
 		}
 		Printf("%s\n", stdoutStderr)
-		Printf("command_args took %.1f seconds to run\n", diff)
+		Printf("backup took %.1f seconds to run\n", time.Since(start).Seconds())
 	}
 	return nil
 }

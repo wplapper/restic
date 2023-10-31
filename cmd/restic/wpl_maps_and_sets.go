@@ -41,6 +41,9 @@ func CreateAllChildren(repositoryData *RepositoryData) (children map[IntID]mapse
 	for parent, idd_file_list := range repositoryData.DirectoryMap {
 		children[parent] = mapset.NewSet[IntID]()
 		for _, node := range idd_file_list {
+			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
+				continue
+			}
 			children[parent].Add(node.subtree_ID)
 		}
 	}
@@ -119,7 +122,7 @@ data_map map[restic.ID]mapset.Set[CompIndexOffet]) {
 }
 
 // This function creates a data map which is global for the repository. It
-// contains a mapping from a data blob to the containing meta blob a the
+// contains a mapping from a data blob to the containing meta blob and the
 // index into the file list, used for gathering the file name to which this data
 // blob belongs. Data blob can belong to multiple files.
 func map_data_blob_file(repositoryData *RepositoryData) (data_map map[IntID]mapset.Set[CompIddFile]) {

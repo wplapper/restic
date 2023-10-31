@@ -13,10 +13,8 @@ import (
 	"path/filepath"
 	"time"
 	"encoding/hex"
-//	"encoding/binary"
 	"errors"
 	"crypto/sha256"
-//	"bytes"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -30,13 +28,13 @@ import (
 )
 
 type RepoDetailsOptions struct {
-	same_tree  bool
-	check_data bool
-	prune      bool
-	detail     int
-	lost       bool
-	timing     bool
-	memory_use bool
+	SameTree  bool
+	CheckData bool
+	Prune     bool
+	Detail    int
+	Lost      bool
+	Timing    bool
+	MemoryUse bool
 }
 var repo_details_options RepoDetailsOptions
 
@@ -59,12 +57,12 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
 	cmdRoot.AddCommand(cmdRepoDetails)
 	f := cmdRepoDetails.Flags()
-	f.BoolVarP(&repo_details_options.same_tree, "same-tree", "S", false, "show snapshots with the same tree")
-	f.BoolVarP(&repo_details_options.check_data, "check-data", "C", false, "compare list of all data file with packfiles")
-	f.BoolVarP(&repo_details_options.prune, "prune", "P", false, "make prune calculations")
-	f.BoolVarP(&repo_details_options.timing, "timing", "T", false, "produce timings")
-	f.BoolVarP(&repo_details_options.memory_use, "memory", "m", false, "produce memory usage")
-	f.CountVarP(&repo_details_options.detail, "detail", "D", "print dir/file details")
+	f.BoolVarP(&repo_details_options.SameTree, "same-tree", "S", false, "show snapshots with the same tree")
+	f.BoolVarP(&repo_details_options.CheckData, "check-data", "C", false, "compare list of all data file with packfiles")
+	f.BoolVarP(&repo_details_options.Prune, "Prune", "P", false, "make Prune calculations")
+	f.BoolVarP(&repo_details_options.Timing, "Timing", "T", false, "produce timings")
+	f.BoolVarP(&repo_details_options.MemoryUse, "memory", "m", false, "produce memory usage")
+	f.CountVarP(&repo_details_options.Detail, "Detail", "D", "print dir/file details")
 }
 
 func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
@@ -83,28 +81,28 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-		repo_details_options.timing)
+		repo_details_options.Timing)
 	if err != nil { return err }
 
 	// step 3: decide what to do
-	if repo_details_options.same_tree {
-		findSameTree(ctx, repo, &repositoryData)
+	if repo_details_options.SameTree {
+		FindSameTree(ctx, repo, &repositoryData)
 		return nil
-	} else if repo_details_options.check_data {
-		check_data(ctx, repo, &repositoryData, gopts.Repo)
+	} else if repo_details_options.CheckData {
+		CheckData(ctx, repo, &repositoryData, gopts.Repo)
 		return nil
 	}
 
 	// normal processing
-	countBlobs(ctx,  repo, &repositoryData, repo_details_options, start)
-	countFiles(ctx,  repo, &repositoryData, repo_details_options, start)
-	countTables(ctx, repo, &repositoryData, repo_details_options, start)
+	CountBlobs(ctx,  repo, &repositoryData, repo_details_options, start)
+	CountFiles(ctx,  repo, &repositoryData, repo_details_options, start)
+	CountTables(ctx, repo, &repositoryData, repo_details_options, start)
 	return nil
 }
 
 // go through index table and count tree and data blobs, and compressed and
 // uncompressed sizes
-func countBlobs(ctx context.Context, repo restic.Repository,
+func CountBlobs(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_tree_blobs := 0
 	count_data_blobs := 0
@@ -183,8 +181,8 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 		pack_set_meta.Cardinality() + pack_set_data.Cardinality(),
 		float64(size_meta_pack + size_data_pack) / ONE_MEG)
 
-	if options.timing {
-		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "countBlobs",
+	if options.Timing {
+		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountBlobs",
 			time.Now().Sub(start).Seconds())
 	}
 	// reset
@@ -194,7 +192,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 }
 
 // count index, snapshot and meta file counts and sizes
-func countFiles(ctx context.Context, repo restic.Repository,
+func CountFiles(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_snaps := 0
 	size_snaps  := int64(0)
@@ -232,15 +230,15 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	Printf("%s\n", strings.Repeat("=", 52))
 
 	// clear up
-	if options.timing {
-		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "countFiles",
+	if options.Timing {
+		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountFiles",
 			time.Now().Sub(start).Seconds())
 	}
 	tree_set = nil
 }
 
 // count table contents and other interesting information
-func countTables(ctx context.Context, repo restic.Repository,
+func CountTables(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// meta_dir
 	count_meta_dir_entries := 0
@@ -265,7 +263,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 			if meta.Type == "dir" {
 				inodes_meta.Add(device_inode)
 			} else if meta.Type == "file" {
-				inodes_datac.Add(convertContent2(meta.content))
+				inodes_datac.Add(ConvertContent(meta.content))
 				inodes_datan.Add(device_inode)
 			}
 			names.Add(meta.name)
@@ -320,39 +318,40 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 			set_index_handle.Add(ih.blob_index)
 		}
 	}
+	set_index_handle.Remove(EMPTY_NODE_ID_TRANSLATED)
 
 	set_tree := mapset.NewSet[IntID]()
 	for meta_blob_int := range repositoryData.FullPath {
 		set_tree.Add(meta_blob_int)
 	}
+	if set_tree.Contains(EMPTY_NODE_ID_TRANSLATED) {
+		set_tree.Remove(EMPTY_NODE_ID_TRANSLATED)
+	}
 
 	var diff mapset.Set[IntID]
 	var l_diff int
 	if ! set_index_handle.Equal(set_tree) {
-		Printf("\n*** Repository needs pruning! ***\n")
-		Printf("from index    %7d\n", set_index_handle.Cardinality())
-		Printf("from FullPath %7d\n", set_tree.Cardinality())
+		Printf("\n*** Possibly needs pruning. data blobs only checked.***\n")
+		Printf("from index %7d\n", set_index_handle.Cardinality())
+		Printf("from tree  %7d\n", set_tree.Cardinality())
 
 		diff = set_tree.Difference(set_index_handle)
 		l_diff = diff.Cardinality()
 		if l_diff > 1 {
 			Printf("tree  has %5d more records than the index_records\n", l_diff)
-			panic("\n*** This is a catastrophic inconsistency in the set management!! ***")
-		} else if l_diff == 1 && diff.ToSlice()[0] == EMPTY_NODE_ID_TRANSLATED {
-			Printf("The differnce is EMPTY_NODE_ID\n")
-			return
+			panic("\n*** This is a catastrophic inconsistency in restic management!! ***")
 		}
 
 		diff = set_index_handle.Difference(set_tree)
 		l_diff = diff.Cardinality()
 
-		if options.prune {
-			checkPrune(repositoryData, diff, options)
+		if options.Prune {
+			CheckPrune(repositoryData, diff, options)
 		}
 	}
 
-	if options.timing {
-		timeMessage(options.memory_use, "%-30s %10.1f seconds\n", "CountTables",
+	if options.Timing {
+		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountTables",
 			time.Now().Sub(start).Seconds())
 	}
 
@@ -369,7 +368,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 }
 
 // find snapshots which own the same tree (root)
-func findSameTree(ctx context.Context, repo restic.Repository,
+func FindSameTree(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData) {
 	printed := false
 	// map tree root to snap_id
@@ -416,7 +415,7 @@ repositoryData *RepositoryData) {
 // packfiles set
 // this will only work on locally defined repositories where file system functions
 // work.
-func check_data(ctx context.Context, repo restic.Repository,
+func CheckData(ctx context.Context, repo restic.Repository,
 repositoryData *RepositoryData, root string) {
 	// gather Packfiles names from Index data
 	pack_set := mapset.NewSet[string]()
@@ -476,8 +475,8 @@ repositoryData *RepositoryData, root string) {
 	}
 }
 
-// check for prune: 'meta_diff' only contains meta_blob records
-func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
+// check for Prune: 'meta_diff' only contains meta_blob records
+func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	options RepoDetailsOptions) {
 
 	// diff set length is zero, which means that the two sets are equal.
@@ -491,10 +490,7 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 		fullpath[k] = v
 	}
 
-	// this updates repositoryData.FullPath
-	diagnoseAndRepairOrphans(meta_diff, repositoryData)
-
-	// 1. - get all data blobs from Index()
+	// get all data blobs from Index()
 	set_data_handle := mapset.NewSet[IntID]()
 	for _, ih := range repositoryData.IndexHandle {
 		if ih.Type == restic.DataBlob {
@@ -513,20 +509,20 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 
 	// 3. - in order to make details useful for blobs which are marked "to be deleted"
-	//      but are not pruned yet, one has to discover the lost meta blobs
+	//      but are not pruned yet, one has to discover the Lost meta blobs
 	diff_data := set_data_handle.Difference(set_data_tree)
 	unused_blobs := diff_data.Union(meta_diff)
-	SizePrune(repositoryData, unused_blobs, false, nil, options.detail)
+	SizePrune(repositoryData, unused_blobs, false, nil, options.Detail)
 
 	// 4. - report details if requested
-	detail := options.detail
+	Detail := options.Detail
 	data_map := map_data_blob_file(repositoryData)
-	if detail == 4 {
-		print_very_raw(repositoryData, unused_blobs)
-	} else if detail == 3 {
-		print_raw(repositoryData, unused_blobs, data_map)
-	} else if detail == 2 || detail == 1 {
-		print_some_detail(repositoryData, unused_blobs, detail, options.lost, data_map)
+	if Detail == 4 {
+		Print_very_raw(repositoryData, unused_blobs)
+	} else if Detail == 3 {
+		Print_raw(repositoryData, unused_blobs, data_map)
+	} else if Detail == 2 || Detail == 1 {
+		Print_some_detail(repositoryData, unused_blobs, Detail, options.Lost, data_map)
 	}
 
 	//5. - reset for GC
@@ -537,99 +533,8 @@ func checkPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	set_data_handle = nil
 }
 
-// this function generates identifiable names for 'lost' meta_blobs and
-// tries to derive meaningful names from subdirectories
-// output: update repositoryData.FullPath entries
-func diagnoseAndRepairOrphans(missing_blobs mapset.Set[IntID],
-repositoryData *RepositoryData) {
-
-	// step 1: build temp child -> parent table
-	children := CreateAllChildren(repositoryData)
-	parents  := map[IntID]IntID{}
-	for parent, children := range children {
-		for child := range children.Iter() {
-			parents[child] = parent
-		}
-	}
-
-	// step 2: from named children create named parents iteratively
-	changed := true
-	for changed {
-		changed = false
-		// here we are with orphaned meta blobs - check for parent -> child relationship
-		for parent := range missing_blobs.Iter() {
-			if _, ok := repositoryData.FullPath[parent]; ok {
-				continue
-			}
-			for child := range children[parent].Iter() {
-				if _, ok := repositoryData.FullPath[child]; ! ok {
-					continue
-				}
-
-				// we have temp unnamed child
-				components := strings.Split(repositoryData.FullPath[child], "/")
-				lcomp := len(components)
-				if lcomp  < 3 {
-					continue
-				}
-				// construct new parent
-				new_pathp := "/./" + strings.Join(components[2:lcomp-1], "/")
-				//Verboseff("new_pathp %s\n", new_pathp)
-				repositoryData.FullPath[parent] = new_pathp
-
-				// check for grandparent, need to check length first
-				if lcomp  < 4 {
-					continue
-				}
-				grand_parent := parents[parent]
-				// we found gp -> parent
-				_, ok2 := repositoryData.FullPath[grand_parent]
-				if ! ok2 {
-					//Printf("components %+v\n", components)
-					new_pathgp := "/./" + strings.Join(components[2:lcomp - 2], "/")
-					repositoryData.FullPath[grand_parent] = new_pathgp
-				}
-				changed = true
-			}
-		}
-	}
-
-	// step 3: investigate parents which still have no name.
-	// check if they have temp common parent, which has temp name
-	// create name as <known-gp>/<hex-string>
-	for parent := range missing_blobs.Iter() {
-		if _, ok := repositoryData.FullPath[parent]; ! ok {
-			gp := parents[parent]
-			if gp_name, ok2 := repositoryData.FullPath[gp]; ok2 {
-				repositoryData.FullPath[parent] = gp_name + "/" +
-					repositoryData.IndexToBlob[parent].String()[:12]
-			}
-		}
-	}
-
-	// step 4: generate the rest of the names
-	// output the directory names found as absolute directories
-	for parent := range missing_blobs.Iter() {
-		if _, ok := repositoryData.FullPath[parent]; ! ok {
-			repositoryData.FullPath[parent] = "/./" + repositoryData.IndexToBlob[parent].String()[:12]
-		}
-	}
-	parents = nil
-}
-
-/* currently not used in favour of 'convertContent2'
-// convert content slice to temp hash, so it can be compared against other content
-func convertContentsToSha256(content []IntID) [sha256.Size]byte {
-	buf := new(bytes.Buffer)
-	for _, data_blob_int := range content {
-		binary.Write(buf, binary.LittleEndian, data_blob_int)
-	}
-	return sha256.Sum256(buf.Bytes())
-}
-*/
-
 // serialize 'content' step by step into sha256 by Write() to it
-func convertContent2(content []IntID) (result [sha256.Size]byte) {
+func ConvertContent(content []IntID) (result [sha256.Size]byte) {
 	sha256sum := sha256.New()
 	temp := make([]byte, 4)
 	for _, data_blob_int := range content {
@@ -648,6 +553,7 @@ func convertContent2(content []IntID) (result [sha256.Size]byte) {
 	return result
 }
 
+// calculate sha256 of the given file 'filename'
 func Sha256File(filename string) ([]byte, error) {
 	f, err := os.Open(filename)
   if err != nil {

@@ -196,11 +196,11 @@ func GetColumnNames(tx *sqlx.Tx) (table_column_names map[string][]string, err er
 	// utilize the pseudo table pragma_table_info to retrieve the column names
 	table_column_names = map[string][]string{}
 	// get table names first
-	sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+	sql := "SELECT tbl_name FROM sqlite_schema WHERE type = 'table'"
 	Table_names := make([]string, 0)
 	err = tx.Select(&Table_names, sql)
 	if err != nil {
-		Printf("SELECT tbl_name FROM sqlite_master failed err %v\n", err)
+		Printf("SELECT tbl_name FROM sqlite_schema failed err %v\n", err)
 		return nil, err
 	}
 

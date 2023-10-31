@@ -185,7 +185,7 @@ func OpenDatabase(data_base_path string, echo bool, verbose int, index bool) (*s
   // allocate DBDescriptor
   db_descriptor = &DBDescriptor{DB_ptr: db, verbose: verbose, echo: echo}
 
-  sql := "SELECT tbl_name FROM sqlite_master WHERE type = 'table' ORDER BY tbl_name"
+  sql := `SELECT tbl_name FROM sqlite_schema WHERE type='table' ORDER BY tbl_name`
   db_descriptor.table_names = make([]string, 0)
   err = db.Select(&db_descriptor.table_names, sql)
   if err != nil {
@@ -230,7 +230,7 @@ func init_tables(echo bool) {
 // build all INDEXes which do not exist yet: use CREATE INDEX IF NOT EXISTS
 func build_index(echo bool) {
   // gather existing INDEX names
-  sql1 := "SELECT name FROM sqlite_master WHERE type = 'index'"
+  sql1 := `SELECT name FROM sqlite_schema WHERE type = 'index'`
   index_names := []string{}
   db_descriptor.DB_ptr.Select(&index_names, sql1)
   // and convert Slice to Set
@@ -254,7 +254,7 @@ var tables_high_id map[string]int
 func Get_all_high_ids() error {
   tables_high_id = map[string]int{}
 
-  sql1 := "SELECT tbl_name FROM sqlite_master WHERE type = 'table'"
+  sql1 := `SELECT tbl_name FROM sqlite_schema WHERE type = 'table'`
   table_names := make([]string, 0)
   err := db_descriptor.DB_ptr.Select(&table_names, sql1)
   if err != nil {
