@@ -2,6 +2,7 @@ package main
 
 import (
 	//system
+	"os"
 	"time"
 
 	// restic
@@ -17,16 +18,31 @@ const ONE_MEG = float64(1024.0 * 1024.0)
 // type definions
 type IntID uint32
 
+type SnapshotWpl struct {
+	ID       restic.ID
+	Time     time.Time `json:"time"`
+	Paths    []string  `json:"paths"`
+	Hostname string    `json:"hostname,omitempty"`
+	Username string    `json:"username,omitempty"`
+	UID      uint32    `json:"uid,omitempty"`
+	GID      uint32    `json:"gid,omitempty"`
+	Tree     restic.ID
+}
+
+
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
 	size       uint64
-	DeviceID   uint64
 	inode      uint64
+	DeviceID   uint64
 	content    []IntID
 	subtree_ID IntID
 	name       string
 	Type       string
 	mtime      time.Time
+	Mode       os.FileMode
+	Links      uint64
+	LinkTarget string
 }
 
 type Index_Handle struct {
@@ -46,8 +62,8 @@ type RootOfTree struct {
 // the holding collections
 type RepositoryData struct {
 	// all snapshots
-	Snaps         []*restic.Snapshot
-	SnapMap       map[string]*restic.Snapshot
+	Snaps         []SnapshotWpl
+	SnapMap       map[string]SnapshotWpl
 	DirectoryMap  map[IntID][]BlobFile2
 	FullPath      map[IntID]string                 // directory ID -> full directory path
 	MetaDirMap    map[*restic.ID]mapset.Set[IntID] // flattened tree structure
@@ -76,7 +92,7 @@ type CompIndexOffet struct {
 }
 
 type GroupInfo struct {
-  snap_groups          map[snapGroup][]*restic.Snapshot
+  snap_groups          map[snapGroup][]SnapshotWpl
   group_numbers_sorted []int
   group_keys           []snapGroup
   group_numbers        map[snapGroup]int

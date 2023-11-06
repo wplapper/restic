@@ -48,7 +48,7 @@ type WplDumpOptions struct {
 	where            string
 	more_data        bool
 	recurse          bool
-	fullID	         bool
+	fullID           bool
 	multi_root_stats bool
 	children         int
 	sorting          string
@@ -105,7 +105,7 @@ func runWplDump(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		return err
 	}
 
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, false, false)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func PrintSnapshotsWpl(repositoryData *RepositoryData, options *WplDumpOptions) 
 	Printf("\n*** Snapshots  (SNAPSHOTS) ***\n")
 	Printf("\n%-8s  %-19s  %s:%s\n", "snap_ID", "date and time", "host", "filesystem")
 	for _, sn := range repositoryData.Snaps {
-		Printf("%s  %s  %s:%s\n", sn.ID().Str(), sn.Time.String()[:19],
+		Printf("%s  %s  %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime),
 			sn.Hostname, sn.Paths[0])
 	}
 }
@@ -163,7 +163,7 @@ func PrintIndexHandles(repositoryData *RepositoryData, options *WplDumpOptions) 
 
 		var blob_ID_str, pack_ID_str string
 		pack_ID := repositoryData.IndexToBlob[ih.pack_index]
-		if ! options.fullID {
+		if !options.fullID {
 			blob_ID_str = ID.String()[:12]
 			pack_ID_str = pack_ID.String()[:12]
 		} else {
@@ -304,7 +304,7 @@ func PrintMetaDirMapReverse(repositoryData *RepositoryData,
 				continue
 			}
 			Printf("%s ", snap_id)
-			if count % 8 == 0 {
+			if count%8 == 0 {
 				Printf("\n")
 			}
 			count++
@@ -366,10 +366,12 @@ func PrintFileData(repositoryData *RepositoryData, options *WplDumpOptions) {
 	// generate sorted keys
 	meta_blob_keys := make([]MetaBlobKeys, 0, len(repositoryData.DirectoryMap))
 	for meta_blob := range repositoryData.DirectoryMap {
-		if meta_blob == EMPTY_NODE_ID_TRANSLATED { continue }
+		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
+			continue
+		}
 
 		var meta_blob_str string
-		if ! options.fullID {
+		if !options.fullID {
 			meta_blob_str = repositoryData.IndexToBlob[meta_blob].String()[:12]
 		} else {
 			meta_blob_str = repositoryData.IndexToBlob[meta_blob].String()
@@ -433,25 +435,29 @@ func PrintTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 	filter, filter_map, filter_string := filter_processing(options)
 	Printf("\n*** Topoplogoy Tree  (TREE) ***\n")
 	for _, sn := range to_be_sorted {
-		if filter && filter_map["s"] && sn.ID().Str() != filter_string {
+		if filter && filter_map["s"] && sn.ID.Str() != filter_string {
 			continue
 		}
 		root := sn.Tree
-		Printf("\nsnap %s at %s -- %s:%s\n", sn.ID().Str(), sn.Time.String()[:19],
+		Printf("\nsnap %s at %s -- %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime),
 			sn.Hostname, sn.Paths[0])
-		PrintSubTree(repositoryData.BlobToIndex[*root], root, seen, repositoryData, options, 0)
+		PrintSubTree(repositoryData.BlobToIndex[root], root, seen, repositoryData, options, 0)
 	}
 	seen = nil
 	to_be_sorted = nil
 }
 
-func PrintSubTree(blob IntID, ID *restic.ID, seen mapset.Set[IntID],
+func PrintSubTree(blob IntID, ID restic.ID, seen mapset.Set[IntID],
 	repositoryData *RepositoryData, options *WplDumpOptions, level int) {
 	// print node, then descend if not seen before, other print ... and return
 	SIZE := 12
-	if options.fullID { SIZE = 64 }
+	if options.fullID {
+		SIZE = 64
+	}
 
-	if blob == EMPTY_NODE_ID_TRANSLATED { return }
+	if blob == EMPTY_NODE_ID_TRANSLATED {
+		return
+	}
 	has_been_seen := seen.Contains(blob)
 	filename := repositoryData.FullPath[blob]
 
@@ -472,7 +478,7 @@ func PrintSubTree(blob IntID, ID *restic.ID, seen mapset.Set[IntID],
 		for _, node := range repositoryData.DirectoryMap[blob] {
 			if node.Type == "dir" {
 				sub_tree := node.subtree_ID
-				PrintSubTree(sub_tree, &repositoryData.IndexToBlob[sub_tree], seen,
+				PrintSubTree(sub_tree, repositoryData.IndexToBlob[sub_tree], seen,
 					repositoryData, options, level+1)
 			}
 		}
@@ -495,27 +501,33 @@ type SortableMore struct {
 func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 
 	/* The equivalent sql statement for the SQLite database
+
 	SELECT DISTINCT
-		substr(packfiles.packfile_id, 1, 12) AS pack_ID,
-		substr(ix_repo_data.idd, 1, 12)      AS data_ID,
-		substr(ix_repo_meta.idd, 1, 12)      AS meta_ID,
-		fullname.pathname                    AS path
+		substr(lower(hex(ix_repo_meta.blob)), 1, 12) AS meta_ID,
+		contents.position, contents.offset,
+		substr(lower(hex(packfiles.packfile_id)), 1, 12) AS pack_ID,
+		substr(lower(hex(ix_repo_data.blob)), 1, 12) AS data_ID,
+		fullname.pathname AS path,
+		names.name
 	FROM packfiles
 	JOIN index_repo AS ix_repo_data
 	JOIN index_repo AS ix_repo_meta
 	JOIN fullname
-	JOIN dir_path_id
+	JOIN dir_path
 	JOIN contents
-	JOIN idd_file
+	JOIN meta_data_store
+	JOIN names
 	WHERE
-		dir_path_id.id_pathname = fullname.id       AND
-		dir_path_id.id          = ix_repo_meta.id   AND
-		contents.id_data_idd    = ix_repo_data.id   AND
-		contents.position       = idd_file.position AND
-		contents.id_blob        = idd_file.id_blob  AND
-		ix_repo_meta.id         = idd_file.id_blob  AND
-		ix_repo_data.id_pack_id = packfiles.id
-	ORDER BY pack_ID, data_ID, meta_ID;
+		dir_path.fullname__id   = fullname.id       AND
+		dir_path.id             = ix_repo_meta.id   AND
+		contents.data__id       = ix_repo_data.id   AND
+		contents.position       = meta_data_store.position AND
+		contents.blob__id       = meta_data_store.blob__id  AND
+		ix_repo_meta.id         = meta_data_store.blob__id  AND
+		ix_repo_data.pack__id = packfiles.id                AND
+		names.id = meta_data_store.name__id
+	ORDER BY meta_ID, contents.position, contents.offset;
+
 	*/
 
 	Printf("\n*** Data Packfile To Tree Mapping  (PACK2TREE) ***\n")
@@ -593,7 +605,7 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 				return sorted_info[i].offset < sorted_info[j].offset
 			}
 		} else if sorting == "p" {
-			if        sorted_info[i].pack_ID_str < sorted_info[j].pack_ID_str {
+			if sorted_info[i].pack_ID_str < sorted_info[j].pack_ID_str {
 				return true
 			} else if sorted_info[i].pack_ID_str > sorted_info[j].pack_ID_str {
 				return false
@@ -608,7 +620,7 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 			} else {
 				return sorted_info[i].offset < sorted_info[j].offset
 			}
-		}	else {
+		} else {
 			return sorted_info[i].data_blob_str < sorted_info[j].data_blob_str
 		}
 	})
@@ -618,14 +630,14 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 		path := repositoryData.FullPath[repositoryData.BlobToIndex[data.meta_blob]]
 		if options.more_data {
 			Printf("%s %s %s %5d %5d %8d %s/%s\n", data.pack_ID_str, data.data_blob_str, data.meta_blob_str,
-				data.position, data.offset,data.size, path, data.name)
+				data.position, data.offset, data.size, path, data.name)
 		} else {
 			Printf("%s %s %s %s\n", data.pack_ID_str, data.data_blob_str, data.meta_blob_str,
 				path)
 		}
 	}
 
-	if ! options.more_data {
+	if !options.more_data {
 		return
 	}
 
@@ -643,9 +655,9 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 
 		data_slice := data_sets.ToSlice()
 		entry_0 := data_slice[0]
-		offset  := entry_0.offset
-		path    := repositoryData.FullPath[repositoryData.BlobToIndex[entry_0.meta_blob]]
-		name    := entry_0.name
+		offset := entry_0.offset
+		path := repositoryData.FullPath[repositoryData.BlobToIndex[entry_0.meta_blob]]
+		name := entry_0.name
 		for ix, elem := range data_slice[1:] {
 			cpath := repositoryData.FullPath[repositoryData.BlobToIndex[elem.meta_blob]]
 			if elem.offset != offset || cpath != path || name != elem.name {
@@ -919,7 +931,7 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 	for parent, child_set := range children {
 		sum_children += child_set.Cardinality()
 		for child := range child_set.Iter() {
-			if _, ok := parents[child]; ! ok {
+			if _, ok := parents[child]; !ok {
 				parents[child] = mapset.NewSet[IntID]()
 			}
 			parents[child].Add(parent)
@@ -934,7 +946,7 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 				name: repositoryData.FullPath[child],
 			})
 
-			if _, ok := multi_root_stats[pc]; ! ok {
+			if _, ok := multi_root_stats[pc]; !ok {
 				multi_root_stats[pc] = 0
 			}
 			multi_root_stats[pc]++
@@ -962,7 +974,7 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 
 		// sort by descending 'multiplicity', then by 'name'
 		sort.SliceStable(to_be_sorted, func(i, j int) bool {
-			if        to_be_sorted[i].multiplicity > to_be_sorted[j].multiplicity {
+			if to_be_sorted[i].multiplicity > to_be_sorted[j].multiplicity {
 				return true
 			} else if to_be_sorted[i].multiplicity < to_be_sorted[j].multiplicity {
 				return false
@@ -977,13 +989,13 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 				break
 			}
 			Printf("%s %3d %s\n", repositoryData.IndexToBlob[element.meta_blob].String()[:12],
-			element.multiplicity, element.name)
+				element.multiplicity, element.name)
 		}
 	}
 
 	if options.multi_root_stats {
 		Printf("\n*** Multiplicity counts ***\n")
-		for ix:= 1; ix <= max_mrix; ix++ {
+		for ix := 1; ix <= max_mrix; ix++ {
 			if count, ok := multi_root_stats[ix]; ok {
 				Printf("multiplicity %3d appears %5d times\n", ix, count)
 			}
@@ -1024,7 +1036,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 	earliestSnapIDDirectory := map[IntID]string{}
 
 	for meta_blob_int, snapSet := range reverseMetaDir {
-		minTime   := time.Date(3000, 1, 1, 0,0,0,0, time.UTC)
+		minTime := time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
 		minSnapID := ""
 		for snap_id := range snapSet.Iter() {
 			snapTime := repositoryData.SnapMap[snap_id].Time
@@ -1046,8 +1058,10 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 	for parent, child_set := range children {
 		sum_children += child_set.Cardinality()
 		for child := range child_set.Iter() {
-			if child == EMPTY_NODE_ID_TRANSLATED { continue }
-			if _, ok := parents[child]; ! ok {
+			if child == EMPTY_NODE_ID_TRANSLATED {
+				continue
+			}
+			if _, ok := parents[child]; !ok {
 				parents[child] = mapset.NewSet[IntID]()
 			}
 			parents[child].Add(parent)
@@ -1057,10 +1071,10 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 	// step 2: create snap tree roots
 	var class int8
 	for _, sn := range repositoryData.Snaps {
-		meta_blob_int := repositoryData.BlobToIndex[*sn.Tree]
+		meta_blob_int := repositoryData.BlobToIndex[sn.Tree]
 		to_be_sorted = append(to_be_sorted, Printable{
 			meta_blob_int: meta_blob_int,
-			meta_blob_str: (*sn.Tree).String()[:12],
+			meta_blob_str: (sn.Tree).String()[:12],
 			name:          repositoryData.FullPath[meta_blob_int],
 			class:         int8(CLASS_ROOT | CLASS_LEAF),
 			multiplicity:  int16(1),
@@ -1074,7 +1088,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 
 	// step 4: create directory names
 	var (
-		know_snap bool
+		know_snap         bool
 		snap_id, new_path string
 		//grand_child IntID
 	)
@@ -1127,7 +1141,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 		}
 
 		if pc > 1 {
-			if _, ok := multi_root_stats[pc]; ! ok {
+			if _, ok := multi_root_stats[pc]; !ok {
 				multi_root_stats[pc] = 0
 			}
 			multi_root_stats[pc]++
@@ -1170,7 +1184,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 
 	// count MULTI / SINGLE
 	count_single := 0
-	count_multi  := 0
+	count_multi := 0
 	for _, parent_set := range parents {
 		pc := parent_set.Cardinality()
 		if pc == 1 {
@@ -1196,39 +1210,39 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 	Printf("%-25s %10d\n", "count_leaf_directories", count_leaf_directories)
 
 	// sort the lot by ascending meta_blob_id
-	sort.SliceStable(to_be_sorted, func (i, j int) bool {
-			return to_be_sorted[i].meta_blob_str < to_be_sorted[j].meta_blob_str
+	sort.SliceStable(to_be_sorted, func(i, j int) bool {
+		return to_be_sorted[i].meta_blob_str < to_be_sorted[j].meta_blob_str
 	})
 
 	class_str := make([]byte, 4, 4)
 	/*
-	// print first list
-	Printf("\n*** directories sorted by ID ***\n")
-	Printf("%-12s class multi --- directory path ---\n", "meta_blob")
-	for _, elem := range to_be_sorted {
-		for ix := 0; ix < 4; ix++ {
-			class_str[ix] = ' '
-		}
-		if        (elem.class & CLASS_LEAF) == CLASS_LEAF {
-			class_str[3] = 'L'
-		}
-		if        (elem.class & CLASS_ROOT) == CLASS_ROOT {
-			class_str[0] = 'R'
-		} else if (elem.class & CLASS_SINGLE) == CLASS_SINGLE {
-			class_str[2] = 'S'
-		} else if (elem.class & CLASS_MULTI) == CLASS_MULTI {
-			class_str[1] = 'M'
-		}
+		// print first list
+		Printf("\n*** directories sorted by ID ***\n")
+		Printf("%-12s class multi --- directory path ---\n", "meta_blob")
+		for _, elem := range to_be_sorted {
+			for ix := 0; ix < 4; ix++ {
+				class_str[ix] = ' '
+			}
+			if        (elem.class & CLASS_LEAF) == CLASS_LEAF {
+				class_str[3] = 'L'
+			}
+			if        (elem.class & CLASS_ROOT) == CLASS_ROOT {
+				class_str[0] = 'R'
+			} else if (elem.class & CLASS_SINGLE) == CLASS_SINGLE {
+				class_str[2] = 'S'
+			} else if (elem.class & CLASS_MULTI) == CLASS_MULTI {
+				class_str[1] = 'M'
+			}
 
-		Printf("%12s %s %5d %s %s\n", elem.meta_blob_str, string(class_str), elem.multiplicity,
-			repositoryData.SnapMap[elem.EarliestSnap].Time.String()[:19],
-			elem.name)
-	}
+			Printf("%12s %s %5d %s %s\n", elem.meta_blob_str, string(class_str), elem.multiplicity,
+				repositoryData.SnapMap[elem.EarliestSnap].Time.String()[:19],
+				elem.name)
+		}
 	*/
 
 	// sort the lot again, this time by ascending name
-	sort.SliceStable(to_be_sorted, func (i, j int) bool {
-			return to_be_sorted[i].name < to_be_sorted[j].name
+	sort.SliceStable(to_be_sorted, func(i, j int) bool {
+		return to_be_sorted[i].name < to_be_sorted[j].name
 	})
 
 	// print second list
@@ -1289,7 +1303,7 @@ func PrintFullPath(repositoryData *RepositoryData, options *WplDumpOptions) {
 			path = "/./."
 		}
 		Printf("%s %s\n", meta_blob.String()[:12], path)
-		if _, ok := map_path_to_blob[path]; ! ok {
+		if _, ok := map_path_to_blob[path]; !ok {
 			map_path_to_blob[path] = mapset.NewSet[IntID]()
 		}
 		map_path_to_blob[path].Add(meta_blob_int)
@@ -1331,4 +1345,3 @@ func PrintFullPath(repositoryData *RepositoryData, options *WplDumpOptions) {
 		Printf("\n")
 	}
 }
-

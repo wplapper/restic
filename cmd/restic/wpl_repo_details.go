@@ -81,7 +81,7 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-		repo_details_options.Timing)
+		repo_details_options.Timing, false)
 	if err != nil { return err }
 
 	// step 3: decide what to do
@@ -207,7 +207,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 		}
 		count_snaps++
 		size_snaps += size
-		tree_set.Add(*(sn.Tree))
+		tree_set.Add(*sn.Tree)
 		return nil
 	})
 
@@ -374,10 +374,10 @@ repositoryData *RepositoryData) {
 	// map tree root to snap_id
 	double := map[restic.ID]mapset.Set[string]{}
 	for snap_id, sn := range repositoryData.SnapMap {
-		if _, ok := double[*sn.Tree]; ! ok {
-			double[*sn.Tree] = mapset.NewSet[string]()
+		if _, ok := double[sn.Tree]; ! ok {
+			double[sn.Tree] = mapset.NewSet[string]()
 		}
-		double[*sn.Tree].Add(snap_id)
+		double[sn.Tree].Add(snap_id)
 	}
 
 	// check for set length > 1
@@ -393,7 +393,7 @@ repositoryData *RepositoryData) {
 		}
 
 		// collect duplicate snapshots, sort and print
-		owners := make([]*restic.Snapshot, 0, snap_id_set.Cardinality())
+		owners := make([]SnapshotWpl, 0, snap_id_set.Cardinality())
 		for snap_id := range snap_id_set.Iter() {
 			owners = append(owners, repositoryData.SnapMap[snap_id])
 		}
@@ -402,7 +402,7 @@ repositoryData *RepositoryData) {
 		})
 
 		for _, sn := range owners {
-			Printf("%s - %s %s:%s\n", sn.ID().Str(), sn.Time.String()[:19], sn.Hostname,
+			Printf("%s - %s %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime), sn.Hostname,
 				sn.Paths[0])
 		}
 	}

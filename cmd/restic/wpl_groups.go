@@ -28,9 +28,9 @@ type GroupInfoSummary struct {
 }
 
 func makeGroups(repositoryData *RepositoryData) (groups_sorted []snapGroup,
-groups map[snapGroup][]*restic.Snapshot) {
+groups map[snapGroup][]SnapshotWpl) {
 	// step 3: build snap groups by Hostname and filesystem
-	groups = make(map[snapGroup][]*restic.Snapshot)
+	groups = make(map[snapGroup][]SnapshotWpl)
 	for _, sn := range repositoryData.Snaps {
 		hostname := sn.Hostname
 		fileSystem := sn.Paths[0]
@@ -58,7 +58,7 @@ groups map[snapGroup][]*restic.Snapshot) {
 	return groups_sorted, groups
 }
 
-func summarizeGroup(groups_sorted []snapGroup, groups map[snapGroup][]*restic.Snapshot,
+func summarizeGroup(groups_sorted []snapGroup, groups map[snapGroup][]SnapshotWpl,
 repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
 	// extract size / count information frogroups m these groups
 	timings := make(map[snapGroup]float64)
@@ -69,7 +69,7 @@ repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
 		inodes_in_group := mapset.NewSet[uint64]()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
-			id_ptr := Ptr2ID(*sn.ID(), repositoryData)
+			id_ptr := Ptr2ID(sn.ID, repositoryData)
 			data_blobs_in_group = data_blobs_in_group.Union(repositoryData.MetaDirMap[id_ptr])
 			for meta_blob := range repositoryData.MetaDirMap[id_ptr].Iter() {
 				for _, meta := range repositoryData.DirectoryMap[meta_blob] {
@@ -110,7 +110,7 @@ repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
 func MakeSnapGroups(ctx context.Context, repo *repository.Repository,
 repositoryData *RepositoryData) (groupInfo GroupInfo) {
   // generate groups based on hostname and filesystems
-  groupInfo.snap_groups = map[snapGroup][]*restic.Snapshot{}
+  groupInfo.snap_groups = map[snapGroup][]SnapshotWpl{}
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(ctx, repo, id)
 		if err != nil {
@@ -121,7 +121,10 @@ repositoryData *RepositoryData) (groupInfo GroupInfo) {
 		hostname := sn.Hostname
     for _, path := range sn.Paths {
       group := snapGroup{Hostname: hostname, FileSystem: path}
-      groupInfo.snap_groups[group] = append(groupInfo.snap_groups[group], sn)
+      groupInfo.snap_groups[group] = append(groupInfo.snap_groups[group], SnapshotWpl{
+				ID: *sn.ID(), Hostname: sn.Hostname, Paths: sn.Paths, Time: sn.Time,
+				Tree: *sn.Tree,
+			})
     }
 		return nil
 	})
@@ -159,7 +162,7 @@ repositoryData *RepositoryData) (groupInfo GroupInfo) {
   for group, group_slice := range groupInfo.snap_groups {
     group_index := groupInfo.group_numbers[group]
     for _, sn := range group_slice {
-      groupInfo.map_snap_2_ix[sn.ID().Str()] = group_index
+      groupInfo.map_snap_2_ix[sn.ID.Str()] = group_index
     }
   }
   return groupInfo

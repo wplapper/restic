@@ -95,7 +95,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 			time.Now().Sub(start).Seconds())
 	}
 
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing, false)
 	if err != nil { return err }
 
 	if overview_options.Age {
@@ -199,7 +199,7 @@ func ShowAge(repositoryData *RepositoryData, options OverviewOptions) {
 			continue
 		}
 
-		Printf("%s %s %3d days old %s:%s\n", sn.ID().Str(), sn.Time.String()[:19],
+		Printf("%s %s %3d days old %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime),
 			diff, sn.Hostname, sn.Paths[0])
 	}
 }
@@ -251,7 +251,8 @@ options OverviewOptions) error {
 
 		var repositoryData RepositoryData
 		init_repositoryData(&repositoryData)
-		err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing)
+		err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
+			overview_options.timing, false)
 		if err != nil {
 			return err
 		}

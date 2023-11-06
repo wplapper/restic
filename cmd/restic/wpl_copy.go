@@ -91,12 +91,12 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 	}
 
 	// load snapshots
-	_, srcSnapMap, err := GatherAllSnapshots(src_gopts, ctx, srcRepo)
+	_, srcSnapMap, err := GatherAllSnapshots(src_gopts, ctx, srcRepo, false)
 	if err != nil {
 		Printf("GatherAllSnapshots source - %v\n", err)
 		return err
 	}
-	_, dstSnapMap, err := GatherAllSnapshots(dst_gopts, ctx, dstRepo)
+	_, dstSnapMap, err := GatherAllSnapshots(dst_gopts, ctx, dstRepo, false)
 	if err != nil {
 		Printf("GatherAllSnapshots target - %v\n", err)
 		return err

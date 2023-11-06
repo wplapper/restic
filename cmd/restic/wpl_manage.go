@@ -130,7 +130,7 @@ func step_manage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		Verboseff("Repository is %s\n", globalOptions.Repo)
 
 		// extract snap_ids from repository which are old enough to be removed
-		_, snap_map, err := GatherAllSnapshots(gopts, ctx, repo)
+		_, snap_map, err := GatherAllSnapshots(gopts, ctx, repo, false)
 		if err != nil {
 			Printf("GatherAllSnapshots failed with '%v'\n", err)
 			return err
