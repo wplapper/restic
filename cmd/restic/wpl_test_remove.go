@@ -9,12 +9,12 @@ package main
 import (
 	// system
 	"context"
-	"errors"
-	"sort"
-	"time"
-	"strings"
-	"os"
 	"encoding/json"
+	"errors"
+	"os"
+	"sort"
+	"strings"
+	"time"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -29,9 +29,9 @@ import (
 type TRemoveOptions struct {
 	Cutoff     int
 	Snaps      []string
-  Detail     int
+	Detail     int
 	Timing     bool
-	MemoryUse bool
+	MemoryUse  bool
 	Lost       bool
 	Repacked   bool
 	MultiRepo  string
@@ -42,7 +42,7 @@ var tremoveOptions TRemoveOptions
 
 var cmdTRemove = &cobra.Command{
 	Use:   "wpl-remove [flags]",
-	Short: "test temove one or more snapshots from the repository",
+	Short: "test remove one or more snapshots from the repository",
 	Long: `test remove one or more snapshots from the repository.
 Print repackaging information.
 
@@ -50,7 +50,7 @@ OPTIONS
 =======
   - Cutoff: defaults to 270 days
   - Detail: prints file details of those blobs which are about to be removed
-  - Lost: checks if list files get replaced by newer versions of the file
+  - Lost:   checks if list files get replaced by newer versions of the file
   - repack: print lots about blobs to be Repacked
   - Timing: give some timings of the various subsections of code
 
@@ -68,10 +68,10 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
 	cmdRoot.AddCommand(cmdTRemove)
 	f := cmdTRemove.Flags()
-	f.IntVarP(&tremoveOptions.Cutoff, "Cutoff", "C", 270, "Cutoff Snaps which are older than <Cutoff> days")
+	f.IntVarP(&tremoveOptions.Cutoff, "cutoff", "C", 270, "cutoff Snaps which are older than <Cutoff> days")
 	f.StringVarP(&tremoveOptions.MultiRepo, "multi-repo", "M", "", "base part of repositories local or onedrive")
 	f.StringVarP(&tremoveOptions.ConfigFile, "config-file", "O", "/home/wplapper/restic/backup_config.json", "json config file")
-	f.CountVarP(&tremoveOptions.Detail, "Detail", "D", "print dir/file details")
+	f.CountVarP(&tremoveOptions.Detail, "detail", "D", "print dir/file details")
 	f.BoolVarP(&tremoveOptions.Lost, "Lost", "L", false, "print Lost file details")
 	f.BoolVarP(&tremoveOptions.Repacked, "repack", "R", false, "more info on repacks")
 	f.BoolVarP(&tremoveOptions.Timing, "Timing", "T", false, "produce timings")
@@ -108,27 +108,28 @@ func CalculatePruneSize(selected []SnapshotWpl, repositoryData *RepositoryData,
 	// step 1: find all meta- and data-blobs in given 'selected' snapshot
 	all_other_snapshots := allSnapsAsSet.Clone() // = all_snapshots - selected
 	for _, sn := range selected {
-		all_other_snapshots.Remove(sn.ID.Str())
+		all_other_snapshots.Remove(sn.ID.String())
 	}
 
 	// continually add to 'used_blobs' while using 'all_other_snapshots'.
 	// all these blobs are still in use
-	used_blobs := mapset.NewSet[IntID]()
+	used_blobs := mapset.NewThreadUnsafeSet[IntID]()
 	for snap_id := range all_other_snapshots.Iter() {
-		id_ptr := Ptr2ID(repositoryData.SnapMap[snap_id].ID, repositoryData)
-		for meta_blob := range repositoryData.MetaDirMap[id_ptr].Iter() {
+		id := repositoryData.SnapMap[snap_id].ID
+		for meta_blob := range repositoryData.MetaDirMap[id].Iter() {
 			used_blobs.Add(meta_blob)
 			for _, meta := range repositoryData.DirectoryMap[meta_blob] {
-				used_blobs.Append(meta.content ...)
+				used_blobs.Append(meta.content...)
 			}
 		}
 	}
 
 	// gather all blobs and their total size
-	all_blobs := mapset.NewSet[IntID]()
+	all_blobs := mapset.NewThreadUnsafeSet[IntID]()
 	for _, ih := range repositoryData.IndexHandle {
 		all_blobs.Add(ih.blob_index)
 	}
+	all_blobs.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
 
 	// define the unused blobs
 	unused_blobs := all_blobs.Difference(used_blobs)
@@ -181,11 +182,11 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 
 			dir_name := repositoryData.FullPath[cmp_ix.meta_blob]
 			if reverse_fullpath[dir_name].Cardinality() > 1 {
-				filename = repositoryData.FullPath[cmp_ix.meta_blob][2:] + "/" + name
+				filename = repositoryData.FullPath[cmp_ix.meta_blob] + "/" + name
 				repl = "ok"
 			} else {
 				// no replacement available
-				filename = repositoryData.FullPath[cmp_ix.meta_blob][2:] + "/" + name
+				filename = repositoryData.FullPath[cmp_ix.meta_blob] + "/" + name
 				repl = "--"
 			}
 			deleted_files[filename] = file_info{size: size, repl: repl}
@@ -202,7 +203,7 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 
 	sort.Strings(deleted_filenames_to_sort)
 	header_printed := false
-	found_files    := false
+	found_files := false
 	for _, filename := range deleted_filenames_to_sort {
 		comp := deleted_files[filename]
 		size := comp.size
@@ -210,22 +211,22 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 		if size > 0 {
 			found_files = true
 		}
-		if ! Lost {
+		if !Lost {
 			if size > 0 {
-				if ! header_printed {
+				if !header_printed {
 					header_printed = true
 					Printf("\n%10s %s %s\n", "size", "rp", "filename")
 				}
 				Printf("%10d %s %s\n", size, repl, filename)
 			} else {
-				if ! header_printed {
+				if !header_printed {
 					header_printed = true
 					Printf("\n%10s %s %s\n", "size", "rp", "filename")
 				}
 				Printf("%13s %s\n", "", filename)
 			}
 		} else if size > 0 && repl == "--" && Lost {
-			if ! header_printed {
+			if !header_printed {
 				header_printed = true
 				Printf("\n%10s %s %s\n", "size", "rp", "filename")
 			}
@@ -233,14 +234,14 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 		}
 	}
 
-	if ! header_printed && Lost && found_files {
+	if !header_printed && Lost && found_files {
 		Printf("  All removed files have a newer version in the repository.\n")
 	}
 }
 
-// print raw, but offset is ignored, so sorting IS different
+// print raw, but offset is ignored, so sorting is different
 func Print_raw(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
-data_map map[IntID]mapset.Set[CompIddFile]) {
+	data_map map[IntID]mapset.Set[CompIddFile]) {
 	// gather some data for each of the 'unused_blobs'
 	// type (tree/data), size (in bytes)
 	// map data_blobs to meta_blob and position, hence fullpath plus basename
@@ -347,7 +348,7 @@ func Print_very_raw(repositoryData *RepositoryData, unused_blobs mapset.Set[IntI
 					meta_blob: meta_blob, position: full_info.position, offset: full_info.offset,
 					blob_str:  blob_ID.String()[:12],
 					mblob_str: full_info.meta_blob.String()[:12],
-					path:      repositoryData.FullPath[meta_blob] + "/" +
+					path: repositoryData.FullPath[meta_blob] + "/" +
 						repositoryData.DirectoryMap[meta_blob][full_info.position].name,
 					pfile_str: pack_ID_str,
 				}
@@ -355,7 +356,7 @@ func Print_very_raw(repositoryData *RepositoryData, unused_blobs mapset.Set[IntI
 		} else if ih.Type == restic.TreeBlob {
 			raw_blob = BlobInfo{blob: blob,
 				Type: ih.Type, mblob_str: blob_ID.String()[:12],
-				path: repositoryData.FullPath[blob] + "/",
+				path:      repositoryData.FullPath[blob] + "/",
 				pfile_str: pack_ID_str,
 			}
 		}
@@ -390,8 +391,8 @@ func Print_very_raw(repositoryData *RepositoryData, unused_blobs mapset.Set[IntI
 }
 
 func PrintRepackInfo(repositoryData *RepositoryData,
-repack_blobs_meta mapset.Set[IntID], repack_blobs_data mapset.Set[IntID],
-selected []SnapshotWpl) {
+	repack_blobs_meta mapset.Set[IntID], repack_blobs_data mapset.Set[IntID],
+	selected []SnapshotWpl) {
 
 	type SortPath struct {
 		ID_str string
@@ -399,9 +400,11 @@ selected []SnapshotWpl) {
 		depth  int16
 	}
 
-	root_set := mapset.NewSet[IntID]()
-	for _,sn := range selected {
-		root_set.Add(repositoryData.BlobToIndex[sn.Tree])
+	root_set := mapset.NewThreadUnsafeSet[IntID]()
+	for _, sn := range selected {
+		if sn.Tree != MasterRepoID {
+			root_set.Add(repositoryData.BlobToIndex[sn.Tree])
+		}
 	}
 
 	pack_info := GetPackIDs(repositoryData)
@@ -415,8 +418,6 @@ selected []SnapshotWpl) {
 		if lcomp <= 2 {
 			out = "/"
 			location_depth2 = append(location_depth2, int32(len(output_slice)))
-		} else {
-			out = out[2:]
 		}
 		output_slice = append(output_slice, SortPath{path: out, depth: int16(lcomp),
 			ID_str: repositoryData.IndexToBlob[meta_blob].String()[:12]})
@@ -466,19 +467,19 @@ selected []SnapshotWpl) {
 			meta_blob:     data_sett.meta_blob,
 			data_blob:     dblob,
 			position:      data_sett.position,
-			offset:	       data_sett.offset,
+			offset:        data_sett.offset,
 			meta_blob_str: data_sett.meta_blob_str,
 			data_blob_str: data_sett.data_blob_str,
-			name:          repositoryData.FullPath[repositoryData.BlobToIndex[data_sett.meta_blob]] +
-				             "/" + data_sett.name,
-			multi:         multi,
-			pack_ID_str:   repositoryData.IndexToBlob[pack_info[data_blob]].String()[:12],
-			size:          repositoryData.IndexHandle[dblob].size,
+			name: repositoryData.FullPath[repositoryData.BlobToIndex[data_sett.meta_blob]] +
+				"/" + data_sett.name,
+			multi:       multi,
+			pack_ID_str: repositoryData.IndexToBlob[pack_info[data_blob]].String()[:12],
+			size:        repositoryData.IndexHandle[dblob].size,
 		})
 	}
 
 	sort.SliceStable(output_slice2, func(i, j int) bool {
-		if        output_slice2[i].meta_blob_str < output_slice2[j].meta_blob_str {
+		if output_slice2[i].meta_blob_str < output_slice2[j].meta_blob_str {
 			return true
 		} else if output_slice2[i].meta_blob_str > output_slice2[j].meta_blob_str {
 			return false
@@ -490,9 +491,9 @@ selected []SnapshotWpl) {
 			return true
 		} else if output_slice2[i].position > output_slice2[j].position {
 			return false
-		} else if output_slice2[i].offset   < output_slice2[j].offset {
+		} else if output_slice2[i].offset < output_slice2[j].offset {
 			return true
-		} else if output_slice2[i].offset   > output_slice2[j].offset {
+		} else if output_slice2[i].offset > output_slice2[j].offset {
 			return false
 		} else {
 			return output_slice2[i].pack_ID_str < output_slice2[j].pack_ID_str
@@ -506,14 +507,6 @@ selected []SnapshotWpl) {
 			elem.data_blob_str, elem.meta_blob_str, elem.position, elem.offset,
 			elem.size, elem.multi, elem.name)
 	}
-
-	// reset for GC
-	result = nil
-	full_map = nil
-	root_set = nil
-	pack_info = nil
-	output_slice = nil
-	output_slice2 = nil
 }
 
 func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
@@ -521,12 +514,12 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 
 	// step 1: find packs which are going to be deleted (partial/full)
 	//         map 'unused_blobs' back to their packfiles
-	pack_info    := GetPackIDs(repositoryData)
+	pack_info := GetPackIDs(repositoryData)
 	delete_packs := map[IntID]mapset.Set[IntID]{}
 	for blob := range unused_blobs.Iter() {
 		pack_index := pack_info[blob]
 		if _, ok := delete_packs[pack_index]; !ok {
-			delete_packs[pack_index] = mapset.NewSet[IntID]()
+			delete_packs[pack_index] = mapset.NewThreadUnsafeSet[IntID]()
 		}
 		delete_packs[pack_index].Add(blob)
 	}
@@ -535,19 +528,19 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 	blobs_per_packID := MakeBlobsPerPackID(repositoryData)
 
 	var (
-	  count_del_meta,      size_del_meta,     count_del_data,     size_del_data     int
-	  count_rep_meta,      size_rep_meta,     count_rep_data,     size_rep_data     int
-		count_partial_meta,  size_partial_meta, count_partial_data, size_partial_data int
-		count_delete_meta,   size_delete_meta,  count_delete_data,  size_delete_data  int
-		pack_del_meta,       pack_del_data,     pack_rep_meta,      pack_rep_data     int
+		count_del_meta, size_del_meta, count_del_data, size_del_data                 int
+		count_rep_meta, size_rep_meta, count_rep_data, size_rep_data                 int
+		count_partial_meta, size_partial_meta, count_partial_data, size_partial_data int
+		count_delete_meta, size_delete_meta, count_delete_data, size_delete_data     int
+		pack_del_meta, pack_del_data, pack_rep_meta, pack_rep_data                   int
 	)
 
 	// step 3: count in 'delete_packs'
 	count_del_meta, size_del_meta, count_del_data, size_del_data = CountAndSizesMap(
 		delete_packs, repositoryData)
-	repack_blobs_meta := mapset.NewSet[IntID]()
-	repack_blobs_data := mapset.NewSet[IntID]()
-	repackPacks       := mapset.NewSet[IntID]()
+	repack_blobs_meta := mapset.NewThreadUnsafeSet[IntID]()
+	repack_blobs_data := mapset.NewThreadUnsafeSet[IntID]()
+	repackPacks := mapset.NewThreadUnsafeSet[IntID]()
 	for pack_index := range delete_packs {
 		if delete_packs[pack_index].Cardinality() != blobs_per_packID[pack_index].PackBlobSet.Cardinality() {
 			repackPacks.Add(pack_index)
@@ -589,13 +582,13 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 
 	// sum up
 	count_partial_blobs := count_partial_meta + count_partial_data
-	size_partial_blobs  := size_partial_meta  + size_partial_data
-	count_repack_blobs  := count_rep_meta     + count_rep_data
-	size_repack_blobs   := size_rep_meta      + size_rep_data
+	size_partial_blobs := size_partial_meta + size_partial_data
+	count_repack_blobs := count_rep_meta + count_rep_data
+	size_repack_blobs := size_rep_meta + size_rep_data
 
-	count_delete_blobs  := count_delete_meta  + count_delete_data
-	size_delete_blobs   := size_delete_meta   + size_delete_data
-	count_delete_packs  := pack_del_meta      + pack_del_data
+	count_delete_blobs := count_delete_meta + count_delete_data
+	size_delete_blobs := size_delete_meta + size_delete_data
+	count_delete_packs := pack_del_meta + pack_del_data
 
 	// report
 	Printf("\nstraight delete %10d blobs %7d packs %10.3f MiB\n",
@@ -613,12 +606,12 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 	Printf("data    repack  %10d blobs %7d packs %10.3f MiB\n",
 		count_rep_data, pack_rep_data, float64(size_rep_data)/ONE_MEG)
 	Printf("repack          %10d blobs %7d packs %10.3f MiB\n",
-		count_repack_blobs, len(delete_packs) - count_delete_packs,
+		count_repack_blobs, len(delete_packs)-count_delete_packs,
 		float64(size_repack_blobs)/ONE_MEG)
 
 	Printf("\ntotal prune     %10d blobs %7s       %10.3f MiB\n",
-		count_partial_blobs + count_delete_blobs, " ",
-		float64(size_partial_blobs + size_delete_blobs)/ONE_MEG)
+		count_partial_blobs+count_delete_blobs, " ",
+		float64(size_partial_blobs+size_delete_blobs)/ONE_MEG)
 
 	if Repacked {
 		PrintRepackInfo(repositoryData, repack_blobs_meta, repack_blobs_data, selected)
@@ -629,30 +622,22 @@ func SizePrune(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 		count := 1
 		for ID := range repackPacks.Iter() {
 			Printf("%s ", repositoryData.IndexToBlob[ID].String()[:12])
-			if count % 8 == 0 {
+			if count%8 == 0 {
 				Printf("\n")
 			}
 			count++
 		}
 		Printf("\n")
 	}
-
-	// for GC
-	delete_packs = nil
-	repack_blobs_meta = nil
-	repack_blobs_data = nil
-	blobs_per_packID = nil
-	repackPacks = nil
-	pack_info = nil
 }
 
 func DoOneRepository(ctx context.Context, gopts GlobalOptions,
-options TRemoveOptions, snapList mapset.Set[string]) error {
+	options TRemoveOptions, snapList mapset.Set[string]) error {
 	// local vars
 	Cutoff := options.Cutoff
 	Detail := options.Detail
 	Repacked := options.Repacked
-	Lost     := tremoveOptions.Lost
+	Lost := tremoveOptions.Lost
 	if Lost {
 		Detail = 1
 	}
@@ -680,11 +665,11 @@ options TRemoveOptions, snapList mapset.Set[string]) error {
 		// move snap_time clock back to midnight
 		sn_year, sn_month, sn_day := sn.Time.Date()
 		takeIt := false
-		days = int(now.Sub(time.Date(sn_year, sn_month, sn_day, 0,0,0,0, time.UTC)).Hours() / 24)
+		days = int(now.Sub(time.Date(sn_year, sn_month, sn_day, 0, 0, 0, 0, time.UTC)).Hours() / 24)
 		if snapList == nil {
 			takeIt = days >= Cutoff
 		} else {
-		 takeIt = snapList.Contains(sn.ID.Str())
+			takeIt = snapList.Contains(sn.ID.Str())
 		}
 
 		if takeIt {
@@ -692,7 +677,7 @@ options TRemoveOptions, snapList mapset.Set[string]) error {
 				days, sn.Hostname, sn.Paths[0], sn.Time.Format(time.DateTime))
 			snaps_to_be_deleted = append(snaps_to_be_deleted, sn)
 		}
-		allSnaps = append(allSnaps, sn.ID.Str())
+		allSnaps = append(allSnaps, sn.ID.String())
 	}
 
 	if len(snaps_to_be_deleted) == 0 {
@@ -704,13 +689,14 @@ options TRemoveOptions, snapList mapset.Set[string]) error {
 		timeMessage(tremoveOptions.MemoryUse, "%-30s %10.1f seconds\n",
 			"selected all snapshots", time.Since(start).Seconds())
 	}
-	allSnapsAsSet := mapset.NewSet(allSnaps...)
+	allSnapsAsSet := mapset.NewThreadUnsafeSet(allSnaps...)
 	Printf("++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n")
 
 	// calculate data_map once
 	var data_map map[IntID]mapset.Set[CompIddFile]
 	if Detail > 0 {
 		data_map = map_data_blob_file(&repositoryData)
+		//Printf("len(data_map) = %7d\n", len(data_map))
 	}
 
 	// step 6.1: loop over the snap_id's to be removed individually
@@ -746,9 +732,9 @@ func DoMultiRepository(ctx context.Context, gopts GlobalOptions, options TRemove
 	}
 
 	var (
-		err error
+		err         error
 		json_config map[string]map[string]StringSlice
-		ok bool
+		ok          bool
 	)
 
 	// read json from file
@@ -766,7 +752,7 @@ func DoMultiRepository(ctx context.Context, gopts GlobalOptions, options TRemove
 
 	// we need the target
 	_, ok = json_config["BASE_CONFIG"][options.MultiRepo]
-	if ! ok {
+	if !ok {
 		Printf("Can't currently deal with other base_parts '%s'\n", options.MultiRepo)
 		return errors.New("Can't currently deal with other multiple repositories")
 	}
@@ -783,31 +769,37 @@ func DoMultiRepository(ctx context.Context, gopts GlobalOptions, options TRemove
 
 // Do one Repository with given snapshots
 func DoOneRepositoryWithSnaps(ctx context.Context, gopts GlobalOptions,
-options TRemoveOptions, args []string) error {
+	options TRemoveOptions, args []string) error {
 
 	saveQuiet := globalOptions.Quiet
 	saveVerbo := globalOptions.verbosity
 	globalOptions.Quiet = true
 	globalOptions.verbosity = 0
 	repo, err := OpenRepository(ctx, gopts)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
-	_, snapMap, err := GatherAllSnapshots(gopts, ctx, repo, false)
-	if err != nil { return err }
+	_, snapMap, err := GatherAllSnapshots(ctx, repo, false)
+	if err != nil {
+		return err
+	}
 	repo.Close()
 	globalOptions.Quiet = saveQuiet
 	globalOptions.verbosity = saveVerbo
 
 	// all Snaps in repo as Set
-	allSnapSet := mapset.NewSet[string]()
+	allSnapSet := mapset.NewThreadUnsafeSet[string]()
+	allSnapsShort := mapset.NewThreadUnsafeSet[string]()
 	for snap_id := range snapMap {
 		allSnapSet.Add(snap_id)
+		allSnapsShort.Add(snap_id[:8])
 	}
 
 	// check for existence in allSnapIDs
-	toBeConsidered := mapset.NewSet[string]()
+	toBeConsidered := mapset.NewThreadUnsafeSet[string]()
 	for _, snap_id := range args {
-		if allSnapSet.Contains(snap_id) {
+		if allSnapsShort.Contains(snap_id) {
 			toBeConsidered.Add(snap_id)
 		}
 	}
@@ -816,17 +808,12 @@ options TRemoveOptions, args []string) error {
 		Printf("No valid Snaps found. Terminating!\n")
 		return errors.New("No valid Snaps found. Terminating!")
 	}
-	//Printf("toBeConsidered %s\n", toBeConsidered.String())
 	DoOneRepository(ctx, gopts, tremoveOptions, toBeConsidered)
-
-	// for GC
-	toBeConsidered = nil
-	allSnapSet = nil
 	return nil
 }
 
 func CountAndSizesMap(inputMap map[IntID]mapset.Set[IntID], repositoryData *RepositoryData) (
-cm int, sm int, cd int, sd int) {
+	cm int, sm int, cd int, sd int) {
 
 	//cm, cd, sm, sd = 0,0,0,0
 	for _, dataSet := range inputMap {
@@ -845,7 +832,7 @@ cm int, sm int, cd int, sd int) {
 }
 
 func CountAndSizesSet(inputSet mapset.Set[IntID], repositoryData *RepositoryData,
-cm *int, sm *int, cd *int, sd *int) {
+	cm *int, sm *int, cd *int, sd *int) {
 
 	for metaBlob := range inputSet.Iter() {
 		ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[metaBlob]]

@@ -142,7 +142,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	}
 
 	// count all inodes, don't cross filesystems
-	inodeSet := mapset.NewSet[DeviceAndInode]()
+	inodeSet := mapset.NewThreadUnsafeSet[DeviceAndInode]()
 	for _, file_list := range repositoryData.DirectoryMap {
 		for _, meta := range file_list {
 			if meta.Type == "file" {

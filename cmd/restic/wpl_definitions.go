@@ -23,9 +23,6 @@ type SnapshotWpl struct {
 	Time     time.Time `json:"time"`
 	Paths    []string  `json:"paths"`
 	Hostname string    `json:"hostname,omitempty"`
-	Username string    `json:"username,omitempty"`
-	UID      uint32    `json:"uid,omitempty"`
-	GID      uint32    `json:"gid,omitempty"`
 	Tree     restic.ID
 }
 
@@ -66,7 +63,7 @@ type RepositoryData struct {
 	SnapMap       map[string]SnapshotWpl
 	DirectoryMap  map[IntID][]BlobFile2
 	FullPath      map[IntID]string                 // directory ID -> full directory path
-	MetaDirMap    map[*restic.ID]mapset.Set[IntID] // flattened tree structure
+	MetaDirMap    map[restic.ID]mapset.Set[IntID] // flattened tree structure
 	IndexHandle   map[restic.ID]Index_Handle
 
 	// the next two entries manage the restic.ID to IntID relationships
@@ -74,8 +71,8 @@ type RepositoryData struct {
 	IndexToBlob   []restic.ID
 
 	// more data on demand
-	roots                 []RootOfTree
-	repo                  *repository.Repository
+	roots         []RootOfTree
+	repo          *repository.Repository
 }
 
 type CompIndexOffet struct {

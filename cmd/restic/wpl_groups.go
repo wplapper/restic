@@ -65,13 +65,12 @@ repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
 	groupResults = make(map[snapGroup]GroupInfoSummary)
 	for _, group := range groups_sorted {
 		start_g := time.Now()
-		data_blobs_in_group := mapset.NewSet[IntID]()
-		inodes_in_group := mapset.NewSet[uint64]()
+		data_blobs_in_group := mapset.NewThreadUnsafeSet[IntID]()
+		inodes_in_group := mapset.NewThreadUnsafeSet[uint64]()
 		for _, sn := range groups[group] {
 			// step trough the list of meta_blobs and collect data
-			id_ptr := Ptr2ID(sn.ID, repositoryData)
-			data_blobs_in_group = data_blobs_in_group.Union(repositoryData.MetaDirMap[id_ptr])
-			for meta_blob := range repositoryData.MetaDirMap[id_ptr].Iter() {
+			data_blobs_in_group = data_blobs_in_group.Union(repositoryData.MetaDirMap[sn.ID])
+			for meta_blob := range repositoryData.MetaDirMap[sn.ID].Iter() {
 				for _, meta := range repositoryData.DirectoryMap[meta_blob] {
 					if meta.Type == "file" {
 						inodes_in_group.Add(meta.inode)

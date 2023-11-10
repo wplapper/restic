@@ -78,14 +78,13 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 		return err
 	}
 
-	repoHistory := mapset.NewSet[IntID]()
+	repoHistory := mapset.NewThreadUnsafeSet[IntID]()
 	lastIndex := len(repositoryData.Snaps) - 1
 	all := historyOptions.All
 	for snap_ix, sn := range repositoryData.Snaps {
 		if all {
-			thisSnap := mapset.NewSet[IntID]()
-			id_ptr := Ptr2ID(sn.ID, &repositoryData)
-			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
+			thisSnap := mapset.NewThreadUnsafeSet[IntID]()
+			for metaBlobInt := range repositoryData.MetaDirMap[sn.ID].Iter() {
 				thisSnap.Add(metaBlobInt)
 				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
 					thisSnap.Append(meta.content ...)
@@ -109,17 +108,15 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 				repoHistory.Add(metaBlobInt)
 			}
 		} else if snap_ix < lastIndex {
-			id_ptr := Ptr2ID(sn.ID, &repositoryData)
-			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
+			for metaBlobInt := range repositoryData.MetaDirMap[sn.ID].Iter() {
 				repoHistory.Add(metaBlobInt)
 				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
 					repoHistory.Append(meta.content ...)
 				}
 			}
 		} else {
-			thisSnap := mapset.NewSet[IntID]()
-			id_ptr := Ptr2ID(sn.ID, &repositoryData)
-			for metaBlobInt := range repositoryData.MetaDirMap[id_ptr].Iter() {
+			thisSnap := mapset.NewThreadUnsafeSet[IntID]()
+			for metaBlobInt := range repositoryData.MetaDirMap[sn.ID].Iter() {
 				thisSnap.Add(metaBlobInt)
 				for _, meta := range repositoryData.DirectoryMap[metaBlobInt] {
 					thisSnap.Append(meta.content ...)

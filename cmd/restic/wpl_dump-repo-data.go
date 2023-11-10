@@ -191,7 +191,6 @@ func PrintIndexHandles(repositoryData *RepositoryData, options *WplDumpOptions) 
 		Printf("%s  %s  %s %8d %9d\n", entry.blob_ID_str, entry.pack_ID_str,
 			entry.Type, entry.Length, entry.UncompressedLength)
 	}
-	to_be_sorted = nil
 }
 
 type PackFilesOnly struct {
@@ -205,7 +204,7 @@ func PrintPackfilesIndex(repositoryData *RepositoryData, options *WplDumpOptions
 	repo restic.Repository, ctx context.Context) {
 
 	// build a map of packfile -> blob mapping
-	packfiles_set := mapset.NewSet[PackFilesOnly]()
+	packfiles_set := mapset.NewThreadUnsafeSet[PackFilesOnly]()
 	packfiles_counts := make(map[restic.ID]int)
 	var ptype string
 	for _, ih := range repositoryData.IndexHandle {
@@ -253,8 +252,6 @@ func PrintPackfilesIndex(repositoryData *RepositoryData, options *WplDumpOptions
 		Printf("%s %9d %s %6d %v\n", fullID, repo_packs[ID], entry.Type,
 			packfiles_counts[ID], checked_packs[ID_str])
 	}
-	packfiles_set = nil
-	packfiles_counts = nil
 }
 
 // print meta_dir mapping - reverse: create map meta_blobs -> snapshots
@@ -269,7 +266,7 @@ func PrintMetaDirMapReverse(repositoryData *RepositoryData,
 		for blob_int := range blob_set.Iter() {
 			blob := repositoryData.IndexToBlob[blob_int]
 			if _, ok := meta_blob_2_snap[blob]; !ok {
-				meta_blob_2_snap[blob] = mapset.NewSet[string]()
+				meta_blob_2_snap[blob] = mapset.NewThreadUnsafeSet[string]()
 			}
 			meta_blob_2_snap[blob].Add(id)
 		}
@@ -311,8 +308,6 @@ func PrintMetaDirMapReverse(repositoryData *RepositoryData,
 		}
 		Printf("\n")
 	}
-	meta_blob_2_snap = nil
-	to_be_sorted = nil
 }
 
 // map data blob to containing meta blob, position and offset
@@ -320,7 +315,7 @@ func PrintMetaDirMapReverse(repositoryData *RepositoryData,
 func PrintContentIndex(repositoryData *RepositoryData, options *WplDumpOptions) {
 	// create map_data to contain triple(meta_blob, position, offset)
 
-	data_map_org := mapset.NewSet[CompIndexOffet]()
+	data_map_org := mapset.NewThreadUnsafeSet[CompIndexOffet]()
 	for _, cmp_ix_set := range MakeFullContentsMap2(repositoryData) {
 		for cmp_ix := range cmp_ix_set.Iter() {
 			data_map_org.Add(cmp_ix)
@@ -408,14 +403,13 @@ func PrintFileData(repositoryData *RepositoryData, options *WplDumpOptions) {
 			}
 		}
 	}
-	meta_blob_keys = nil
 }
 
 // print the topology tree - debug function TREE
 func PrintTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 	// we need to sort the snapshot, because they contain the root of the
 	// individual trees
-	seen := mapset.NewSet(EMPTY_NODE_ID_TRANSLATED)
+	seen := mapset.NewThreadUnsafeSet(EMPTY_NODE_ID_TRANSLATED)
 	to_be_sorted := repositoryData.Snaps[:]
 	sort.Slice(to_be_sorted, func(i, j int) bool {
 		if to_be_sorted[i].Hostname < to_be_sorted[j].Hostname {
@@ -443,8 +437,6 @@ func PrintTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 			sn.Hostname, sn.Paths[0])
 		PrintSubTree(repositoryData.BlobToIndex[root], root, seen, repositoryData, options, 0)
 	}
-	seen = nil
-	to_be_sorted = nil
 }
 
 func PrintSubTree(blob IntID, ID restic.ID, seen mapset.Set[IntID],
@@ -527,7 +519,6 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 		ix_repo_data.pack__id = packfiles.id                AND
 		names.id = meta_data_store.name__id
 	ORDER BY meta_ID, contents.position, contents.offset;
-
 	*/
 
 	Printf("\n*** Data Packfile To Tree Mapping  (PACK2TREE) ***\n")
@@ -551,7 +542,7 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 				continue
 			}
 			if _, ok := pack_2_blob[pack_ID]; !ok {
-				pack_2_blob[pack_ID] = mapset.NewSet[restic.ID]()
+				pack_2_blob[pack_ID] = mapset.NewThreadUnsafeSet[restic.ID]()
 			}
 			pack_2_blob[pack_ID].Add(ID)
 		}
@@ -667,7 +658,6 @@ func PrintPackTree(repositoryData *RepositoryData, options *WplDumpOptions) {
 			}
 		}
 	}
-	full_contents_map = nil
 }
 
 // map debugging index to debugging name
@@ -932,7 +922,7 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 		sum_children += child_set.Cardinality()
 		for child := range child_set.Iter() {
 			if _, ok := parents[child]; !ok {
-				parents[child] = mapset.NewSet[IntID]()
+				parents[child] = mapset.NewThreadUnsafeSet[IntID]()
 			}
 			parents[child].Add(parent)
 		}
@@ -1001,7 +991,6 @@ func PrintMultiRoots(repositoryData *RepositoryData, options *WplDumpOptions) {
 			}
 		}
 	}
-	multi_root_stats = nil
 }
 
 // go through all the directories as a flat list, classify them and print
@@ -1062,7 +1051,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 				continue
 			}
 			if _, ok := parents[child]; !ok {
-				parents[child] = mapset.NewSet[IntID]()
+				parents[child] = mapset.NewThreadUnsafeSet[IntID]()
 			}
 			parents[child].Add(parent)
 		}
@@ -1209,37 +1198,7 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 	Printf("%-25s %10d\n", "count multi", count_multi)
 	Printf("%-25s %10d\n", "count_leaf_directories", count_leaf_directories)
 
-	// sort the lot by ascending meta_blob_id
-	sort.SliceStable(to_be_sorted, func(i, j int) bool {
-		return to_be_sorted[i].meta_blob_str < to_be_sorted[j].meta_blob_str
-	})
-
 	class_str := make([]byte, 4, 4)
-	/*
-		// print first list
-		Printf("\n*** directories sorted by ID ***\n")
-		Printf("%-12s class multi --- directory path ---\n", "meta_blob")
-		for _, elem := range to_be_sorted {
-			for ix := 0; ix < 4; ix++ {
-				class_str[ix] = ' '
-			}
-			if        (elem.class & CLASS_LEAF) == CLASS_LEAF {
-				class_str[3] = 'L'
-			}
-			if        (elem.class & CLASS_ROOT) == CLASS_ROOT {
-				class_str[0] = 'R'
-			} else if (elem.class & CLASS_SINGLE) == CLASS_SINGLE {
-				class_str[2] = 'S'
-			} else if (elem.class & CLASS_MULTI) == CLASS_MULTI {
-				class_str[1] = 'M'
-			}
-
-			Printf("%12s %s %5d %s %s\n", elem.meta_blob_str, string(class_str), elem.multiplicity,
-				repositoryData.SnapMap[elem.EarliestSnap].Time.String()[:19],
-				elem.name)
-		}
-	*/
-
 	// sort the lot again, this time by ascending name
 	sort.SliceStable(to_be_sorted, func(i, j int) bool {
 		return to_be_sorted[i].name < to_be_sorted[j].name
@@ -1285,10 +1244,6 @@ func PrintDirectoriesClass(repositoryData *RepositoryData, options *WplDumpOptio
 			cnt_file_str, cnt_ndir_str, cnt_edir_str, cnt_syml_str,
 			elem.name)
 	}
-	meta_dir_map_reverse = nil
-	parents = nil
-	fullpath = nil
-	to_be_sorted = nil
 }
 
 // debug function FULLPATH
@@ -1304,7 +1259,7 @@ func PrintFullPath(repositoryData *RepositoryData, options *WplDumpOptions) {
 		}
 		Printf("%s %s\n", meta_blob.String()[:12], path)
 		if _, ok := map_path_to_blob[path]; !ok {
-			map_path_to_blob[path] = mapset.NewSet[IntID]()
+			map_path_to_blob[path] = mapset.NewThreadUnsafeSet[IntID]()
 		}
 		map_path_to_blob[path].Add(meta_blob_int)
 	}
@@ -1322,7 +1277,7 @@ func PrintFullPath(repositoryData *RepositoryData, options *WplDumpOptions) {
 			}
 			// new blob into 'checks'
 			if _, ok := checks[node.subtree_ID]; !ok {
-				checks[node.subtree_ID] = mapset.NewSet[string]()
+				checks[node.subtree_ID] = mapset.NewThreadUnsafeSet[string]()
 			}
 			checks[node.subtree_ID].Add(node.name)
 		}

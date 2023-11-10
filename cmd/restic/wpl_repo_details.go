@@ -4,24 +4,18 @@ package main
 
 import (
 	// system
-	"os"
 	"context"
+	"crypto/sha256"
 	"sort"
 	"strings"
-	"io"
-	"io/fs"
-	"path/filepath"
 	"time"
-	"encoding/hex"
-	"errors"
-	"crypto/sha256"
 
 	//argparse
 	"github.com/spf13/cobra"
 
 	// restic library
-	"github.com/wplapper/restic/library/restic"
 	"github.com/wplapper/restic/library/pack"
+	"github.com/wplapper/restic/library/restic"
 
 	// sets
 	"github.com/deckarep/golang-set/v2"
@@ -29,13 +23,13 @@ import (
 
 type RepoDetailsOptions struct {
 	SameTree  bool
-	CheckData bool
 	Prune     bool
 	Detail    int
 	Lost      bool
 	Timing    bool
 	MemoryUse bool
 }
+
 var repo_details_options RepoDetailsOptions
 
 var cmdRepoDetails = &cobra.Command{
@@ -58,7 +52,6 @@ func init() {
 	cmdRoot.AddCommand(cmdRepoDetails)
 	f := cmdRepoDetails.Flags()
 	f.BoolVarP(&repo_details_options.SameTree, "same-tree", "S", false, "show snapshots with the same tree")
-	f.BoolVarP(&repo_details_options.CheckData, "check-data", "C", false, "compare list of all data file with packfiles")
 	f.BoolVarP(&repo_details_options.Prune, "Prune", "P", false, "make Prune calculations")
 	f.BoolVarP(&repo_details_options.Timing, "Timing", "T", false, "produce timings")
 	f.BoolVarP(&repo_details_options.MemoryUse, "memory", "m", false, "produce memory usage")
@@ -76,26 +69,27 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 1: open repository
 	repo, err := OpenRepository(ctx, gopts)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	Verboseff("Repository is %s\n", globalOptions.Repo)
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
 		repo_details_options.Timing, false)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	// step 3: decide what to do
 	if repo_details_options.SameTree {
 		FindSameTree(ctx, repo, &repositoryData)
 		return nil
-	} else if repo_details_options.CheckData {
-		CheckData(ctx, repo, &repositoryData, gopts.Repo)
-		return nil
 	}
 
 	// normal processing
-	CountBlobs(ctx,  repo, &repositoryData, repo_details_options, start)
-	CountFiles(ctx,  repo, &repositoryData, repo_details_options, start)
+	CountBlobs(ctx, repo, &repositoryData, repo_details_options, start)
+	CountFiles(ctx, repo, &repositoryData, repo_details_options, start)
 	CountTables(ctx, repo, &repositoryData, repo_details_options, start)
 	return nil
 }
@@ -103,15 +97,15 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 // go through index table and count tree and data blobs, and compressed and
 // uncompressed sizes
 func CountBlobs(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
+	repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_tree_blobs := 0
 	count_data_blobs := 0
 	size_tree_blobs := 0
 	size_data_blobs := 0
 	uc_size_tree_blobs := 0
 	uc_size_data_blobs := 0
-	pack_set_meta := mapset.NewSet[restic.ID]()
-	pack_set_data := mapset.NewSet[restic.ID]()
+	pack_set_meta := mapset.NewThreadUnsafeSet[restic.ID]()
+	pack_set_data := mapset.NewThreadUnsafeSet[restic.ID]()
 
 	// extract packfile information
 	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
@@ -156,49 +150,45 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// report
 	Printf("\n*** Global counts ***\n")
 	Printf("%-25s %10d  %10.1f MiB\n", "  compressed tree blobs", count_tree_blobs,
-		float64(size_tree_blobs) / ONE_MEG)
+		float64(size_tree_blobs)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "  compressed data blobs", count_data_blobs,
-		float64(size_data_blobs) / ONE_MEG)
+		float64(size_data_blobs)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "  compressed ALL  blobs",
-		count_data_blobs + count_tree_blobs,
-		float64(size_tree_blobs + size_data_blobs) / ONE_MEG)
+		count_data_blobs+count_tree_blobs,
+		float64(size_tree_blobs+size_data_blobs)/ONE_MEG)
 
 	Printf("%-25s %10d  %10.1f MiB\n", "uncompressed tree blobs", count_tree_blobs,
-		float64(uc_size_tree_blobs) / ONE_MEG)
+		float64(uc_size_tree_blobs)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "uncompressed data blobs", count_data_blobs,
-		float64(uc_size_data_blobs) / ONE_MEG)
+		float64(uc_size_data_blobs)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "uncompressed All  blobs",
-		count_data_blobs + count_tree_blobs,
-		float64(uc_size_tree_blobs + uc_size_data_blobs) / ONE_MEG)
+		count_data_blobs+count_tree_blobs,
+		float64(uc_size_tree_blobs+uc_size_data_blobs)/ONE_MEG)
 
 	Printf("%-25s %10d  %10.1f MiB\n", "meta packfiles",
 		pack_set_meta.Cardinality(),
-		float64(size_meta_pack) / ONE_MEG)
+		float64(size_meta_pack)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "data packfiles",
 		pack_set_data.Cardinality(),
-		float64(size_data_pack) / ONE_MEG)
+		float64(size_data_pack)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f MiB\n", "ALL  packfiles",
-		pack_set_meta.Cardinality() + pack_set_data.Cardinality(),
-		float64(size_meta_pack + size_data_pack) / ONE_MEG)
+		pack_set_meta.Cardinality()+pack_set_data.Cardinality(),
+		float64(size_meta_pack+size_data_pack)/ONE_MEG)
 
 	if options.Timing {
 		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountBlobs",
 			time.Now().Sub(start).Seconds())
 	}
-	// reset
-	repo_packs = nil
-	pack_set_data = nil
-	pack_set_meta = nil
 }
 
 // count index, snapshot and meta file counts and sizes
 func CountFiles(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
+	repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_snaps := 0
-	size_snaps  := int64(0)
+	size_snaps := int64(0)
 
 	// snapshot files
-	tree_set := mapset.NewSet[restic.ID]()
+	tree_set := mapset.NewThreadUnsafeSet[restic.ID]()
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(ctx, repo, id)
 		if err != nil {
@@ -213,7 +203,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 
 	// index files
 	count_index := 0
-	size_index  := int64(0)
+	size_index := int64(0)
 	repo.List(ctx, restic.IndexFile, func(id restic.ID, size int64) error {
 		count_index++
 		size_index += size
@@ -223,23 +213,22 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// report
 	Printf("\n")
 	Printf("%-25s %10d  %10.1f MiB\n", "index files", count_index,
-	 float64(size_index) / ONE_MEG)
+		float64(size_index)/ONE_MEG)
 	Printf("%-25s %10d  %10.1f KiB\n", "snapshot files", count_snaps,
-		float64(size_snaps) / 1024.0)
+		float64(size_snaps)/1024.0)
 	Printf("%-25s %10d\n", "count trees", tree_set.Cardinality())
 	Printf("%s\n", strings.Repeat("=", 52))
 
-	// clear up
+	// ** finale **
 	if options.Timing {
 		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountFiles",
 			time.Now().Sub(start).Seconds())
 	}
-	tree_set = nil
 }
 
 // count table contents and other interesting information
 func CountTables(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
+	repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// meta_dir
 	count_meta_dir_entries := 0
 	for _, meta_blobs := range repositoryData.MetaDirMap {
@@ -250,10 +239,10 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_directory_map_entries := 0
 
 	// we have tuple(node.DeviceID, node.Inode) which is unique
-	inodes_meta  := mapset.NewSet[DeviceAndInode]()
-	inodes_datan := mapset.NewSet[DeviceAndInode]()
-	inodes_datac := mapset.NewSet[[sha256.Size]byte]()
-	names        := mapset.NewSet[string]()
+	inodes_meta := mapset.NewThreadUnsafeSet[DeviceAndInode]()
+	inodes_datan := mapset.NewThreadUnsafeSet[DeviceAndInode]()
+	inodes_datac := mapset.NewThreadUnsafeSet[[sha256.Size]byte]()
+	names := mapset.NewThreadUnsafeSet[string]()
 
 	// map inodes back to 'meta_blob_int'
 	for _, file_list := range repositoryData.DirectoryMap {
@@ -284,7 +273,7 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	// data_map_org is map[restic.ID]mapset.Set[CompIndexOffet]
 	data_map_org := MakeFullContentsMap2(repositoryData)
 	// build a flat set
-	data_map := mapset.NewSet[CompIndexOffet]()
+	data_map := mapset.NewThreadUnsafeSet[CompIndexOffet]()
 	for _, sets := range data_map_org {
 		for entry := range sets.Iter() {
 			data_map.Add(entry)
@@ -306,31 +295,29 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	Printf("%-25s %10d\n", "all content", len(data_map_org))
 	Printf("%-25s %10d\n", "all content variations", data_map.Cardinality())
 	Printf("%-25s %10d  %10.1f MiB\n", "singles in content", count_singles,
-		float64(size_singles) / ONE_MEG)
+		float64(size_singles)/ONE_MEG)
 
 	// check if repository needs pruning: more meta blobs in Index(), compared
 	// to the union of all trees
 	// full tree is mapped to repositoryData.FullPath
 	// index is mapped repositoryData.IndexHandle
-	set_index_handle := mapset.NewSet[IntID]()
+	set_index_handle := mapset.NewThreadUnsafeSet[IntID]()
 	for _, ih := range repositoryData.IndexHandle {
 		if ih.Type == restic.TreeBlob {
 			set_index_handle.Add(ih.blob_index)
 		}
 	}
-	set_index_handle.Remove(EMPTY_NODE_ID_TRANSLATED)
+	set_index_handle.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
 
-	set_tree := mapset.NewSet[IntID]()
+	set_tree := mapset.NewThreadUnsafeSet[IntID]()
 	for meta_blob_int := range repositoryData.FullPath {
 		set_tree.Add(meta_blob_int)
 	}
-	if set_tree.Contains(EMPTY_NODE_ID_TRANSLATED) {
-		set_tree.Remove(EMPTY_NODE_ID_TRANSLATED)
-	}
+	set_tree.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
 
 	var diff mapset.Set[IntID]
 	var l_diff int
-	if ! set_index_handle.Equal(set_tree) {
+	if !set_index_handle.Equal(set_tree) {
 		Printf("\n*** Possibly needs pruning. data blobs only checked.***\n")
 		Printf("from index %7d\n", set_index_handle.Cardinality())
 		Printf("from tree  %7d\n", set_tree.Cardinality())
@@ -344,6 +331,11 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 
 		diff = set_index_handle.Difference(set_tree)
 		l_diff = diff.Cardinality()
+		if l_diff < 10 {
+			Printf("difference %+v\n", diff)
+		} else {
+			Printf("Too many differences!\n")
+		}
 
 		if options.Prune {
 			CheckPrune(repositoryData, diff, options)
@@ -354,28 +346,17 @@ repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 		timeMessage(options.MemoryUse, "%-30s %10.1f seconds\n", "CountTables",
 			time.Now().Sub(start).Seconds())
 	}
-
-	// reset
-	diff         = nil
-	names        = nil
-	inodes_meta  = nil
-	inodes_datac = nil
-	inodes_datan = nil
-	data_map     = nil
-	data_map_org = nil
-	set_tree     = nil
-	set_index_handle = nil
 }
 
 // find snapshots which own the same tree (root)
 func FindSameTree(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData) {
+	repositoryData *RepositoryData) {
 	printed := false
 	// map tree root to snap_id
 	double := map[restic.ID]mapset.Set[string]{}
 	for snap_id, sn := range repositoryData.SnapMap {
-		if _, ok := double[sn.Tree]; ! ok {
-			double[sn.Tree] = mapset.NewSet[string]()
+		if _, ok := double[sn.Tree]; !ok {
+			double[sn.Tree] = mapset.NewThreadUnsafeSet[string]()
 		}
 		double[sn.Tree].Add(snap_id)
 	}
@@ -387,7 +368,7 @@ repositoryData *RepositoryData) {
 		}
 
 		// multiple owners
-		if ! printed {
+		if !printed {
 			printed = true
 			Printf("\n*** Multiple snapshots for same tree ***\n")
 		}
@@ -405,73 +386,6 @@ repositoryData *RepositoryData) {
 			Printf("%s - %s %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime), sn.Hostname,
 				sn.Paths[0])
 		}
-	}
-
-	// reset
-	double = nil
-}
-
-// walk through temp locally attached repository and check all entries against the
-// packfiles set
-// this will only work on locally defined repositories where file system functions
-// work.
-func CheckData(ctx context.Context, repo restic.Repository,
-repositoryData *RepositoryData, root string) {
-	// gather Packfiles names from Index data
-	pack_set := mapset.NewSet[string]()
-	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
-		pack_set.Add(blob.PackID.String())
-	})
-
-	// prepare to walk down the data subdirectory
-	// Walk will fail if you try to Walk an rclone structure
-	// this will only work on local filesystems
-	missing := false
-	err := filepath.Walk(root + "/data",
-		func(path string, info fs.FileInfo, err error) error {
-		// skip on error
-		if err != nil {
-			Printf("prevent panic by handling failure accessing path %q: '%v'\n",
-				path, err)
-			return err
-		}
-
-		// skip directories
-		if info.IsDir() {
-			return nil
-		}
-
-		basename := filepath.Base(path)
-		if pack_set.Contains(basename) {
-			sha256sum, err2 := Sha256File(path)
-			if err2 != nil {
-				Printf("Failed to calculate sha256 for file %s - reason is '%v'\n", path, err2)
-				return err2
-			}
-
-			if hex.EncodeToString(sha256sum) != basename {
-				Printf("sha256(file %s\n", hex.EncodeToString(sha256sum))
-				Printf("basename    %s\n", basename)
-				return errors.New("sha256 mismatch!")
-			}
-			Verboseff("checking %s\n", basename)
-			return nil
-		} else {
-			Printf("missing entry %s\n", basename)
-			missing = true
-			return errors.New("missing entry!")
-		}
-	})
-
-	if err != nil {
-		Printf("FAIL!\n")
-		return
-	}
-
-	if ! missing {
-		Printf("all data entries are OK!\n")
-	} else {
-		Printf("errors detected!\n")
 	}
 }
 
@@ -491,7 +405,7 @@ func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 
 	// get all data blobs from Index()
-	set_data_handle := mapset.NewSet[IntID]()
+	set_data_handle := mapset.NewThreadUnsafeSet[IntID]()
 	for _, ih := range repositoryData.IndexHandle {
 		if ih.Type == restic.DataBlob {
 			set_data_handle.Add(ih.blob_index)
@@ -499,11 +413,11 @@ func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 
 	// 2. - find all data blobs from the mapped tree blobs - as in used blobs
-	set_data_tree := mapset.NewSet[IntID]()
+	set_data_tree := mapset.NewThreadUnsafeSet[IntID]()
 	for meta_blob_int := range fullpath {
 		for _, meta := range repositoryData.DirectoryMap[meta_blob_int] {
 			if meta.Type == "file" {
-				set_data_tree.Append(meta.content ...)
+				set_data_tree.Append(meta.content...)
 			}
 		}
 	}
@@ -524,13 +438,6 @@ func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	} else if Detail == 2 || Detail == 1 {
 		Print_some_detail(repositoryData, unused_blobs, Detail, options.Lost, data_map)
 	}
-
-	//5. - reset for GC
-	fullpath = nil
-	diff_data = nil
-	unused_blobs = nil
-	set_data_tree = nil
-	set_data_handle = nil
 }
 
 // serialize 'content' step by step into sha256 by Write() to it
@@ -540,7 +447,7 @@ func ConvertContent(content []IntID) (result [sha256.Size]byte) {
 	for _, data_blob_int := range content {
 		//binary.LittleEndian.PutUint32(temp, data_blob_int): serialize uint32
 		temp[0] = byte(data_blob_int)
-		temp[1] = byte(data_blob_int >>  8)
+		temp[1] = byte(data_blob_int >> 8)
 		temp[2] = byte(data_blob_int >> 16)
 		temp[3] = byte(data_blob_int >> 24)
 		sha256sum.Write(temp)
@@ -551,21 +458,4 @@ func ConvertContent(content []IntID) (result [sha256.Size]byte) {
 	// 'copy' can copy between different types
 	copy(result[:], sha256sum.Sum(nil))
 	return result
-}
-
-// calculate sha256 of the given file 'filename'
-func Sha256File(filename string) ([]byte, error) {
-	f, err := os.Open(filename)
-  if err != nil {
-    return []byte{}, err
-  }
-  defer f.Close()
-
-  h := sha256.New()
-  _, err = io.Copy(h, f) // copy from 'f' to 'h'.
-  if err != nil {
-    return []byte{}, err
-  }
-
-  return h.Sum(nil), nil
 }

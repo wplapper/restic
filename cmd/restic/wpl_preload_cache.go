@@ -52,7 +52,7 @@ func init() {
 }
 
 func runPreloadCache(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
-	to_be_deleted := mapset.NewSet[string]()
+	to_be_deleted := mapset.NewThreadUnsafeSet[string]()
 	err := runPreloadCache1(ctx, gopts, to_be_deleted)
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 
 	// step 5: load snapshots
 	Verbosef("Snapshot Fileload\n")
-	snap_set := mapset.NewSet[string]()
+	snap_set := mapset.NewThreadUnsafeSet[string]()
 	repo.List(ctx, restic.SnapshotFile, func(ID restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(ctx, repo, ID)
 		if err != nil {
@@ -209,7 +209,7 @@ func walk_cache(ctx context.Context, repo *repository.Repository, root string,
 
 // function to check loaded snapshots vs cached snapshots
 func walk_cache_dir(root string) (result mapset.Set[string]) {
-	result = mapset.NewSet[string]()
+	result = mapset.NewThreadUnsafeSet[string]()
 	err := filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
 		// skip on error
 		if err != nil {
@@ -227,7 +227,7 @@ func walk_cache_dir(root string) (result mapset.Set[string]) {
 
 	if err != nil {
 		Printf("Could not walk cache -reason '%v'\n", err)
-		return mapset.NewSet[string]()
+		return mapset.NewThreadUnsafeSet[string]()
 	}
 	return result
 }

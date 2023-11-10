@@ -17,7 +17,7 @@ reverse_fullpath map[string]mapset.Set[IntID]) {
 	reverse_fullpath = map[string]mapset.Set[IntID]{}
 	for int_blob, path := range repositoryData.FullPath {
 		if _, ok := reverse_fullpath[path]; !ok {
-			reverse_fullpath[path] = mapset.NewSet[IntID]()
+			reverse_fullpath[path] = mapset.NewThreadUnsafeSet[IntID]()
 		}
 		reverse_fullpath[path].Add(int_blob)
 	}
@@ -37,9 +37,9 @@ func GetPackIDs(repositoryData *RepositoryData) (result map[IntID]IntID) {
 // create a map of all children belonging to one parent
 func CreateAllChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set[IntID]){
 
-	children = map[IntID]mapset.Set[IntID]{EMPTY_NODE_ID_TRANSLATED: mapset.NewSet[IntID]()}
+	children = map[IntID]mapset.Set[IntID]{EMPTY_NODE_ID_TRANSLATED: mapset.NewThreadUnsafeSet[IntID]()}
 	for parent, idd_file_list := range repositoryData.DirectoryMap {
-		children[parent] = mapset.NewSet[IntID]()
+		children[parent] = mapset.NewThreadUnsafeSet[IntID]()
 		for _, node := range idd_file_list {
 			if node.subtree_ID == EMPTY_NODE_ID_TRANSLATED {
 				continue
@@ -58,7 +58,7 @@ blobs_per_packID map[IntID]CompPackfile) {
 	blobs_per_packID = map[IntID]CompPackfile{}
 	for _, ih := range repositoryData.IndexHandle {
 		if _, ok := blobs_per_packID[ih.pack_index]; !ok {
-			blobs_per_packID[ih.pack_index] = CompPackfile{mapset.NewSet[IntID](), ih.Type}
+			blobs_per_packID[ih.pack_index] = CompPackfile{mapset.NewThreadUnsafeSet[IntID](), ih.Type}
 		}
 		blobs_per_packID[ih.pack_index].PackBlobSet.Add(ih.blob_index)
 	}
@@ -73,10 +73,10 @@ meta_dir_map_reverse map[IntID]mapset.Set[string]) {
 	// setup return map
 	meta_dir_map_reverse = map[IntID]mapset.Set[string]{}
 	for snap_ID, meta_sett := range repositoryData.MetaDirMap {
-		snap_id := snap_ID.Str()
+		snap_id := snap_ID.String()
 		for meta_blob_int := range meta_sett.Iter() {
 			if _, ok := meta_dir_map_reverse[meta_blob_int]; ! ok {
-				meta_dir_map_reverse[meta_blob_int] = mapset.NewSet[string]()
+				meta_dir_map_reverse[meta_blob_int] = mapset.NewThreadUnsafeSet[string]()
 			}
 			meta_dir_map_reverse[meta_blob_int].Add(snap_id)
 		}
@@ -112,7 +112,7 @@ data_map map[restic.ID]mapset.Set[CompIndexOffet]) {
 					meta_blob_int: meta_blob_int,
 				}
 				if _, ok := data_map[data_blob]; ! ok {
-					data_map[data_blob] = mapset.NewSet[CompIndexOffet]()
+					data_map[data_blob] = mapset.NewThreadUnsafeSet[CompIndexOffet]()
 				}
 				data_map[data_blob].Add(cmp_ix)
 			}
@@ -135,7 +135,7 @@ func map_data_blob_file(repositoryData *RepositoryData) (data_map map[IntID]maps
 			if meta.Type == "file" {
 				for _, data_blob := range meta.content {
 					if _, ok := data_map[data_blob]; !ok {
-						data_map[data_blob] = mapset.NewSet[CompIddFile]()
+						data_map[data_blob] = mapset.NewThreadUnsafeSet[CompIddFile]()
 					}
 					data_map[data_blob].Add(cmp_ix)
 				}
