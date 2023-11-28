@@ -27,8 +27,6 @@ var (
 	repositoryData           *RepositoryData
 	EMPTY_NODE_ID            restic.ID
 	EMPTY_NODE_ID_TRANSLATED IntID
-	MasterRepoID             restic.ID
-	MasterRepoRoot           IntID
 )
 
 func init_repositoryData(repositoryData *RepositoryData) {
@@ -45,7 +43,7 @@ func init_repositoryData(repositoryData *RepositoryData) {
 // GatherAllSnapshots retrieves all snapshots from the repository
 // return: slice of all *sn, sorted by ascending snapshot time (*sn.Time)
 func GatherAllSnapshots(ctx context.Context,
-	repo *repository.Repository, superTree bool) ([]SnapshotWpl, map[string]SnapshotWpl, error) {
+	repo *repository.Repository) ([]SnapshotWpl, map[string]SnapshotWpl, error) {
 	// collect all snap records
 	snaps := []SnapshotWpl{}
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
@@ -61,38 +59,6 @@ func GatherAllSnapshots(ctx context.Context,
 		return nil
 	})
 
-	MasterRepoID = restic.Hash([]byte("** Repository Root **"))
-	// x'0596c716b2530053922a8a4a54e471a3dbff46b5408f360034edff153ee37e4a'
-	if superTree {
-		// create an extra snap
-		/*
-			type Snapshot struct {
-				Time     time.Time `json:"time"`
-				Parent   *ID       `json:"parent,omitempty"`
-				Tree     *ID       `json:"tree"`
-				Paths    []string  `json:"paths"`
-				Hostname string    `json:"hostname,omitempty"`
-				Username string    `json:"username,omitempty"`
-				UID      uint32    `json:"uid,omitempty"`
-				GID      uint32    `json:"gid,omitempty"`
-				Excludes []string  `json:"excludes,omitempty"`
-				Tags     []string  `json:"tags,omitempty"`
-				Original *ID       `json:"original,omitempty"`
-
-				ProgramVersion string `json:"program_version,omitempty"`
-
-				id *ID // plaintext ID, used during restore
-			}
-		*/
-		snaps = append(snaps, SnapshotWpl{
-			Time:     time.Now(),
-			Tree:     MasterRepoID,
-			Paths:    []string{"/***ALL***"},
-			Hostname: "***ALL***",
-			ID:       MasterRepoID,
-		})
-	}
-
 	// custom sort: we sort 'snaps' by sn.Time
 	sort.SliceStable(snaps, func(i, j int) bool {
 		return snaps[i].Time.Before(snaps[j].Time)
@@ -107,7 +73,7 @@ func GatherAllSnapshots(ctx context.Context,
 }
 
 func HandleIndexRecords(ctx context.Context, repo *repository.Repository,
-	repositoryData *RepositoryData, superTree bool) error {
+	repositoryData *RepositoryData) error {
 	// load index files and their contents
 	// 'LoadIndex' is in library/repository/repository.go, needs to happen first
 	if err := repo.LoadIndex(ctx); err != nil {
@@ -115,7 +81,7 @@ func HandleIndexRecords(ctx context.Context, repo *repository.Repository,
 		return err
 	}
 
-	ConvertToIntSet(ctx, repo, repositoryData, superTree)
+	ConvertToIntSet(ctx, repo, repositoryData)
 	return nil
 }
 
@@ -123,21 +89,15 @@ func HandleIndexRecords(ctx context.Context, repo *repository.Repository,
 // It also correlates blobs and pack IDs
 // build 'repositoryData.BlobToIndex' and 'repositoryData.IndexToBlob'
 func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
-	repositoryData *RepositoryData, superTree bool) {
+	repositoryData *RepositoryData) {
 
 	EMPTY_NODE_ID = restic.Hash([]byte(`{"nodes":[]}` + "\n"))
 	// ID,  PackID, Type, Length and Offset
 	// build 'blob_to_index' and 'index_to_blob' for all known restic.ID(s)
 	// sources are the index files, packfiles and the snapshot records
 
-	// start off with one wellknown entry
-	MasterRepoID = restic.Hash([]byte("** Repository Root **"))
-	MasterRepoRoot = IntID(1)
-	repositoryData.BlobToIndex[MasterRepoID] = MasterRepoRoot
-	repositoryData.IndexToBlob[MasterRepoRoot] = MasterRepoID
-
 	// this is the start of the NORMAL index records. Slot 0 and 1 are reserved!
-	pos := MasterRepoRoot + 1
+	pos := IntID(2)
 	// loop over each index record by calling unnamed func for every entry
 	// 'blob' is set by 'Each'
 	// tree
@@ -176,9 +136,6 @@ func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
 			UncompressedLength: int(blob.UncompressedLength),
 		}
 	})
-
-	repositoryData.IndexHandle[MasterRepoID] = Index_Handle{Type: restic.TreeBlob,
-		blob_index: MasterRepoRoot, pack_index: lastPackIndex}
 
 	// add the restic.IDs from the snapshots list to these list / maps
 	for _, sn := range repositoryData.Snaps {
@@ -227,11 +184,11 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
 	// dfs sorts the children topologically, so parents appear before their children
 	dfs_res := dfs(children, initials)
 	for _, meta_blob := range dfs_res {
-		if meta_blob == EMPTY_NODE_ID_TRANSLATED || meta_blob == MasterRepoRoot {
+		if meta_blob == EMPTY_NODE_ID_TRANSLATED {
 			continue
 		}
 		for child := range children[meta_blob].Iter() {
-			if child == EMPTY_NODE_ID_TRANSLATED || child == MasterRepoRoot {
+			if child == EMPTY_NODE_ID_TRANSLATED {
 				continue
 			}
 			if repositoryData.FullPath[meta_blob] == "/" {
@@ -275,43 +232,11 @@ func TopologyStructure(tree_root IntID,
 
 // this methods runs through all the steps to gather the pertinent repository data
 func GatherAllRepoData(ctx context.Context, repo *repository.Repository,
-	repositoryData *RepositoryData, superTree bool) error {
+	repositoryData *RepositoryData) error {
 	// step 1: build a slice of all meta_blob IDs in the repo
 	if err := ForAllMyTrees(ctx, repo, repositoryData); err != nil {
 		Printf("ForAllMyTrees returned %v\n", err)
 		return err
-	}
-
-	if superTree {
-		// we need a record in repositoryData.DirectoryMap[MasterRepoRoot],
-		// collecting all tree roots from sn.Tree
-		treeRoots := make([]BlobFile2, 0, len(repositoryData.Snaps))
-
-		nowMtime := time.Now()
-		for _, sn := range repositoryData.Snaps {
-			treeIndex := repositoryData.BlobToIndex[sn.Tree]
-			if treeIndex == MasterRepoRoot {
-				continue
-			}
-			// construct BlobFile2
-			/*
-				size       uint64
-				inode      uint64
-				DeviceID   uint64
-				content    []IntID
-				subtree_ID IntID
-				name       string
-				Type       string
-				mtime      time.Time
-				Mode       os.FileMode
-				Links      uint64
-				LinkTarget string
-			*/
-			treeRoots = append(treeRoots, BlobFile2{subtree_ID: treeIndex, Type: "dir",
-				mtime: nowMtime, name: "/",
-			})
-		}
-		repositoryData.DirectoryMap[MasterRepoRoot] = treeRoots
 	}
 
 	// step 2: prepare children and parents from idd_file records
@@ -331,7 +256,7 @@ func DeliverTreeBlobs(ctx context.Context, repo *repository.Repository,
 	repositoryData *RepositoryData, fn func(id restic.ID) error) error {
 
 	for blob_ID, data := range repositoryData.IndexHandle {
-		if data.Type == restic.TreeBlob && blob_ID != MasterRepoID {
+		if data.Type == restic.TreeBlob {
 			fn(blob_ID)
 		}
 	}
@@ -452,8 +377,7 @@ func timeMessage(memory_use bool, format string, args ...interface{}) {
 // collect the usual stuff from a repository:
 // snapshots, Index records, node records
 func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
-	ctx context.Context, repositoryData *RepositoryData, timing bool,
-	superTree bool) error {
+	ctx context.Context, repositoryData *RepositoryData, timing bool) error {
 
 	var err error
 	start := time.Now()
@@ -463,7 +387,7 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	}
 
 	// step 2: gather all snapshots
-	repositoryData.Snaps, repositoryData.SnapMap, err = GatherAllSnapshots(ctx, repo, superTree)
+	repositoryData.Snaps, repositoryData.SnapMap, err = GatherAllSnapshots(ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -473,7 +397,7 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	}
 
 	// step 3: manage Index Records
-	if err = HandleIndexRecords(ctx, repo, repositoryData, superTree); err != nil {
+	if err = HandleIndexRecords(ctx, repo, repositoryData); err != nil {
 		return err
 	}
 	if timing {
@@ -482,7 +406,7 @@ func gather_base_data_repo(repo *repository.Repository, gopts GlobalOptions,
 	}
 
 	// step 4: read all meta blobs and create the incore tables
-	GatherAllRepoData(ctx, repo, repositoryData, superTree)
+	GatherAllRepoData(ctx, repo, repositoryData)
 	if timing {
 		timeMessage(true, "%-30s %10.1f seconds\n", "GatherAllRepoData",
 			time.Since(start).Seconds())
