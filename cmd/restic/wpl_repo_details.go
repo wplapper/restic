@@ -34,8 +34,8 @@ var repo_details_options RepoDetailsOptions
 
 var cmdRepoDetails = &cobra.Command{
 	Use:   "wpl-repo [flags]",
-	Short: "counts various tables and reort usage",
-	Long: `counts various tables and reort usage.
+	Short: "counts various tables and report usage",
+	Long: `counts various tables and report usage.
 
 EXIT STATUS
 ===========
@@ -76,7 +76,7 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-		repo_details_options.Timing, false)
+		repo_details_options.Timing)
 	if err != nil {
 		return err
 	}
@@ -307,13 +307,13 @@ func CountTables(ctx context.Context, repo restic.Repository,
 			set_index_handle.Add(ih.blob_index)
 		}
 	}
-	set_index_handle.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
+	set_index_handle.RemoveAll(EMPTY_NODE_ID_TRANSLATED)
 
 	set_tree := mapset.NewThreadUnsafeSet[IntID]()
 	for meta_blob_int := range repositoryData.FullPath {
 		set_tree.Add(meta_blob_int)
 	}
-	set_tree.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
+	set_tree.RemoveAll(EMPTY_NODE_ID_TRANSLATED)
 
 	var diff mapset.Set[IntID]
 	var l_diff int

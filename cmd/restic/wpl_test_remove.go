@@ -72,9 +72,9 @@ func init() {
 	f.StringVarP(&tremoveOptions.MultiRepo, "multi-repo", "M", "", "base part of repositories local or onedrive")
 	f.StringVarP(&tremoveOptions.ConfigFile, "config-file", "O", "/home/wplapper/restic/backup_config.json", "json config file")
 	f.CountVarP(&tremoveOptions.Detail, "detail", "D", "print dir/file details")
-	f.BoolVarP(&tremoveOptions.Lost, "Lost", "L", false, "print Lost file details")
+	f.BoolVarP(&tremoveOptions.Lost, "lost", "L", false, "print Lost file details")
 	f.BoolVarP(&tremoveOptions.Repacked, "repack", "R", false, "more info on repacks")
-	f.BoolVarP(&tremoveOptions.Timing, "Timing", "T", false, "produce timings")
+	f.BoolVarP(&tremoveOptions.Timing, "timing", "T", false, "produce timings")
 	f.BoolVarP(&tremoveOptions.MemoryUse, "memory", "m", false, "produce memory usage")
 }
 
@@ -129,7 +129,6 @@ func CalculatePruneSize(selected []SnapshotWpl, repositoryData *RepositoryData,
 	for _, ih := range repositoryData.IndexHandle {
 		all_blobs.Add(ih.blob_index)
 	}
-	all_blobs.RemoveAll(EMPTY_NODE_ID_TRANSLATED, MasterRepoRoot)
 
 	// define the unused blobs
 	unused_blobs := all_blobs.Difference(used_blobs)
@@ -166,11 +165,7 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 	for blob := range unused_blobs.Iter() {
 		ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
 		if ih.Type == restic.TreeBlob && Detail > 1 {
-			if len(repositoryData.FullPath[blob]) < 3 {
-				filename = "/"
-			} else {
-				filename = repositoryData.FullPath[blob][2:]
-			}
+			filename = repositoryData.FullPath[blob]
 			deleted_files[filename] = file_info{size: 0}
 		} else if ih.Type == restic.DataBlob {
 
@@ -402,9 +397,7 @@ func PrintRepackInfo(repositoryData *RepositoryData,
 
 	root_set := mapset.NewThreadUnsafeSet[IntID]()
 	for _, sn := range selected {
-		if sn.Tree != MasterRepoID {
-			root_set.Add(repositoryData.BlobToIndex[sn.Tree])
-		}
+		root_set.Add(repositoryData.BlobToIndex[sn.Tree])
 	}
 
 	pack_info := GetPackIDs(repositoryData)
@@ -648,7 +641,7 @@ func DoOneRepository(ctx context.Context, gopts GlobalOptions,
 	}
 	var repositoryData RepositoryData
 	init_repositoryData(&repositoryData)
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, options.Timing, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, options.Timing)
 	if err != nil {
 		return err
 	}
@@ -780,7 +773,7 @@ func DoOneRepositoryWithSnaps(ctx context.Context, gopts GlobalOptions,
 		return err
 	}
 
-	_, snapMap, err := GatherAllSnapshots(ctx, repo, false)
+	_, snapMap, err := GatherAllSnapshots(ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -806,7 +799,7 @@ func DoOneRepositoryWithSnaps(ctx context.Context, gopts GlobalOptions,
 
 	if toBeConsidered.Cardinality() == 0 {
 		Printf("No valid Snaps found. Terminating!\n")
-		return errors.New("No valid Snaps found. Terminating!")
+		return nil
 	}
 	DoOneRepository(ctx, gopts, tremoveOptions, toBeConsidered)
 	return nil

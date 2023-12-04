@@ -130,15 +130,15 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 
 	// step 6: match front end and backend files for the following types
 	// index, meta_blobs
-	Printf("\nCheck index ...")
+	Verbosef("\nCheck index ...")
 	err1 := walk_cache(ctx, repo, subdir_name + "/index", restic.IndexFile)
 	if err1 == nil {
-		Printf("OK\n")
+		Verbosef("OK\n")
 	}
-	Printf("Check meta data ... ")
+	Verbosef("Check meta data ... ")
 	err2 := walk_cache(ctx, repo, subdir_name + "/data", restic.PackFile)
 	if err2 == nil {
-		Printf("OK\n")
+		Verbosef("OK\n")
 	}
 
 	processed, err := restic.RemoveAllLocks(ctx, repo)
@@ -152,9 +152,9 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 	}
 	repo.Close()
 
-	Printf("Check snaps ... ")
+	Verbosef("Check snaps ... ")
 	if snap_set.Equal(snaps_in_cache) {
-		Printf("OK\n")
+		Verbosef("OK\n")
 	} else {
 		Print("not OK!\n")
 		diff_set2 := snaps_in_cache.Difference(snap_set)
@@ -190,7 +190,7 @@ func walk_cache(ctx context.Context, repo *repository.Repository, root string,
 		back_info, err := repo.Backend().Stat(ctx, handle)
 		if err != nil || back_info.Size != info.Size() {
 			// backend file does not exist, cache file has to go
-			Printf("remove old cache file %s\n", path)
+			Verbosef("remove old cache file %s\n", path)
 			err = os.Remove(path)
 			if err != nil {
 				Printf("Could not remove cache file %s - reason '%v' - ignored!\n",

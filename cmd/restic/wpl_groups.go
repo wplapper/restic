@@ -29,7 +29,7 @@ type GroupInfoSummary struct {
 
 func makeGroups(repositoryData *RepositoryData) (groups_sorted []snapGroup,
 groups map[snapGroup][]SnapshotWpl) {
-	// step 3: build snap groups by Hostname and filesystem
+	// step: build snap groups by Hostname and filesystem
 	groups = make(map[snapGroup][]SnapshotWpl)
 	for _, sn := range repositoryData.Snaps {
 		hostname := sn.Hostname

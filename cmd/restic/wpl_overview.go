@@ -95,7 +95,7 @@ func runOverview(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 			time.Now().Sub(start).Seconds())
 	}
 
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, overview_options.timing)
 	if err != nil { return err }
 
 	if overview_options.Age {
@@ -252,7 +252,7 @@ options OverviewOptions) error {
 		var repositoryData RepositoryData
 		init_repositoryData(&repositoryData)
 		err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-			overview_options.timing, false)
+			overview_options.timing)
 		if err != nil {
 			return err
 		}

@@ -105,7 +105,7 @@ func runWplDump(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions,
 		return err
 	}
 
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, false, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, false)
 	if err != nil {
 		return err
 	}

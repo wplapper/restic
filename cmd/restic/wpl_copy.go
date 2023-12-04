@@ -91,12 +91,12 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 	}
 
 	// load snapshots
-	_, srcSnapMap, err := GatherAllSnapshots(ctx, srcRepo, false)
+	_, srcSnapMap, err := GatherAllSnapshots(ctx, srcRepo)
 	if err != nil {
 		Printf("GatherAllSnapshots source - %v\n", err)
 		return err
 	}
-	_, dstSnapMap, err := GatherAllSnapshots(ctx, dstRepo, false)
+	_, dstSnapMap, err := GatherAllSnapshots(ctx, dstRepo)
 	if err != nil {
 		Printf("GatherAllSnapshots target - %v\n", err)
 		return err
@@ -121,14 +121,14 @@ func step_copy(ctx context.Context, src_gopts GlobalOptions, dst_gopts GlobalOpt
 
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.Format(time.DateTime)}
-		srcMap[triple] = snap_id
+		srcMap[triple] = snap_id[:8]
 	}
 
 	dstMap := map[SnapTriple]string{}
 	for snap_id, sn := range dstSnapMap {
 		triple := SnapTriple{Snap_host: sn.Hostname, Snap_fsys: sn.Paths[0],
 			Snap_time: sn.Time.Format(time.DateTime)}
-		dstMap[triple] = snap_id
+		dstMap[triple] = snap_id[:8]
 	}
 
 	copied := false

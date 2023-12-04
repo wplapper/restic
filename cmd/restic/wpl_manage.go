@@ -79,7 +79,7 @@ func RunWplManage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions, 
 	// set up types and slices for generic test loop
 	type TestFunc func(context.Context, *cobra.Command, GlobalOptions) error
 	type RunTests struct {
-		test bool
+		test      bool
 		test_func TestFunc
 	}
 	var tests = []RunTests{
@@ -130,7 +130,7 @@ func step_manage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		Verboseff("Repository is %s\n", globalOptions.Repo)
 
 		// extract snap_ids from repository which are old enough to be removed
-		_, snap_map, err := GatherAllSnapshots(ctx, repo, false)
+		_, snap_map, err := GatherAllSnapshots(ctx, repo)
 		if err != nil {
 			Printf("GatherAllSnapshots failed with '%v'\n", err)
 			return err
@@ -144,7 +144,7 @@ func step_manage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 			diff := int(now.Sub(time.Date(
 				year, month, day, 0, 0, 0, 0, time.UTC)).Hours() / 24.0)
 			if diff >= wpl_manage_opts_opts.Cutoff {
-				remove_list = append(remove_list, snap_id)
+				remove_list = append(remove_list, snap_id[:8])
 			}
 		}
 		repo.Close()
@@ -158,7 +158,7 @@ func step_manage(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		pruneOptions.RepackSmall = true
 
 		// run restic forget [...] --prune --max-unused 0 --repack-small [--dry-run]
-		if wpl_manage_opts_opts.doit {
+		if wpl_manage_opts_opts.doit && len(remove_list) > 0 {
 			the_list := strings.Join(remove_list, ", ")
 			Printf("\n%s restic forget %s -r %s --prune --max-unused 0 --repack-small\n",
 				time.Now().Format(time.DateTime), the_list, globalOptions.Repo)

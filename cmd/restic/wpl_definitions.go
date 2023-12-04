@@ -62,7 +62,7 @@ type RepositoryData struct {
 	Snaps         []SnapshotWpl
 	SnapMap       map[string]SnapshotWpl
 	DirectoryMap  map[IntID][]BlobFile2
-	FullPath      map[IntID]string                 // directory ID -> full directory path
+	FullPath      map[IntID]string                // directory ID -> full directory path
 	MetaDirMap    map[restic.ID]mapset.Set[IntID] // flattened tree structure
 	IndexHandle   map[restic.ID]Index_Handle
 
