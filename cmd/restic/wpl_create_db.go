@@ -27,9 +27,9 @@ import (
 )
 
 type CreateDB struct {
-	Debug     string
-	Index     bool
-	SuperTree bool
+	Debug  string
+	Index  bool
+	Sha256 bool
 }
 
 const (
@@ -39,10 +39,6 @@ const (
 	DBG_NAMES    = 0x020
 	DBG_METADATA = 0x040
 	DBG_CONTENTS = 0x080
-	DBG_CHILDREN = 0x100
-	DBG_FULLNAME = 0x200
-	DBG_DIRPATH  = 0x400
-	DBG_SNAPBLOB = 0x800
 )
 
 var createDBOptions CreateDB
@@ -72,8 +68,8 @@ func init() {
 	cmdRoot.AddCommand(cmdCreateDB)
 	f := cmdCreateDB.Flags()
 	f.StringVarP(&createDBOptions.Debug, "debug", "D", "0", "debug options")
-	f.BoolVarP(&createDBOptions.Index, "index", "I", false, "create index tables")
-	f.BoolVarP(&createDBOptions.SuperTree, "super", "S", false, "create super tree")
+	f.BoolVarP(&createDBOptions.Index, "no-index", "I", false, "do not create index tables")
+	f.BoolVarP(&createDBOptions.Sha256, "sha256", "S", false, "do not create sha256 contents")
 }
 
 type Driver struct {
@@ -84,9 +80,10 @@ type Driver struct {
 func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
 
 	var (
-		repositoryData RepositoryData
-		err            error
-		startTime      time.Time
+		repositoryData   RepositoryData
+		dataBaseFilename string
+		err              error
+		startTime        time.Time
 	)
 
 	// startup
@@ -114,15 +111,22 @@ func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-		repo_details_options.Timing, createDBOptions.SuperTree)
+		repo_details_options.Timing)
 	if err != nil {
 		return err
 	}
 	Verboseff("%-48s %7.1f seconds\n", "gather base data",
 		time.Since(startTime).Seconds())
 
-	dataBaseFilename := fmt.Sprintf("/home/wplapper/restic/db/%s.db",
-		filepath.Base(gopts.Repo))
+	if createDBOptions.Index {
+		dataBaseFilename = fmt.Sprintf("/home/wplapper/restic/db/%s-woix.db",
+			filepath.Base(gopts.Repo))
+	} else {
+		dataBaseFilename = fmt.Sprintf("/home/wplapper/restic/db/%s.db",
+			filepath.Base(gopts.Repo))
+	}
+	Verboseff("database is %s\n", dataBaseFilename)
+
 	_, err = os.Create(dataBaseFilename)
 	if err != nil {
 		Printf("Cant Create database - reason '%v'\n", err)
@@ -176,29 +180,40 @@ func GatherDatabaseData(ctx context.Context, repo *repository.Repository,
 	 * 04-index_repo
 	 * 05-names
 	 * metaBlobSorter
-	 * 06-meta_data_storage
+	 * 09-createSha56
+	 * 06-meta_data_storage (needs all the above dependencies)
+	 * 06-meta_data_storage (needs all the above dependencies)
 	 * 07-contents
-	 * 08-children
-	 * 09-fullname
-	 * 10-dir_path
-	 * 11-snap_blobs
+	 * 08-config (single row table)
 	 * 12-create_index
 	 * 13-finale
+	 *
+	 * The following tables can easily be created by running a few SQL statements:
+	 * children
+	 * snap_blobs
+	 * dir_names, for use in creating fullname
 	 */
+	 var sha256Content map[CmpIndex]int
 
-	step_00_startup(driver)
+	step_00_startup     (driver)
 	step_01_createTables(driver)
-	snapMap := step_02_snapshots(driver, repositoryData, startTime) // 02-snapshots
-	step_03_04_ix_files(driver, repositoryData, startTime)          // 03-packfiles, 04-index_repo
+	step_02_snapshots   (driver, repositoryData, startTime) // 02-snapshots
+	step_03_04_ix_files (driver, repositoryData, startTime) // 03-packfiles, 04-index_repo
 	namesMap := step_05_names(driver, repositoryData, startTime)
 	metaBlobs := MetaBlobSorter(repositoryData)
-	step_06_meta_data_storage(ctx, repo, driver, repositoryData, namesMap, metaBlobs, startTime)
-	step_07_contents(driver, repositoryData, metaBlobs, startTime)
-	step_08_children(driver, repositoryData, startTime)
-	step_09_10_fullname_dirpath(driver, repositoryData, metaBlobs, startTime)
-	step_11_snap_blobs(driver, repositoryData, snapMap, startTime)
 
-	if createDBOptions.Index {
+	if createDBOptions.Sha256 {
+		sha256Content = map[CmpIndex]int{}
+	} else {
+		sha256Content = step_09_createSha56(driver, repositoryData)
+	}
+
+	step_06_meta_data_storage(ctx, repo, driver, repositoryData, namesMap,
+		metaBlobs, sha256Content, startTime)
+	step_07_contents(driver, repositoryData, metaBlobs, startTime)
+	step_08_repo_config(driver, repo, !createDBOptions.Sha256)
+
+	if !createDBOptions.Index {
 		step_12_createIndex(driver)
 	}
 
@@ -229,6 +244,7 @@ func step_02_snapshots(tx *Driver, repositoryData *RepositoryData,
 		type SnapshotRow struct {
 			Id        int
 			Snap_id   []byte
+			Snap_short string (8 bytes long)
 			Snap_time string
 			Snap_host string
 			Snap_fsys string
@@ -239,13 +255,13 @@ func step_02_snapshots(tx *Driver, repositoryData *RepositoryData,
 	snapMap = map[restic.ID]int{}
 	// repositoryData.Snaps is already sorted
 	for _, sn := range repositoryData.Snaps {
-		var ID restic.ID
-
-		ID = sn.ID
+		ID := sn.ID
+		snap_id_as_string := hex.EncodeToString(ID[:])
 		line := fmt.Sprintf(
-			"INSERT INTO snapshots VALUES(%d,X'%s','%s','%s','%s',X'%s');\n",
+			"INSERT INTO snapshots VALUES(%d,X'%s','%s','%s','%s','%s',X'%s');\n",
 			high_id,
-			hex.EncodeToString(ID[:]),
+			snap_id_as_string,
+			snap_id_as_string[:8],
 			sn.Time.Format(time.DateTime),
 			sn.Hostname, sn.Paths[0],
 			hex.EncodeToString(sn.Tree[:]))
@@ -262,9 +278,7 @@ func step_02_snapshots(tx *Driver, repositoryData *RepositoryData,
 }
 
 type PackfileRecordRow struct {
-	Id          int
-	Packfile_id []byte
-	Type        string
+	Type string
 }
 
 // gather information about packfiles and the index structure
@@ -274,24 +288,36 @@ func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
 	// gather all packfile IDs
 	packMap := map[restic.ID]PackfileRecordRow{}
 	packSet := mapset.NewThreadUnsafeSet[int]()
+	packToBlobSet := map[IntID]mapset.Set[IntID]{}
 	for _, ih := range repositoryData.IndexHandle {
 		if packSet.Add(int(ih.pack_index)) {
 			pack_ID := repositoryData.IndexToBlob[ih.pack_index]
-			row := PackfileRecordRow{Id: int(ih.pack_index), Packfile_id: pack_ID[:], Type: ih.Type.String()}
+			row := PackfileRecordRow{ih.Type.String()}
 			packMap[pack_ID] = row
 		}
+		if _, ok := packToBlobSet[ih.pack_index]; !ok {
+			packToBlobSet[ih.pack_index] = mapset.NewThreadUnsafeSet[IntID]()
+		}
+		packToBlobSet[ih.pack_index].Add(ih.blob_index)
 	}
 
 	// convert to Slice and sort
 	packSlice := packSet.ToSlice()
 	sort.Ints(packSlice)
+	/*CREATE TABLE packfiles (
+			id INTEGER PRIMARY KEY,             -- the primary key
+			packfile_id BLOB NOT NULL,          -- the packfile ID, UNIQUE INDEX, [32]byte
+			blob_count INTEGER NOT NULL,        -- number of blobs in packfile
+			type TEXT NOT NULL                  -- type of packfile data/tree
+	)*/
 
 	count := 0
 	for _, pack_index := range packSlice {
 		pack_ID := repositoryData.IndexToBlob[IntID(pack_index)]
 		row := packMap[pack_ID]
-		line := fmt.Sprintf("INSERT INTO packfiles VALUES(%d,X'%s','%s');\n",
-			pack_index, hex.EncodeToString(pack_ID[:]), row.Type)
+		line := fmt.Sprintf("INSERT INTO packfiles VALUES(%d,X'%s',%d,'%s');\n",
+			pack_index, hex.EncodeToString(pack_ID[:]),
+				packToBlobSet[IntID(pack_index)].Cardinality(), row.Type)
 		io.WriteString(tx.stdin, line)
 		if (tx.Debug & DBG_PACKFILE) == DBG_PACKFILE {
 			Printf("%s", line)
@@ -301,16 +327,15 @@ func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
 	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO packfiles",
 		count, time.Since(start).Seconds())
 
-	/*
-		type IndexRepoRecordRow struct {
+	/*type IndexRepoRecordRow struct {
 			Id                 IntID
 			Blob               []byte // == UNIQUE
 			Type               string
 			Length             int
 			UncompressedLength int
 			Pack__id           int // back pointer to packfiles
-		}
-	*/
+		}*/
+
 	// collect all blob indices - tree and data
 	blobSet := mapset.NewThreadUnsafeSet[int]()
 	for _, ih := range repositoryData.IndexHandle {
@@ -326,8 +351,12 @@ func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
 		ih := repositoryData.IndexHandle[blob_ID]
 
 		line := fmt.Sprintf("INSERT INTO index_repo VALUES(%d,X'%s','%s',%d,%d,%d);\n",
-			blob_index, hex.EncodeToString(blob_ID[:]), ih.Type.String(),
-			ih.size, ih.UncompressedLength, ih.pack_index)
+			blob_index,
+			hex.EncodeToString(blob_ID[:]),
+			ih.Type.String(),
+			ih.size,
+			ih.UncompressedLength,
+			ih.pack_index)
 		io.WriteString(tx.stdin, line)
 		if (tx.Debug & DBG_INDEX) == DBG_INDEX {
 			Printf("%s", line)
@@ -347,11 +376,7 @@ func step_05_names(tx *Driver, repositoryData *RepositoryData,
 	namesSet := mapset.NewThreadUnsafeSet[string]()
 	for _, fileList := range repositoryData.DirectoryMap {
 		for _, node := range fileList {
-			name := node.name
-			if strings.Index(name, "'") >= 0 {
-				name = strings.ReplaceAll(name, "'", "''")
-			}
-			namesSet.Add(name)
+			namesSet.Add(node.name)
 		}
 	}
 
@@ -359,10 +384,17 @@ func step_05_names(tx *Driver, repositoryData *RepositoryData,
 	namesSlice := namesSet.ToSlice()
 	sort.Strings(namesSlice)
 
+
+
 	high_id := 1
 	namesMap = map[string]int{}
 	for _, name := range namesSlice {
-		line := fmt.Sprintf("INSERT INTO names VALUES(%d,'%s');\n", high_id, name)
+		var nameDB string
+		nameDB = name
+		if strings.Index(nameDB, "'") >= 0 {
+			nameDB = strings.ReplaceAll(nameDB, "'", "''")
+		}
+		line := fmt.Sprintf("INSERT INTO names VALUES(%d,'%s');\n", high_id, nameDB)
 		io.WriteString(tx.stdin, line)
 		if (tx.Debug & DBG_NAMES) == DBG_NAMES {
 			Printf("%s", line)
@@ -393,7 +425,7 @@ func MetaBlobSorter(repositoryData *RepositoryData) (metaBlobs []IntID) {
 
 func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 	tx *Driver, repositoryData *RepositoryData, namesMap map[string]int,
-	metaBlobs []IntID, start time.Time) (err error) {
+	metaBlobs []IntID, sha256StoreIndex map[CmpIndex]int, start time.Time) (err error) {
 
 	/*
 		type MetaDataStorageRow struct {
@@ -415,12 +447,19 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 	high_id := 1
 	for _, meta_blob := range metaBlobs {
 		for position, node := range repositoryData.DirectoryMap[meta_blob] {
-			if node.Type == "dir" && node.subtree_ID == MasterRepoRoot {
-				continue
-			}
+			var size, links, subtree__id, linkTarget, sha256 string
 
-			var size, links, subtree__id, linkTarget string
 			// NULL column processing
+			sha256 = "NULL"
+			cmp_ix := CmpIndex{meta_blob, position}
+			if len(sha256StoreIndex) > 1 && node.Type == "file" && node.size > 0 {
+				index, ok := sha256StoreIndex[cmp_ix]
+				if ok {
+					sha256 = fmt.Sprintf("%d", index)
+				} else {
+					Printf("index entry %+v not found!\n", cmp_ix)
+				}
+			}
 			if node.size == 0 {
 				size = "NULL"
 			} else {
@@ -449,10 +488,22 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 
 			line := fmt.Sprintf(
 				"INSERT INTO meta_data_store VALUES(%d,%d,%d,%d,'%s',%d,'%s',%d,%d,"+
-					"%s,%s,%s,%s);\n",
-				high_id, meta_blob, position, namesMap[node.name], node.Type,
-				node.Mode, node.mtime.Format(time.DateTime),
-				node.inode, node.DeviceID, size, links, subtree__id, linkTarget)
+					"%s,%s,%s,%s,%s);\n",
+				high_id,
+				meta_blob,
+				position,
+				namesMap[node.name],
+				node.Type,
+				node.Mode,
+				node.mtime.Format(time.DateTime),
+				node.inode,
+				node.DeviceID,
+				// possible NULL values
+				sha256,
+				size,
+				links,
+				subtree__id,
+				linkTarget)
 			io.WriteString(tx.stdin, line)
 			if (tx.Debug & DBG_METADATA) == DBG_METADATA {
 				Printf("%s", line)
@@ -470,20 +521,23 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 func step_07_contents(tx *Driver, repositoryData *RepositoryData,
 	metaBlobs []IntID, start time.Time) {
 
-	/*
-		type ContentsRecordRow struct {
+	/*type ContentsRecordRow struct {
 			Blob__id IntID // map back to index_repo.id (owning directory / meta_blob)
 			Position int   // with triple (Id_blob, Position, Offset) == UNIQUE
 			Offset   int
 			Data__id IntID // map back to index_repo.id (data)
-		}
-	*/
+		}*/
+
 	high_id := 1
 	for _, meta_blob := range metaBlobs {
 		for position, node := range repositoryData.DirectoryMap[meta_blob] {
-			for offset, cont := range node.content {
+			for offset, cont_value := range node.content {
 				line := fmt.Sprintf("INSERT INTO contents VALUES(%d,%d,%d,%d,%d);\n",
-					high_id, meta_blob, position, offset, cont)
+					high_id,
+					meta_blob,
+					position,
+					offset,
+					cont_value)
 				io.WriteString(tx.stdin, line)
 				if (tx.Debug & DBG_CONTENTS) == DBG_CONTENTS {
 					Printf("%s", line)
@@ -496,109 +550,77 @@ func step_07_contents(tx *Driver, repositoryData *RepositoryData,
 	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO contents",
 		high_id-1, time.Since(start).Seconds())
 }
+/*CREATE TABLE config (
+     id INTEGER PRIMARY KEY,            -- the primary key = 1
+     repo_id TEXT NOT NULL,             -- repository ID
+     chunker_polynomial TEXT,           -- chunker polynomial for encoding
+     repo_path TEXT,                    -- fullpath to repo
+     database_time TEXT                 -- when was this DB created
+)*/
 
-// create all children records. This is one of the tables WITHOUT ROWID.
-func step_08_children(tx *Driver, repositoryData *RepositoryData, start time.Time) {
-
-	// CreateAllChildren is 'map[IntID]mapset.Set[IntID]'
-	count := 0
-	for parent, childSet := range CreateAllChildren(repositoryData) {
-		for child := range childSet.Iter() {
-			// remove loops from topography
-			if child == parent {
-				continue
-			}
-			line := fmt.Sprintf("INSERT INTO children VALUES(%d,%d);\n",
-				int(parent), int(child))
-			io.WriteString(tx.stdin, line)
-			if (tx.Debug & DBG_CHILDREN) == DBG_CHILDREN {
-				Printf("%s", line)
-			}
-			count++
-		}
+func step_08_repo_config(tx *Driver, repo *repository.Repository, sha256 bool) {
+	config := repo.Config()
+	chunker_polynomial := fmt.Sprintf("%v", config.ChunkerPolynomial) // 0x...
+	// globalOptions.Repo
+	var sha56Create string
+	if sha256 {
+		sha56Create = "true"
+	} else {
+		sha56Create = "false"
 	}
-
-	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO children",
-		count, time.Since(start).Seconds())
+	line := fmt.Sprintf("INSERT INTO config VALUES(%d,'%s','%s','%s','%s','%s');\n",
+		1,
+		config.ID,
+		chunker_polynomial[2:],
+		globalOptions.Repo,
+		sha56Create,
+		time.Now().Format(time.DateTime))
+	io.WriteString(tx.stdin, line)
 }
 
-// TABLEs fullname and dir_path, derived from repositoryData.FullPath
-func step_09_10_fullname_dirpath(tx *Driver, repositoryData *RepositoryData,
-	metaBlobs []IntID, start time.Time) {
-
-	// extract all fullnames
-	fullnameSlice := []string{}
-	// CreateReverseFullpath is a 'map[string]mapset.Set[IntID]'
-	// we only are using the keys of the map here
-	for fullname := range CreateReverseFullpath(repositoryData) {
-		fullnameSlice = append(fullnameSlice, fullname)
-	}
-	sort.Strings(fullnameSlice)
-
-	count := 0
-	fullnameMap := map[string]int{}
-	for ix, fullname := range fullnameSlice {
-		fullnameMap[fullname] = ix + 1
-		// replace single quotes
-		if strings.Index(fullname, "'") >= 0 {
-			fullname = strings.ReplaceAll(fullname, "'", "''")
-		}
-		line := fmt.Sprintf("INSERT INTO fullname VALUES(%d,'%s');\n", ix+1, fullname)
-		io.WriteString(tx.stdin, line)
-		if (tx.Debug & DBG_FULLNAME) == DBG_FULLNAME {
-			Printf("%s", line)
-		}
-		count++
-	}
-	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO fullname",
-		count, time.Since(start).Seconds())
-
-	/*
-		type DirPathRow struct {
-			Id           IntID
-			Fullname__id int
-		}
-	*/
-	count = 0
-	for _, meta_blob := range metaBlobs {
-		fullname, ok := repositoryData.FullPath[meta_blob]
-		if !ok { // filters EMPTY_NODE_ID
-			continue
-		}
-
-		line := fmt.Sprintf("INSERT INTO dir_path VALUES(%d,%d);\n",
-			int(meta_blob), fullnameMap[fullname])
-		io.WriteString(tx.stdin, line)
-		if (tx.Debug & DBG_DIRPATH) == DBG_DIRPATH {
-			Printf("%s", line)
-		}
-		count++
-	}
-
-	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO dir_path",
-		count, time.Since(start).Seconds())
+type CmpIndex struct {
+	blob_index IntID
+	position   int
 }
 
-// TABLE snap_blobs, derived from repositoryData.MetaDirMap
-func step_11_snap_blobs(tx *Driver, repositoryData *RepositoryData,
-	snapMap map[restic.ID]int, start time.Time) {
+func step_09_createSha56(tx *Driver, repositoryData *RepositoryData) (map[CmpIndex]int) {
 
-	count := 0
-	for id, blobSet := range repositoryData.MetaDirMap {
-		snap_id := snapMap[id]
-		for meta_blob := range blobSet.Iter() {
-			line := fmt.Sprintf("INSERT INTO snap_blobs VALUES(%d,%d);\n",
-				snap_id, int(meta_blob))
-			io.WriteString(tx.stdin, line)
-			if (tx.Debug & DBG_SNAPBLOB) == DBG_SNAPBLOB {
-				Printf("%s", line)
+	// set up slices, maps and constants
+	sha256Map := map[[32]byte]int{}
+	sha256StoreIndex := map[CmpIndex]int{}
+
+	// this entry points to garbage
+	data, _ := hex.DecodeString(strings.Repeat("deadbeef0caffee0", 4))
+	var data2 [32]byte
+	copy(data2[:], data)
+	sha256Map[data2] = 0
+
+	//loop start
+	index := 1
+	var position int
+	var ok bool
+	for blob_index, fileSlice := range repositoryData.DirectoryMap {
+		for posi, meta := range fileSlice {
+			if meta.Type == "file" {
+				sha256Content := ConvertContent(meta.content)
+				if position, ok = sha256Map[sha256Content]; !ok {
+					position = index
+					sha256Map[sha256Content] = position
+					index++
+				}
+				sha256StoreIndex[CmpIndex{blob_index, posi}] = position
 			}
-			count++
 		}
 	}
 
-	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO snap_blobs",
-		count, time.Since(start).Seconds())
+	// write out 'sha256Slice'
+	for value, index := range sha256Map {
+		line := fmt.Sprintf("INSERT INTO sha256_content VALUES(%d,X'%s');\n",
+			index, hex.EncodeToString(value[:]))
+		io.WriteString(tx.stdin, line)
+	}
+	Verboseff("%-35s %7d rows\n", "INSERT INTO sha256_content", index)
+	return sha256StoreIndex
 }
 
 // create all INDEX structures after all data have been inserted
@@ -611,29 +633,32 @@ func step_12_createIndex(tx *Driver) {
 // database export final steps
 func step_13_finale(tx *Driver) {
 	io.WriteString(tx.stdin, "COMMIT;\n")
-	io.WriteString(tx.stdin, "VACUUM;\n")
+	// CREATE left out secondary TABLE entries
+	io.WriteString(tx.stdin, ".read /home/wplapper/restic/db/sql/create_missing_tables.sql\n")
 }
 
 // table definitions
 var CreateTablesSlice = []string{
 	`CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,             -- ID of snapshots row
-    snap_id   BLOB NOT NULL,            -- snap ID, UNIQUE INDEX
-    snap_time TEXT NOT NULL,            -- time of snap, truncated to seconds
-    snap_host TEXT NOT NULL,            -- host wich is to be backep up
-    snap_fsys TEXT NOT NULL,            -- filesystem to be backup up
-    snap_root BLOB NOT NULL             --  the root of the snap
+    snap_id    BLOB NOT NULL,           -- snap ID, UNIQUE INDEX
+    snap_short TEXT NOT NULL,           -- snap ID, first 8 character as string
+    snap_time  TEXT NOT NULL,           -- time of snap, truncated to seconds
+    snap_host  TEXT NOT NULL,           -- host which is to be backep up
+    snap_fsys  TEXT NOT NULL,           -- filesystem to be backup up
+    snap_root  BLOB NOT NULL            -- the root of the snap
 )`,
 
 	`CREATE TABLE packfiles (
     id INTEGER PRIMARY KEY,             -- the primary key
-    packfile_id BLOB NOT NULL,          -- the packfile ID, UNIQUE INDEX, as []byte, len 32
-    type TEXT                           -- type of packfile data/tree
+    packfile_id BLOB NOT NULL,          -- the packfile ID, UNIQUE INDEX, [32]byte
+    blob_count INTEGER NOT NULL,        -- number of blobs in packfile
+    type TEXT NOT NULL                  -- type of packfile data/tree
 )`,
 
 	`CREATE TABLE index_repo (
     id INTEGER PRIMARY KEY,             -- the primary key
-    blob BLOB NOT NULL,                 -- the idd, UNIQUE INDEX, as []byte, len 32
+    blob BLOB NOT NULL,                 -- the id, UNIQUE INDEX, [32]byte
     type TEXT NOT NULL,                 -- type tree / data
     length INTEGER NOT NULL,            -- length of blob
     uncompressedlength INTEGER NOT NULL,-- uncompressed length
@@ -643,85 +668,108 @@ var CreateTablesSlice = []string{
 
 	`CREATE TABLE names (
     id INTEGER PRIMARY KEY,             -- the primary key
-    name TEXT                           -- all names collected from restic system
+    name TEXT NOT NULL                  -- all base names, UNIQUE
 )`,
 
 	`CREATE TABLE meta_data_store (
     id INTEGER PRIMARY KEY,
-    blob__id INTEGER NOT NULL,          -- back ptr to index_repo PRIMARY KEY, part 1
-    position INTEGER NOT NULL,          -- offset into slice      PRIMARY KEY, part 2
+    blob__id INTEGER NOT NULL,          -- back ptr to index_repo UNIQUE KEY, part 1
+    position INTEGER NOT NULL,          -- offset into slice      UNIQUE KEY, part 2
     name__id INTEGER NOT NULL,          -- pointer to name
     type TEXT NOT NULL,
     mode INTEGER NOT NULL,
     mtime TEXT NOT NULL,
     inode INTEGER NOT NULL,
     deviceid INTEGER NOT NULL,
-    size INTEGER,                       -- can be NULL for dir,       symlink
+    sha256__id INTEGER,                 -- can be NULL if not enabled
+    size INTEGER,                       -- can be NULL for dir, empty file, symlink
     links INTEGER,                      -- can be NULL for dir
     subtree__id INTEGER,                -- can be NULL for      file, symlink
     linktarget TEXT,                    -- can be NULL for dir, file
 
     FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
-    FOREIGN KEY(name__id)               REFERENCES name(id)
+    FOREIGN KEY(name__id)               REFERENCES names(id)
 )`,
 
 	`CREATE TABLE contents (
-    id INTEGER PRIMARY KEY,             -- with ROWD, it is a large table
-    blob__id INTEGER NOT NULL,          -- ptr to idd_file, needs INDEX
-    position INTEGER NOT NULL,          -- position in idd_file
-    offset   INTEGER NOT NULL,          -- the offset of the contents list
-    data__id INTEGER NOT NULL,          -- ptr to data_idd, INDEX
+    id INTEGER PRIMARY KEY,             -- with ROWID, it is a large table
+    blob__id INTEGER NOT NULL,          -- ptr to idd_file,        UNIQUE KEY, part 1
+    position INTEGER NOT NULL,          -- position in file slice, UNIQUE KEY, part 2
+    offset   INTEGER NOT NULL,          -- offset into contents    UNIQUE KEY, part 3
+    data__id INTEGER NOT NULL,          -- ptr to ixr.id, INDEX
     FOREIGN KEY(data__id)               REFERENCES index_repo(id),
     FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
 )`,
 
-	// WITHOUT ROWIS tables do their own thing regarding INDEXing,
-	// so it is not worthwhile having CREATE INDEX on those tables!
-	`CREATE TABLE children (
-    parent__id INTEGER NOT NULL,      -- parent entry
-    child__id  INTEGER NOT NULL,      -- child  entry
+	`CREATE TABLE config (
+     id INTEGER PRIMARY KEY,            -- the primary key = 1
+     repo_id TEXT NOT NULL,             -- repository ID
+     chunker_polynomial TEXT,           -- chunker polynomial for encoding
+     repo_path TEXT,                    -- fullpath to repo
+     sha256_context TEXT,               -- enable / disable sha256_content
+     database_time TEXT                 -- when was this DB created
+)`,
 
-    PRIMARY KEY(parent__id, child__id),
-    FOREIGN KEY(parent__id)           REFERENCES index_repo(id),
-    FOREIGN KEY(child__id)            REFERENCES index_repo(id)
+	`CREATE TABLE sha256_content (
+     id INTEGER PRIMARY KEY,            -- the primary key
+     sha256 BLOB                        -- UNIQUE INDEX for content slice
+)`,
+
+	// derived tables, can be created from the above tables
+	// not filled during initial load
+
+	// WITHOUT ROWID tables do their own thing regarding INDEXing,
+	// so it is not worth having CREATE INDEX on those tables!
+	// or sorting the primary keys before INSERT
+	`CREATE TABLE children (
+    parent__id INTEGER NOT NULL,        -- parent entry
+    child__id  INTEGER NOT NULL,        -- child  entry
+
+    PRIMARY KEY(parent__id, child__id), -- UNIQUE
+    FOREIGN KEY(parent__id)             REFERENCES index_repo(id),
+    FOREIGN KEY(child__id)              REFERENCES index_repo(id)
 ) WITHOUT ROWID`,
 
 	`CREATE TABLE fullname (
-    id INTEGER PRIMARY KEY,           -- the primary key, GENERIC ascending
-    pathname TEXT NOT NULL            -- full pathname of directory UNIQUE INDEX
+    id INTEGER PRIMARY KEY,             -- the primary key, autogenerated
+    pathname TEXT NOT NULL              -- full pathname of directory, UNIQUE INDEX
 )`,
 
 	`CREATE TABLE dir_path (
-    id INTEGER PRIMARY KEY,           -- the primary key
-    fullname__id INTEGER NOT NULL,    -- ptr to "fullname", INDEX
-    FOREIGN KEY(fullname__id)         REFERENCES fullname(id),
-    FOREIGN KEY(id)                   REFERENCES index_repo(id)
+    blob__id INTEGER PRIMARY KEY,       -- the primary key = ixr.id
+    fullname__id INTEGER NOT NULL,      -- ptr to "fullname", INDEX
+    FOREIGN KEY(fullname__id)           REFERENCES fullname(id),
+    FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
 )`,
 
 	`CREATE TABLE snap_blobs (
-    snap__id INTEGER NOT NULL,          -- the snap_id , INDEX
-    blob__id INTEGER NOT NULL,          -- the idd pointer, INDEX
-    PRIMARY KEY(snap__id, blob__id),
+    snap__id INTEGER NOT NULL,          -- the snap_id pointer
+    blob__id INTEGER NOT NULL,          -- the blob pointer
+    PRIMARY KEY(snap__id, blob__id),    -- UNIQUE
     FOREIGN KEY(snap__id)               REFERENCES snapshots(id),
     FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
 ) WITHOUT ROWID`,
 }
 
 var CreateIndexSlice = []string{
-	// UNIQUE INDEX - alternate primary key
-	`CREATE UNIQUE INDEX ux_ss_snap_id   ON snapshots(snap_id)`,
-	`CREATE UNIQUE INDEX ux_ixr_blob     ON index_repo(blob)`,
-	`CREATE UNIQUE INDEX ux_pack_pack    ON packfiles(packfile_id)`,
-	`CREATE UNIQUE INDEX ux_name_name    ON names(name)`,
-	`CREATE UNIQUE INDEX ux_fname_path   ON fullname(pathname)`,
-	`CREATE UNIQUE INDEX ux_mds_blobpos  ON meta_data_store(blob__id,position)`,
-	`CREATE UNIQUE INDEX ux_cont_blpoof  ON contents(blob__id,position,offset)`,
+	// UNIQUE INDEX - alternate primary keys
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ss_snapid   ON snapshots(snap_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_pack_packON packfiles(packfile_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ixr_blob    ON index_repo(blob)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_names_name  ON names(name)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_mds_blpo    ON meta_data_store(blob__id,position)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_cont_blpoof ON contents(blob__id,position,offset)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_fname_path  ON fullname(pathname)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_sha256_sha  ON sha256_content(sha256)`,
+
 	// normal INDEX
-	`CREATE        INDEX ix_ixr_pack     ON index_repo(pack__id)`,
-	`CREATE        INDEX ix_ixr_type     ON index_repo(type)`,
-	`CREATE        INDEX ix_cont_data    ON contents(data__id)`,
-	`CREATE        INDEX ix_mds_type     ON meta_data_store(type)`,
-	`CREATE        INDEX ix_mds_name_id  ON meta_data_store(name__id)`,
-	`CREATE        INDEX ix_mds_subtree  ON meta_data_store(subtree__id)
+	`CREATE        INDEX IF NOT EXISTS ix_ixr_pack    ON index_repo(pack__id)`,
+	`CREATE        INDEX IF NOT EXISTS ix_ixr_type    ON index_repo(type)`,
+	`CREATE        INDEX IF NOT EXISTS ix_cont_data   ON contents(data__id)`,
+	`CREATE        INDEX IF NOT EXISTS ix_mds_type    ON meta_data_store(type)`,
+	`CREATE        INDEX IF NOT EXISTS ix_mds_name_id ON meta_data_store(name__id)`,
+	`CREATE        INDEX IF NOT EXISTS ix_mds_subtree ON meta_data_store(subtree__id)
      WHERE type='dir'`,
+	`CREATE        INDEX IF NOT EXISTS ix_mds_sha256  ON meta_data_store(sha256__id)
+     WHERE type='file'`,
 }
