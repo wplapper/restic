@@ -8,6 +8,7 @@ package main
 import (
 	// system
 	"context"
+	"time"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -19,16 +20,12 @@ import (
 	"github.com/deckarep/golang-set/v2"
 )
 
-type SnapSummaryRecord struct {
-	CountMetaBlobs int
-	CountDataBlobs int
-	SizesMetaBlobs int
-	SizesDataBlobs int
-}
-
 type HistoryOptions struct {
-	Timing bool
-	All    bool
+	Timing     bool
+	All        bool
+	FileSystem string
+	Detail     int
+	ShowFirst  bool
 }
 var historyOptions HistoryOptions
 
@@ -58,6 +55,9 @@ func init() {
 	f := cmdHistory.Flags()
 	f.BoolVarP(&historyOptions.All, "all", "A", false, "show all snapshots")
 	f.BoolVarP(&historyOptions.Timing, "timing", "T", false, "produce timings")
+	f.BoolVarP(&historyOptions.ShowFirst, "show-all", "S", false, "show first snap detail")
+	f.StringVarP(&historyOptions.FileSystem, "file-system", "F", "", "filter for filesystem")
+	f.CountVarP(&historyOptions.Detail, "Detail", "D", "print dir/file details")
 }
 
 func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
@@ -73,16 +73,29 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 	}
 
 	Verboseff("Repository is %s\n", globalOptions.Repo)
-	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, historyOptions.Timing, false)
+	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData, historyOptions.Timing)
 	if err != nil {
 		return err
 	}
 
+	var data_map map[IntID]mapset.Set[CompIddFile]
+
 	repoHistory := mapset.NewThreadUnsafeSet[IntID]()
 	lastIndex := len(repositoryData.Snaps) - 1
 	all := historyOptions.All
+	detail := historyOptions.Detail
+	fileSystem := historyOptions.FileSystem
+
+	if detail > 0 {
+		data_map = map_data_blob_file(&repositoryData)
+	}
+	first := true
 	for snap_ix, sn := range repositoryData.Snaps {
 		if all {
+			if fileSystem != "" && fileSystem != sn.Paths[0] {
+				continue
+			}
+
 			thisSnap := mapset.NewThreadUnsafeSet[IntID]()
 			for metaBlobInt := range repositoryData.MetaDirMap[sn.ID].Iter() {
 				thisSnap.Add(metaBlobInt)
@@ -92,10 +105,12 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 			}
 
 			// form differences
-			summary := CountSnapSet(thisSnap.Difference(repoHistory),
-				&repositoryData)
-			if summary.CountMetaBlobs == 0 { continue }
-			Printf("%s %s %s:%s\n", sn.ID.Str(), sn.Time.String()[:19],
+			diff := thisSnap.Difference(repoHistory)
+			summary := CountSnapSet(diff, &repositoryData)
+			if summary.CountMetaBlobs == 0 {
+				continue
+			}
+			Printf("\n*** %s %s %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime),
 				sn.Hostname, sn.Paths[0])
 			Printf("meta %7d %10.1f MiB ", summary.CountMetaBlobs,
 				float64(summary.SizesMetaBlobs) / ONE_MEG)
@@ -106,6 +121,11 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 			// this would create a new result Set[IntID]
 			for metaBlobInt := range thisSnap.Iter() {
 				repoHistory.Add(metaBlobInt)
+			}
+
+			// skip the very first round, since this may produce large amounts of output!
+			if detail > 0 && (!first ||  historyOptions.ShowFirst) {
+				Print_some_detail(&repositoryData, diff, detail, false, data_map)
 			}
 		} else if snap_ix < lastIndex {
 			for metaBlobInt := range repositoryData.MetaDirMap[sn.ID].Iter() {
@@ -124,20 +144,30 @@ func runHistory(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 			}
 
 			// form differences
-			summary := CountSnapSet(thisSnap.Difference(repoHistory), &repositoryData)
+			diff := thisSnap.Difference(repoHistory)
+			summary := CountSnapSet(diff, &repositoryData)
 			if summary.CountMetaBlobs == 0 { continue }
-			Printf("%s %s %s:%s\n", sn.ID.Str(), sn.Time.String()[:19],
+			Printf("\n*** %s %s %s:%s\n", sn.ID.Str(), sn.Time.Format(time.DateTime),
 				sn.Hostname, sn.Paths[0])
 			Printf("meta %7d %10.1f MiB ", summary.CountMetaBlobs,
 				float64(summary.SizesMetaBlobs) / ONE_MEG)
 			Printf("data %7d %10.1f MiB\n", summary.CountDataBlobs,
 				float64(summary.SizesDataBlobs) / ONE_MEG)
 		}
+		first = false
 	}
 	return nil
 }
 
-func CountSnapSet(theData mapset.Set[IntID], repositoryData *RepositoryData) (SnapSummaryRecord ) {
+type SnapSummaryRecord struct {
+	CountMetaBlobs int
+	CountDataBlobs int
+	SizesMetaBlobs int
+	SizesDataBlobs int
+}
+
+func CountSnapSet(theData mapset.Set[IntID], repositoryData *RepositoryData) (SnapSummaryRecord) {
+
 	countMeta := 0
 	countData := 0
 	sizesMeta := 0
