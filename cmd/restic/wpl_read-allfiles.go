@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"sort"
 	"time"
 
 	//argparse
@@ -24,7 +23,6 @@ import (
 
 type readall_options struct {
 	one_hour     bool
-	dump         bool
 	check_packs  int
 	amt_to_check int // in MiB
 	reset_count  int
@@ -65,7 +63,6 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 func init() {
 	cmdRoot.AddCommand(cmdReadall)
 	f := cmdReadall.Flags()
-	f.BoolVarP(&ReadallOptions.dump, "dump", "D", false, "stop after ID dump")
 	f.BoolVarP(&ReadallOptions.one_hour, "one-hour", "O", false, "run for about an hour")
 	f.IntVarP(&ReadallOptions.check_packs, "check-packs", "C", 1000000, "check next <next> packfiles")
 	f.IntVarP(&ReadallOptions.reset_count, "reset-count", "R", 0, "reset <reset-count> blobs as not checked")
@@ -81,7 +78,7 @@ func runReadall(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 		Printf("Could not open repository - error is %v\n", err)
 		return err
 	}
-	Verboseff("Repository is %s\n", globalOptions.Repo)
+	Printf("Repository is %s\n", globalOptions.Repo)
 
 	// step 2: load the index files
 	if err := repo.LoadIndex(ctx); err != nil {
@@ -95,7 +92,7 @@ func runReadall(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 	for _, size := range repo_packs {
 		pack_size += size
 	}
-	Verboseff("%7d packfiles with a size of %10.1f MiB\n", len(repo_packs),
+	Printf("%7d packfiles with a size of %10.1f MiB\n", len(repo_packs),
 		float64(pack_size)/ONE_MEG)
 
 	// step 4: get the stats file loaded into memory
@@ -109,7 +106,7 @@ func runReadall(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) er
 	if err != nil {
 		return err
 	}
-	Printf("No errors found\n")
+	//Printf("No errors found\n")
 
 	count_unchecked := 0
 	for _, checked := range checked_packs {
@@ -136,29 +133,6 @@ func do_check(repo restic.Repository, ctx context.Context,
 	type custom_sort_ID struct {
 		ID     restic.ID
 		ID_str string
-	}
-	// dump packfiles ID and their length, then stop
-	if ReadallOptions.dump {
-		Printf("%-12s %10s %5s\n", "short ID", "length", "check")
-
-		// custom sort
-		ID_sorted := make([]custom_sort_ID, 0, len(repo_packs))
-		for ID := range repo_packs {
-			ID_sorted = append(ID_sorted, custom_sort_ID{ID: ID, ID_str: ID.String()})
-		}
-
-		sort.Slice(ID_sorted, func(i, j int) bool {
-			return ID_sorted[i].ID_str < ID_sorted[j].ID_str
-		})
-
-		for _, entry := range ID_sorted {
-			ID_str := entry.ID_str
-			ID := entry.ID
-			checked := checked_packs[ID_str]
-			length := repo_packs[ID]
-			Printf("%s %10d  %v\n", ID_str[:12], length, checked)
-		}
-		return errors.New("return after dump")
 	}
 
 	// remove cruft from stats file
@@ -193,8 +167,8 @@ func do_check(repo restic.Repository, ctx context.Context,
 			count_unchecked++
 		}
 	}
-	Verboseff("checked_packs has %7d entries.\n", len(checked_packs))
-	Verboseff("unchecked packs   %7d entries with size %10.1f MiB\n", count_unchecked,
+	Printf("checked_packs has %7d entries.\n", len(checked_packs))
+	Printf("unchecked packs   %7d entries with size %10.1f MiB\n", count_unchecked,
 		float64(size_unchecked)/ONE_MEG)
 
 	// get a checker instance

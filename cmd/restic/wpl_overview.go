@@ -239,8 +239,8 @@ options OverviewOptions) error {
 
 	// loop over all repositories
 	repos := json_config["BASE_CONFIG"]["repos"]
-	all_group_summary := map[snapGroup]GroupInfoSummary{}
-	all_groups_sorted := []snapGroup{}
+	all_group_summary := map[SnapGroup]GroupInfoSummary{}
+	all_groups_sorted := []SnapGroup{}
 	for _, repo_basename := range repos {
 		repository := target + repo_basename
 		gopts.Repo = repository

@@ -94,8 +94,8 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
 	return nil
 }
 
-// go through index table and count tree and data blobs, and compressed and
-// uncompressed sizes
+// go through index table and count tree and data blobs, calculate compressed
+// and uncompressed sizes
 func CountBlobs(ctx context.Context, repo restic.Repository,
 	repositoryData *RepositoryData, options RepoDetailsOptions, start time.Time) {
 	count_tree_blobs := 0
@@ -129,22 +129,11 @@ func CountBlobs(ctx context.Context, repo restic.Repository,
 	// get sizes for meta and data packfiles
 	size_meta_pack := int64(0)
 	for ID := range pack_set_meta.Iter() {
-		size, ok := repo_packs[ID]
-		if !ok {
-			Printf("meta ID not matched %v\n", ID)
-			panic("size not found")
-		}
-		size_meta_pack += size
+		size_meta_pack += repo_packs[ID]
 	}
-
 	size_data_pack := int64(0)
 	for ID := range pack_set_data.Iter() {
-		size, ok := repo_packs[ID]
-		if !ok {
-			Printf("data ID not matched %v\n", ID)
-			panic("size not found")
-		}
-		size_data_pack += size
+		size_data_pack += repo_packs[ID]
 	}
 
 	// report
@@ -235,16 +224,15 @@ func CountTables(ctx context.Context, repo restic.Repository,
 		count_meta_dir_entries += meta_blobs.Cardinality()
 	}
 
-	// directory_map
-	count_directory_map_entries := 0
-
 	// we have tuple(node.DeviceID, node.Inode) which is unique
+	// but inodes can be re-used over time!
 	inodes_meta := mapset.NewThreadUnsafeSet[DeviceAndInode]()
 	inodes_datan := mapset.NewThreadUnsafeSet[DeviceAndInode]()
 	inodes_datac := mapset.NewThreadUnsafeSet[[sha256.Size]byte]()
 	names := mapset.NewThreadUnsafeSet[string]()
 
 	// map inodes back to 'meta_blob_int'
+	count_directory_map_entries := 0
 	for _, file_list := range repositoryData.DirectoryMap {
 		count_directory_map_entries += len(file_list)
 		for _, meta := range file_list {
@@ -440,8 +428,8 @@ func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
 	}
 }
 
-// serialize 'content' step by step into sha256 by Write() to it
-func ConvertContent(content []IntID) (result [sha256.Size]byte) {
+// serialize 'content' step by step into sha256 by Write-ing() to it
+func ConvertContent(content []IntID) (result restic.ID) {
 	sha256sum := sha256.New()
 	temp := make([]byte, 4)
 	for _, data_blob_int := range content {

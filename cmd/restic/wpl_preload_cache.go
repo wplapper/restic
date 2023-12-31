@@ -1,6 +1,3 @@
-
-
-
 package main
 
 import (
@@ -9,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	//"golang.org/x/sync/errgroup"
 
 	//argparse
 	"github.com/spf13/cobra"
@@ -26,6 +22,7 @@ import (
 type PreloadOptions struct {
 	DryRun bool
 }
+
 var preloadOptions PreloadOptions
 
 var cmdPreloadCache = &cobra.Command{
@@ -52,6 +49,8 @@ func init() {
 }
 
 func runPreloadCache(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
+	// index files are always recreated with 'restic repair index' or 'restic prune'
+	// only snapshat files in the local cache can be identified as outdated
 	to_be_deleted := mapset.NewThreadUnsafeSet[string]()
 	err := runPreloadCache1(ctx, gopts, to_be_deleted)
 	if err != nil {
@@ -59,8 +58,8 @@ func runPreloadCache(ctx context.Context, cmd *cobra.Command, gopts GlobalOption
 	}
 
 	// delete the files which can only be found in the local cache.
- 	for filename := range to_be_deleted.Iter() {
-		if ! preloadOptions.DryRun {
+	for filename := range to_be_deleted.Iter() {
+		if !preloadOptions.DryRun {
 			err := os.Remove(filename)
 			if err == nil {
 				Printf("file %s deleted\n", filepath.Base(filename))
@@ -94,24 +93,6 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 		return err
 	}
 
-	// step 3: loop over MasterIndex - select only tree blobs
-	packfiles := make(map[restic.ID]restic.ID)
-	repo.Index().Each(ctx, func(blob restic.PackedBlob) {
-		if blob.Type == restic.TreeBlob {
-			packfiles[blob.PackID] = blob.ID
-		}
-	})
-
-	// step 4: load one tree for each of the packfiles
-	Verbosef("LoadTree\n")
-	for _, ID := range packfiles {
-		Verboseff("Loading tree for blob %s\n", ID.String()[:12])
-		_, err := restic.LoadTree(ctx, repo, ID)
-		if err != nil {
-			Printf("LoadTree returned '%v' - ignored!\n", err)
-		}
-	}
-
 	// step 5: load snapshots
 	Verbosef("Snapshot Fileload\n")
 	snap_set := mapset.NewThreadUnsafeSet[string]()
@@ -131,12 +112,12 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 	// step 6: match front end and backend files for the following types
 	// index, meta_blobs
 	Verbosef("\nCheck index ...")
-	err1 := walk_cache(ctx, repo, subdir_name + "/index", restic.IndexFile)
+	err1 := walk_cache(ctx, repo, subdir_name+"/index", restic.IndexFile)
 	if err1 == nil {
 		Verbosef("OK\n")
 	}
 	Verbosef("Check meta data ... ")
-	err2 := walk_cache(ctx, repo, subdir_name + "/data", restic.PackFile)
+	err2 := walk_cache(ctx, repo, subdir_name+"/data", restic.PackFile)
 	if err2 == nil {
 		Verbosef("OK\n")
 	}
@@ -159,8 +140,7 @@ func runPreloadCache1(ctx context.Context, gopts GlobalOptions, to_be_deleted ma
 		Print("not OK!\n")
 		diff_set2 := snaps_in_cache.Difference(snap_set)
 		for snapshotLong := range diff_set2.Iter() {
-			subdir := snapshotLong[0:2]
-			filename := subdir_name + "/snapshots/" + subdir + "/" + snapshotLong
+			filename := subdir_name + "/snapshots/" + snapshotLong[0:2] + "/" + snapshotLong
 			to_be_deleted.Add(filename)
 		}
 	}
@@ -201,7 +181,7 @@ func walk_cache(ctx context.Context, repo *repository.Repository, root string,
 	})
 
 	if err != nil {
-		Printf("Could not walk cache -reason '%v'\n", err)
+		Printf("Could not walk cache - reason '%v'\n", err)
 		return err
 	}
 	return nil
@@ -219,14 +199,16 @@ func walk_cache_dir(root string) (result mapset.Set[string]) {
 		}
 
 		// skip directories
-		if info.IsDir() { return nil }
+		if info.IsDir() {
+			return nil
+		}
 
 		result.Add(filepath.Base(path))
 		return nil
 	})
 
 	if err != nil {
-		Printf("Could not walk cache -reason '%v'\n", err)
+		Printf("Could not walk cache - reason '%v'\n", err)
 		return mapset.NewThreadUnsafeSet[string]()
 	}
 	return result

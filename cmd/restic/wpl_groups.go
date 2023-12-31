@@ -14,11 +14,6 @@ import (
 	"github.com/deckarep/golang-set/v2"
 )
 
-type snapGroup struct {
-	Hostname   string
-	FileSystem string
-}
-
 type GroupInfoSummary struct {
 	count_snapshots  int
 	count_meta_blobs int
@@ -27,19 +22,19 @@ type GroupInfoSummary struct {
 	count_inodes     int
 }
 
-func makeGroups(repositoryData *RepositoryData) (groups_sorted []snapGroup,
-groups map[snapGroup][]SnapshotWpl) {
+func makeGroups(repositoryData *RepositoryData) (groups_sorted []SnapGroup,
+groups map[SnapGroup][]SnapshotWpl) {
 	// step: build snap groups by Hostname and filesystem
-	groups = make(map[snapGroup][]SnapshotWpl)
+	groups = make(map[SnapGroup][]SnapshotWpl)
 	for _, sn := range repositoryData.Snaps {
 		hostname := sn.Hostname
 		fileSystem := sn.Paths[0]
-		group := snapGroup{Hostname: hostname, FileSystem: fileSystem}
+		group := SnapGroup{Hostname: hostname, FileSystem: fileSystem}
 		groups[group] = append(groups[group], sn)
 	}
 
 	// step 4: sort the groups according to Hostname and filesystem
-	groups_sorted = make([]snapGroup, len(groups))
+	groups_sorted = make([]SnapGroup, len(groups))
 	index := 0
 	for group := range groups {
 		groups_sorted[index] = group
@@ -58,11 +53,11 @@ groups map[snapGroup][]SnapshotWpl) {
 	return groups_sorted, groups
 }
 
-func summarizeGroup(groups_sorted []snapGroup, groups map[snapGroup][]SnapshotWpl,
-repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
+func summarizeGroup(groups_sorted []SnapGroup, groups map[SnapGroup][]SnapshotWpl,
+repositoryData *RepositoryData) (groupResults map[SnapGroup]GroupInfoSummary) {
 	// extract size / count information frogroups m these groups
-	timings := make(map[snapGroup]float64)
-	groupResults = make(map[snapGroup]GroupInfoSummary)
+	timings := make(map[SnapGroup]float64)
+	groupResults = make(map[SnapGroup]GroupInfoSummary)
 	for _, group := range groups_sorted {
 		start_g := time.Now()
 		data_blobs_in_group := mapset.NewThreadUnsafeSet[IntID]()
@@ -109,7 +104,7 @@ repositoryData *RepositoryData) (groupResults map[snapGroup]GroupInfoSummary) {
 func MakeSnapGroups(ctx context.Context, repo *repository.Repository,
 repositoryData *RepositoryData) (groupInfo GroupInfo) {
   // generate groups based on hostname and filesystems
-  groupInfo.snap_groups = map[snapGroup][]SnapshotWpl{}
+  groupInfo.snap_groups = map[SnapGroup][]SnapshotWpl{}
 	repo.List(ctx, restic.SnapshotFile, func(id restic.ID, size int64) error {
 		sn, err := restic.LoadSnapshot(ctx, repo, id)
 		if err != nil {
@@ -119,7 +114,7 @@ repositoryData *RepositoryData) (groupInfo GroupInfo) {
 
 		hostname := sn.Hostname
     for _, path := range sn.Paths {
-      group := snapGroup{Hostname: hostname, FileSystem: path}
+      group := SnapGroup{Hostname: hostname, FileSystem: path}
       groupInfo.snap_groups[group] = append(groupInfo.snap_groups[group], SnapshotWpl{
 				ID: *sn.ID(), Hostname: sn.Hostname, Paths: sn.Paths, Time: sn.Time,
 				Tree: *sn.Tree,
@@ -130,7 +125,7 @@ repositoryData *RepositoryData) (groupInfo GroupInfo) {
 
   // transform groups in such a way that a group index can be used
   // sort snap_group keys according to Hostname and FileSystem
-  groupInfo.group_keys = make([]snapGroup, 0, len(groupInfo.snap_groups))
+  groupInfo.group_keys = make([]SnapGroup, 0, len(groupInfo.snap_groups))
   for key := range groupInfo.snap_groups {
     groupInfo.group_keys = append(groupInfo.group_keys, key)
   }
@@ -145,7 +140,7 @@ repositoryData *RepositoryData) (groupInfo GroupInfo) {
   })
 
   // enumerate group_keys for future reference as group number
-  groupInfo.group_numbers = make(map[snapGroup]int)
+  groupInfo.group_numbers = make(map[SnapGroup]int)
   for ix, key := range groupInfo.group_keys {
     groupInfo.group_numbers[key] = ix
   }

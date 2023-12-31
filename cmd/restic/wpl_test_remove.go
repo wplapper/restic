@@ -147,9 +147,9 @@ func CalculatePruneSize(selected []SnapshotWpl, repositoryData *RepositoryData,
 func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[IntID],
 	Detail int, Lost bool, data_map map[IntID]mapset.Set[CompIddFile]) {
 	// this is Detail = 1 / 2
-	// gather Detail of deleted directories and files
-	var cmp_ix CompIddFile
+	// gather Detail of selected directories and files
 	var (
+	  cmp_ix   CompIddFile
 		filename string
 		size     int
 		repl     string
@@ -166,7 +166,7 @@ func Print_some_detail(repositoryData *RepositoryData, unused_blobs mapset.Set[I
 		ih := repositoryData.IndexHandle[repositoryData.IndexToBlob[blob]]
 		if ih.Type == restic.TreeBlob && Detail > 1 {
 			filename = repositoryData.FullPath[blob]
-			deleted_files[filename] = file_info{size: 0}
+			deleted_files[filename] = file_info{}
 		} else if ih.Type == restic.DataBlob {
 
 			// in case of multiple entries this is an arbitrary choice!!
@@ -402,7 +402,7 @@ func PrintRepackInfo(repositoryData *RepositoryData,
 
 	pack_info := GetPackIDs(repositoryData)
 	location_depth2 := []int32{}
-	result := dfs(CreateAllChildren(repositoryData), root_set)
+	result := dfs2(CreateAllChildren(repositoryData), root_set)
 
 	output_slice := make([]SortPath, 0, len(result))
 	for _, meta_blob := range result {

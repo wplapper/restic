@@ -26,7 +26,6 @@ type SnapshotWpl struct {
 	Tree     restic.ID
 }
 
-
 type BlobFile2 struct {
 	// name, size, type_, mtime, content and subtree ID
 	size       uint64
@@ -88,11 +87,16 @@ type CompIndexOffet struct {
  	name          string
 }
 
+type SnapGroup struct {
+	Hostname   string
+	FileSystem string
+}
+
 type GroupInfo struct {
-  snap_groups          map[snapGroup][]SnapshotWpl
+  snap_groups          map[SnapGroup][]SnapshotWpl
   group_numbers_sorted []int
-  group_keys           []snapGroup
-  group_numbers        map[snapGroup]int
+  group_keys           []SnapGroup
+  group_numbers        map[SnapGroup]int
   map_snap_2_ix        map[string]int
 }
 
