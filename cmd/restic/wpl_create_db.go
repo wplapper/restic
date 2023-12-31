@@ -4,6 +4,8 @@ import (
 	// system
 	"context"
 	"encoding/hex"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,18 +29,27 @@ import (
 )
 
 type CreateDB struct {
-	Debug  string
-	Index  bool
-	Sha256 bool
+	Debug   string
+	Index   bool
+	Sha256  bool
+	Timing  bool
+	DumpIXR bool
+	All     bool
 }
 
+type SHA256 [32]byte
+
 const (
-	DBG_SNAPSHOT = 0x004
-	DBG_PACKFILE = 0x008
-	DBG_INDEX    = 0x010
-	DBG_NAMES    = 0x020
-	DBG_METADATA = 0x040
-	DBG_CONTENTS = 0x080
+	DBG_SNAPSHOT = 0x001
+	DBG_PACKFILE = 0x002
+	DBG_INDEX    = 0x004
+	DBG_NAMES    = 0x008
+	DBG_METADATA = 0x010
+	DBG_CONTENTS = 0x020
+	DBG_CONFIG   = 0x040
+	DBG_SHA256   = 0x080
+	DBG_CRETABLE = 0x100
+	DBG_CREINDEX = 0x200
 )
 
 var createDBOptions CreateDB
@@ -60,7 +71,7 @@ Exit status is 0 if the command was successful, and non-zero if there was any er
 `,
 	DisableAutoGenTag: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCreateDB(cmd.Context(), cmd, globalOptions)
+		return runCreateDB(cmd.Context(), globalOptions)
 	},
 }
 
@@ -68,8 +79,11 @@ func init() {
 	cmdRoot.AddCommand(cmdCreateDB)
 	f := cmdCreateDB.Flags()
 	f.StringVarP(&createDBOptions.Debug, "debug", "D", "0", "debug options")
-	f.BoolVarP(&createDBOptions.Index, "no-index", "I", false, "do not create index tables")
-	f.BoolVarP(&createDBOptions.Sha256, "sha256", "S", false, "do not create sha256 contents")
+	//f.BoolVarP(&createDBOptions.Index,   "no-index", "I", false, "do not create index tables")
+	f.BoolVarP(&createDBOptions.Sha256,  "sha256", "S", false, "do not create sha256 contents")
+	f.BoolVarP(&createDBOptions.Timing,  "timing", "T", false, "create timings")
+	//f.BoolVarP(&createDBOptions.DumpIXR, "write", "W", false, "write index_repo as binary struct")
+	f.BoolVarP(&createDBOptions.All,     "all", "A", false, "do all repositories")
 }
 
 type Driver struct {
@@ -77,7 +91,54 @@ type Driver struct {
 	Debug int
 }
 
-func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) error {
+func runCreateDB(ctx context.Context, gopts GlobalOptions) error {
+	if createDBOptions.All {
+			// the repositories
+		repositoryList := []string{
+			"/media/mount-points/Backup-ext4-Mate/restic_data",
+			"/media/mount-points/Backup-ext4-Mate/restic_home",
+			"/media/mount-points/Backup-ext4-Mate/restic_massive",
+			"/media/mount-points/Backup-ext4-Mate/restic_rasp_winxp",
+
+			"rclone:onedrive:restic_data",
+			"rclone:onedrive:restic_home",
+			"rclone:onedrive:restic_massive",
+			"rclone:onedrive:restic_rasp_winxp",
+		}
+
+		///verbosity := globalOptions.verbosity
+		//quietness := globalOptions.Quiet
+		//globalOptions.Quiet = true
+		//globalOptions.verbosity = 0
+
+		for _, repoName := range repositoryList {
+			Printf("repo %s\n", repoName)
+			if repoName[0:6] == "/media" {
+				// execute usr/bin/ncat -z new-PC 22 -w 1s
+				pingCmd := exec.Command("/usr/bin/ncat", "-z", "new-PC", "22", "-w", "1s")
+				err := pingCmd.Run()
+				if err != nil {
+					Printf("Could not ping host new-PC on port 22\n")
+					continue
+				}
+			}
+
+			//globalOptions.Quiet = quietness
+			//globalOptions.verbosity = verbosity
+			gopts.Repo = repoName
+			res := runOneDatabase(ctx, gopts)
+			if res != nil {
+				continue
+			}
+		}
+		return nil
+	} else {
+		return runOneDatabase(ctx, gopts)
+	}
+	return nil
+}
+
+func runOneDatabase(ctx context.Context, gopts GlobalOptions) error {
 
 	var (
 		repositoryData   RepositoryData
@@ -109,21 +170,51 @@ func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	Verboseff("%-48s %7.1f seconds\n", "repository open",
 		time.Since(startTime).Seconds())
 
+	// check if file /home/wplapper/restic/all_index_repo.bin exists
+	// if so, then create repositoryData.BlobToIndex[blob.ID] and
+	// repositoryData.IndexToBlob first!
+	path := "/home/wplapper/restic/all_index_repo.bin"
+	_, err = os.Stat(path)
+	if err == nil {
+		pos := IntID(2)
+		handle, err2 := os.Open(path)
+		if err2 != nil {
+			panic("unexpeced error after Stat(all_index_repo.bin)")
+		}
+
+		for true { // loop until we hit io.EOF
+			var HexId restic.ID
+			err = binary.Read(handle, binary.LittleEndian, &HexId)
+			if err != nil && errors.Is(err, io.EOF) {
+				handle.Close()
+				break
+			}
+			_, ok := repositoryData.BlobToIndex[HexId]
+			if !ok {
+				repositoryData.BlobToIndex[HexId] = pos
+				repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, HexId)
+				pos++
+			}
+		}
+	}
+
 	// step 2: gather the base information
 	err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
-		repo_details_options.Timing)
+		createDBOptions.Timing)
 	if err != nil {
 		return err
 	}
 	Verboseff("%-48s %7.1f seconds\n", "gather base data",
 		time.Since(startTime).Seconds())
 
-	if createDBOptions.Index {
-		dataBaseFilename = fmt.Sprintf("/home/wplapper/restic/db/%s-woix.db",
-			filepath.Base(gopts.Repo))
+
+	if strings.Contains(globalOptions.Repo, ":") {
+		parts := strings.Split(globalOptions.Repo, ":")
+		dataBaseFilename = fmt.Sprintf("/home/wplapper/restic/db/%s-%s.db",
+			parts[1], parts[2])
 	} else {
 		dataBaseFilename = fmt.Sprintf("/home/wplapper/restic/db/%s.db",
-			filepath.Base(gopts.Repo))
+			filepath.Base(globalOptions.Repo))
 	}
 	Verboseff("database is %s\n", dataBaseFilename)
 
@@ -139,10 +230,11 @@ func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		return err
 	}
 
+	t1 := time.Now()
 	sqlCmd := exec.Command("/usr/bin/sqlite3", dataBaseFilename)
 	stdin, err := sqlCmd.StdinPipe()
 	if err != nil {
-		Printf("Cant Create Pipe to STDIN - reason '%v'\n", err)
+		Printf("Can't Create Pipe to STDIN - reason '%v'\n", err)
 		return err
 	}
 
@@ -153,7 +245,7 @@ func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 		GatherDatabaseData(ctx, repo, driver, &repositoryData, startTime)
 	}()
 
-	// wait for the external command execution to finish
+	// wait for sqlite3 execution to finish
 	out, err := sqlCmd.CombinedOutput()
 	if err != nil {
 		Printf("CombinedOutput failed 	- reason '%v'\n", err)
@@ -163,8 +255,8 @@ func runCreateDB(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions) e
 	if len(out) > 0 {
 		Printf("%s\n", out)
 	}
-	Verboseff("%-48s %7.1f seconds\n", "*** finale ***",
-		time.Since(startTime).Seconds())
+	Verboseff("%-48s %7.1f seconds\n", "*** sqlite3 process ***",
+		time.Since(t1).Seconds())
 	return nil
 }
 
@@ -211,7 +303,7 @@ func GatherDatabaseData(ctx context.Context, repo *repository.Repository,
 	step_06_meta_data_storage(ctx, repo, driver, repositoryData, namesMap,
 		metaBlobs, sha256Content, startTime)
 	step_07_contents(driver, repositoryData, metaBlobs, startTime)
-	step_08_repo_config(driver, repo, !createDBOptions.Sha256)
+	step_08_repo_config(driver, repositoryData, repo, !createDBOptions.Sha256)
 
 	if !createDBOptions.Index {
 		step_12_createIndex(driver)
@@ -233,6 +325,9 @@ func step_00_startup(tx *Driver) {
 func step_01_createTables(tx *Driver) {
 	for _, sql := range CreateTablesSlice {
 		io.WriteString(tx.stdin, sql+";\n")
+		if (tx.Debug & DBG_CRETABLE) == DBG_CRETABLE {
+			Printf("%s;\n", sql)
+		}
 	}
 }
 
@@ -285,7 +380,7 @@ type PackfileRecordRow struct {
 func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
 	start time.Time) {
 
-	// gather all packfile IDs
+	// local containers
 	packMap := map[restic.ID]PackfileRecordRow{}
 	packSet := mapset.NewThreadUnsafeSet[int]()
 	packToBlobSet := map[IntID]mapset.Set[IntID]{}
@@ -314,10 +409,11 @@ func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
 	count := 0
 	for _, pack_index := range packSlice {
 		pack_ID := repositoryData.IndexToBlob[IntID(pack_index)]
-		row := packMap[pack_ID]
 		line := fmt.Sprintf("INSERT INTO packfiles VALUES(%d,X'%s',%d,'%s');\n",
-			pack_index, hex.EncodeToString(pack_ID[:]),
-				packToBlobSet[IntID(pack_index)].Cardinality(), row.Type)
+			pack_index,
+			hex.EncodeToString(pack_ID[:]),
+			packToBlobSet[IntID(pack_index)].Cardinality(),
+			packMap[pack_ID].Type)
 		io.WriteString(tx.stdin, line)
 		if (tx.Debug & DBG_PACKFILE) == DBG_PACKFILE {
 			Printf("%s", line)
@@ -452,12 +548,12 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 			// NULL column processing
 			sha256 = "NULL"
 			cmp_ix := CmpIndex{meta_blob, position}
-			if len(sha256StoreIndex) > 1 && node.Type == "file" && node.size > 0 {
+			if len(sha256StoreIndex) > 0 && node.Type == "file" && node.size > 0 {
 				index, ok := sha256StoreIndex[cmp_ix]
 				if ok {
 					sha256 = fmt.Sprintf("%d", index)
 				} else {
-					Printf("index entry %+v not found!\n", cmp_ix)
+					Printf("index entry for sha256 %+v not found!\n", cmp_ix)
 				}
 			}
 			if node.size == 0 {
@@ -487,7 +583,7 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
 			// end NULL processing
 
 			line := fmt.Sprintf(
-				"INSERT INTO meta_data_store VALUES(%d,%d,%d,%d,'%s',%d,'%s',%d,%d,"+
+				"INSERT INTO meta_data_store VALUES(%d,%d,%d,%d,'%s',%d,'%s',%d,%d," +
 					"%s,%s,%s,%s,%s);\n",
 				high_id,
 				meta_blob,
@@ -546,7 +642,6 @@ func step_07_contents(tx *Driver, repositoryData *RepositoryData,
 			}
 		}
 	}
-
 	Verboseff("%-35s %7d rows %7.1f seconds\n", "INSERT INTO contents",
 		high_id-1, time.Since(start).Seconds())
 }
@@ -555,27 +650,42 @@ func step_07_contents(tx *Driver, repositoryData *RepositoryData,
      repo_id TEXT NOT NULL,             -- repository ID
      chunker_polynomial TEXT,           -- chunker polynomial for encoding
      repo_path TEXT,                    -- fullpath to repo
+     empty_node_id INTEGER,             -- points to index_repo(EMPTY_NODE_ID)
      database_time TEXT                 -- when was this DB created
 )*/
 
-func step_08_repo_config(tx *Driver, repo *repository.Repository, sha256 bool) {
+func step_08_repo_config(tx *Driver, repositoryData *RepositoryData,
+repo *repository.Repository, sha256 bool) {
 	config := repo.Config()
 	chunker_polynomial := fmt.Sprintf("%v", config.ChunkerPolynomial) // 0x...
 	// globalOptions.Repo
-	var sha56Create string
+	var (
+		sha56Create string
+		empty_node_id IntID
+		ok bool
+	)
+
 	if sha256 {
 		sha56Create = "true"
 	} else {
 		sha56Create = "false"
 	}
-	line := fmt.Sprintf("INSERT INTO config VALUES(%d,'%s','%s','%s','%s','%s');\n",
+
+	if empty_node_id, ok = repositoryData.BlobToIndex[EMPTY_NODE_ID]; !ok {
+		empty_node_id = IntID(0)
+	}
+	line := fmt.Sprintf("INSERT INTO config VALUES(%d,'%s','%s','%s','%s',%d,'%s');\n",
 		1,
 		config.ID,
 		chunker_polynomial[2:],
 		globalOptions.Repo,
 		sha56Create,
+		empty_node_id,
 		time.Now().Format(time.DateTime))
 	io.WriteString(tx.stdin, line)
+	if (tx.Debug & DBG_CONFIG) == DBG_CONFIG {
+		Printf("%s", line)
+	}
 }
 
 type CmpIndex struct {
@@ -583,41 +693,57 @@ type CmpIndex struct {
 	position   int
 }
 
-func step_09_createSha56(tx *Driver, repositoryData *RepositoryData) (map[CmpIndex]int) {
+// Sha56 table for distinct contents entries
+func step_09_createSha56(tx *Driver, repositoryData *RepositoryData) (sha256StoreIndex map[CmpIndex]int) {
 
-	// set up slices, maps and constants
-	sha256Map := map[[32]byte]int{}
-	sha256StoreIndex := map[CmpIndex]int{}
+	// is return value!
+	sha256StoreIndex = map[CmpIndex]int{}
+	// set up local conatiners
+	sha256MapIndex  := map[restic.ID]int{}
+	sha256MapLength := map[restic.ID]int{}
+	sliceSha256 := [][32]byte{}
 
-	// this entry points to garbage
-	data, _ := hex.DecodeString(strings.Repeat("deadbeef0caffee0", 4))
-	var data2 [32]byte
-	copy(data2[:], data)
-	sha256Map[data2] = 0
+	//loop start: convert all content IntIDs into one sha256 ID
+	var (
+		index, saved_position int
+		ok bool
+	)
 
-	//loop start
-	index := 1
-	var position int
-	var ok bool
+	// we could make for files with single data_blob : sha256Content =
+	// sha256 of data_blob
+	index = 1
+	var sha256Content restic.ID
+
 	for blob_index, fileSlice := range repositoryData.DirectoryMap {
 		for posi, meta := range fileSlice {
-			if meta.Type == "file" {
-				sha256Content := ConvertContent(meta.content)
-				if position, ok = sha256Map[sha256Content]; !ok {
-					position = index
-					sha256Map[sha256Content] = position
-					index++
+			if meta.Type == "file" && meta.size > 0 {
+				if len(meta.content) == 1 {
+					sha256Content = repositoryData.IndexToBlob[meta.content[0]]
+				} else {
+					sha256Content = ConvertContent(meta.content)
 				}
-				sha256StoreIndex[CmpIndex{blob_index, posi}] = position
+				if saved_position, ok = sha256MapIndex[sha256Content]; !ok {
+					sha256MapIndex[sha256Content] = index
+				  sha256MapLength[sha256Content] = len(meta.content)
+					saved_position = index
+					index++
+					sliceSha256 = append(sliceSha256, sha256Content)
+				}
+				sha256StoreIndex[CmpIndex{blob_index, posi}] = saved_position
 			}
 		}
 	}
 
-	// write out 'sha256Slice'
-	for value, index := range sha256Map {
-		line := fmt.Sprintf("INSERT INTO sha256_content VALUES(%d,X'%s');\n",
-			index, hex.EncodeToString(value[:]))
+	// write out
+	for _, value := range sliceSha256 {
+		line := fmt.Sprintf("INSERT INTO sha256_content VALUES(%d,X'%s',%d);\n",
+			sha256MapIndex[value],
+			hex.EncodeToString(value[:]),
+			sha256MapLength[value])
 		io.WriteString(tx.stdin, line)
+		if (tx.Debug & DBG_SHA256) == DBG_SHA256 {
+			Printf("%s", line)
+		}
 	}
 	Verboseff("%-35s %7d rows\n", "INSERT INTO sha256_content", index)
 	return sha256StoreIndex
@@ -627,6 +753,9 @@ func step_09_createSha56(tx *Driver, repositoryData *RepositoryData) (map[CmpInd
 func step_12_createIndex(tx *Driver) {
 	for _, sql := range CreateIndexSlice {
 		io.WriteString(tx.stdin, sql+";\n")
+		if (tx.Debug & DBG_CREINDEX) == DBG_CREINDEX {
+			Printf("%s;\n", sql)
+		}
 	}
 }
 
@@ -638,7 +767,7 @@ func step_13_finale(tx *Driver) {
 }
 
 // table definitions
-var CreateTablesSlice = []string{
+var CreateTablesSlice = []string {
 	`CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,             -- ID of snapshots row
     snap_id    BLOB NOT NULL,           -- snap ID, UNIQUE INDEX
@@ -647,6 +776,8 @@ var CreateTablesSlice = []string{
     snap_host  TEXT NOT NULL,           -- host which is to be backep up
     snap_fsys  TEXT NOT NULL,           -- filesystem to be backup up
     snap_root  BLOB NOT NULL            -- the root of the snap
+    --CONSTRAINT ux_snapshots_id          UNIQUE(snap_id),
+    --CONSTRAINT ux_snapshots_short       UNIQUE(snap_short)
 )`,
 
 	`CREATE TABLE packfiles (
@@ -654,6 +785,7 @@ var CreateTablesSlice = []string{
     packfile_id BLOB NOT NULL,          -- the packfile ID, UNIQUE INDEX, [32]byte
     blob_count INTEGER NOT NULL,        -- number of blobs in packfile
     type TEXT NOT NULL                  -- type of packfile data/tree
+    --CONSTRAINT ux_pfiles_pack           UNIQUE(packfile_id)
 )`,
 
 	`CREATE TABLE index_repo (
@@ -664,11 +796,13 @@ var CreateTablesSlice = []string{
     uncompressedlength INTEGER NOT NULL,-- uncompressed length
     pack__id INTEGER NOT NULL,          -- back ptr to packflies, INDEX
     FOREIGN KEY(pack__id)               REFERENCES packfiles(id)
+    --CONSTRAINT ux_index_repo_blob       UNIQUE(blob)
 )`,
 
 	`CREATE TABLE names (
     id INTEGER PRIMARY KEY,             -- the primary key
-    name TEXT NOT NULL                  -- all base names, UNIQUE
+    name TEXT NOT NULL                 -- all base names, UNIQUE
+    --CONSTRAINT ux_names_name            UNIQUE(name)
 )`,
 
 	`CREATE TABLE meta_data_store (
@@ -687,8 +821,9 @@ var CreateTablesSlice = []string{
     subtree__id INTEGER,                -- can be NULL for      file, symlink
     linktarget TEXT,                    -- can be NULL for dir, file
 
-    FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
+    FOREIGN KEY(blob__id)               REFERENCES index_repo(id),
     FOREIGN KEY(name__id)               REFERENCES names(id)
+    --CONSTRAINT ux_mds_id_blob           UNIQUE(blob__id, position)
 )`,
 
 	`CREATE TABLE contents (
@@ -699,6 +834,7 @@ var CreateTablesSlice = []string{
     data__id INTEGER NOT NULL,          -- ptr to ixr.id, INDEX
     FOREIGN KEY(data__id)               REFERENCES index_repo(id),
     FOREIGN KEY(blob__id)               REFERENCES index_repo(id)
+    --CONSTRAINT ux_cont_idblof           UNIQUE(blob__id, position, offset)
 )`,
 
 	`CREATE TABLE config (
@@ -707,12 +843,15 @@ var CreateTablesSlice = []string{
      chunker_polynomial TEXT,           -- chunker polynomial for encoding
      repo_path TEXT,                    -- fullpath to repo
      sha256_context TEXT,               -- enable / disable sha256_content
+     empty_node_id INTEGER,             -- points to index_repo(EMPTY_NODE_ID)
      database_time TEXT                 -- when was this DB created
 )`,
 
 	`CREATE TABLE sha256_content (
      id INTEGER PRIMARY KEY,            -- the primary key
-     sha256 BLOB                        -- UNIQUE INDEX for content slice
+     sha256 BLOB,                       -- UNIQUE INDEX for content slice
+     length INTEGER                     -- number of data blobs for file
+     --CONSTRAINT ux_sha256_sha UNIQUE(sha256)
 )`,
 
 	// derived tables, can be created from the above tables
@@ -733,6 +872,7 @@ var CreateTablesSlice = []string{
 	`CREATE TABLE fullname (
     id INTEGER PRIMARY KEY,             -- the primary key, autogenerated
     pathname TEXT NOT NULL              -- full pathname of directory, UNIQUE INDEX
+    --CONSTRAINT ux_fname_path            UNIQUE(pathname)
 )`,
 
 	`CREATE TABLE dir_path (
@@ -751,25 +891,28 @@ var CreateTablesSlice = []string{
 ) WITHOUT ROWID`,
 }
 
-var CreateIndexSlice = []string{
-	// UNIQUE INDEX - alternate primary keys
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ss_snapid   ON snapshots(snap_id)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_pack_packON packfiles(packfile_id)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_ixr_blob    ON index_repo(blob)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_names_name  ON names(name)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_mds_blpo    ON meta_data_store(blob__id,position)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_cont_blpoof ON contents(blob__id,position,offset)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_fname_path  ON fullname(pathname)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS ux_sha256_sha  ON sha256_content(sha256)`,
+var CreateIndexSlice = []string {
+	// UNIQUE index
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_contents_blopoof ON contents(blob__id,position,offset)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_fullname_path    ON fullname(pathname)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_index_repo_blob  ON index_repo(blob)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_mds_blopo        ON meta_data_store(blob__id,position)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_names_name       ON names(name)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_packfiles_pack   ON packfiles(packfile_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_sha256_cont_shar ON sha256_content(sha256)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_snapshots_snid   ON snapshots(snap_id)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS ux_snapshots_short  ON snapshots(snap_short)`,
 
 	// normal INDEX
-	`CREATE        INDEX IF NOT EXISTS ix_ixr_pack    ON index_repo(pack__id)`,
-	`CREATE        INDEX IF NOT EXISTS ix_ixr_type    ON index_repo(type)`,
-	`CREATE        INDEX IF NOT EXISTS ix_cont_data   ON contents(data__id)`,
-	`CREATE        INDEX IF NOT EXISTS ix_mds_type    ON meta_data_store(type)`,
-	`CREATE        INDEX IF NOT EXISTS ix_mds_name_id ON meta_data_store(name__id)`,
-	`CREATE        INDEX IF NOT EXISTS ix_mds_subtree ON meta_data_store(subtree__id)
+	`CREATE INDEX IF NOT EXISTS ix_snap_root   ON snapshots(snap_root)`,
+	`CREATE INDEX IF NOT EXISTS ix_ixr_pack    ON index_repo(pack__id)`,
+	`CREATE INDEX IF NOT EXISTS ix_ixr_type    ON index_repo(type)`,
+	`CREATE INDEX IF NOT EXISTS ix_cont_data   ON contents(data__id)`,
+	`CREATE INDEX IF NOT EXISTS ix_mds_type    ON meta_data_store(type)`,
+	`CREATE INDEX IF NOT EXISTS ix_mds_name_id ON meta_data_store(name__id)`,
+	`CREATE INDEX IF NOT EXISTS ix_mds_subtree ON meta_data_store(subtree__id)
      WHERE type='dir'`,
-	`CREATE        INDEX IF NOT EXISTS ix_mds_sha256  ON meta_data_store(sha256__id)
+	`CREATE INDEX IF NOT EXISTS ix_mds_sha256  ON meta_data_store(sha256__id)
      WHERE type='file'`,
+	`CREATE INDEX IF NOT EXISTS ix_sha256_len  ON sha256_content(length)`,
 }
