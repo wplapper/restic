@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	rtest "github.com/restic/restic/internal/test"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 func testRunLsWithOpts(t testing.TB, gopts GlobalOptions, opts LsOptions, args []string) []byte {

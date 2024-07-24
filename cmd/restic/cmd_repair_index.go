@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/ui/termstatus"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/ui/termstatus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/restic"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 )

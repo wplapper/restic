@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	rtest "github.com/restic/restic/internal/test"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 func testRunFind(t testing.TB, wantJSON bool, gopts GlobalOptions, pattern string) []byte {

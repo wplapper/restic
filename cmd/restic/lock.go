@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/restic/restic/internal/repository"
+	"github.com/wplapper/restic/library/repository"
 )
 
 func internalOpenWithLocked(ctx context.Context, gopts GlobalOptions, dryRun bool, exclusive bool) (context.Context, *repository.Repository, func(), error) {

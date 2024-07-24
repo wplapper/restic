@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	rtest "github.com/restic/restic/internal/test"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 // Regression test for #2979: no snapshots should print as [], not null.

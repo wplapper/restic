@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/fs"
-	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/walker"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/fs"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/walker"
 )
 
 var cmdLs = &cobra.Command{

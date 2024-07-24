@@ -6,10 +6,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/ui/termstatus"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/ui/termstatus"
 	"github.com/spf13/cobra"
 )
 

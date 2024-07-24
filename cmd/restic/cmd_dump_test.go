@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	rtest "github.com/restic/restic/internal/test"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 func TestDumpSplitPath(t *testing.T) {

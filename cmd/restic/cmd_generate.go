@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"github.com/restic/restic/internal/errors"
+	"github.com/wplapper/restic/library/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 )

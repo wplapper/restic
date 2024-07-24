@@ -13,11 +13,11 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/automaxprocs/maxprocs"
 
-	"github.com/restic/restic/internal/debug"
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/feature"
-	"github.com/restic/restic/internal/options"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/debug"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/feature"
+	"github.com/wplapper/restic/library/options"
+	"github.com/wplapper/restic/library/restic"
 )
 
 func init() {

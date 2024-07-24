@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/restic/restic/internal/restic"
-	rtest "github.com/restic/restic/internal/test"
+	"github.com/wplapper/restic/library/restic"
+	rtest "github.com/wplapper/restic/library/test"
 	"github.com/spf13/pflag"
 )
 

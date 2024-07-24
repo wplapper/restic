@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/selfupdate"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/selfupdate"
 	"github.com/spf13/cobra"
 )
 

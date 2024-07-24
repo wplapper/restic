@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/restic"
-	rtest "github.com/restic/restic/internal/test"
-	"github.com/restic/restic/internal/ui/progress"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/restic"
+	rtest "github.com/wplapper/restic/library/test"
+	"github.com/wplapper/restic/library/ui/progress"
 )
 
 func TestParsePercentage(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	rtest "github.com/restic/restic/internal/test"
+	rtest "github.com/wplapper/restic/library/test"
 )
 
 func testRunDiffOutput(gopts GlobalOptions, firstSnapshotID string, secondSnapshotID string) (string, error) {

@@ -5,8 +5,8 @@ import (
 	"context"
 	"testing"
 
-	rtest "github.com/restic/restic/internal/test"
-	"github.com/restic/restic/internal/ui/termstatus"
+	rtest "github.com/wplapper/restic/library/test"
+	"github.com/wplapper/restic/library/ui/termstatus"
 )
 
 func testRunCheck(t testing.TB, gopts GlobalOptions) {

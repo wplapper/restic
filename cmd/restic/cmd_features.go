@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/feature"
-	"github.com/restic/restic/internal/ui/table"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/feature"
+	"github.com/wplapper/restic/library/ui/table"
 
 	"github.com/spf13/cobra"
 )

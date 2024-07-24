@@ -7,10 +7,10 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/feature"
-	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/ui/termstatus"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/feature"
+	"github.com/wplapper/restic/library/restic"
+	"github.com/wplapper/restic/library/ui/termstatus"
 	"github.com/spf13/cobra"
 )
 

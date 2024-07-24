@@ -20,12 +20,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/restic/restic/internal/crypto"
-	"github.com/restic/restic/internal/errors"
-	"github.com/restic/restic/internal/repository"
-	"github.com/restic/restic/internal/repository/index"
-	"github.com/restic/restic/internal/repository/pack"
-	"github.com/restic/restic/internal/restic"
+	"github.com/wplapper/restic/library/crypto"
+	"github.com/wplapper/restic/library/errors"
+	"github.com/wplapper/restic/library/repository"
+	"github.com/wplapper/restic/library/repository/index"
+	"github.com/wplapper/restic/library/repository/pack"
+	"github.com/wplapper/restic/library/restic"
 )
 
 var cmdDebug = &cobra.Command{
