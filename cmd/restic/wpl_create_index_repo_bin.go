@@ -12,7 +12,6 @@ import (
 
   // restic library
   "github.com/wplapper/restic/library/restic"
-  "github.com/wplapper/restic/library/repository/index"
 )
 
 var cmdCreateIXR = &cobra.Command{
@@ -38,7 +37,6 @@ func init() {
 func runCreateIXR(ctx context.Context, gopts GlobalOptions) error {
 
   // the repositories
-
   globalOptions.Quiet = true
   globalOptions.verbosity = 0
   allIDs := map[restic.ID]struct{}{}
@@ -61,20 +59,14 @@ func runCreateIXR(ctx context.Context, gopts GlobalOptions) error {
       continue
     }
 
-    if err := repo.LoadIndex(ctx, nil); err != nil {
+    if err = repo.LoadIndex(ctx, nil); err != nil {
       Printf("repo.LoadIndex - failed. Error is %v\n", err)
       continue
     }
 
     // loop over all indices
-    index.ForAllIndexes(ctx, repo, repo, func(_ restic.ID, idx *index.Index, _ bool, err error) error {
-      if err != nil {
-        return err
-      }
-      idx.Each(ctx, func(blobs restic.PackedBlob) {
-        allIDs[blobs.ID] = struct{}{}
-      })
-      return nil
+    err = repo.ListBlobs(ctx, func(blobs restic.PackedBlob) {
+      allIDs[blobs.ID] = struct{}{}
     })
 
     // release resources

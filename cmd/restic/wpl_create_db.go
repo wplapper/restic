@@ -177,6 +177,7 @@ func runOneDatabase(ctx context.Context, gopts GlobalOptions) error {
     return nil
   }
 
+  //Printf("db is '%s'\n", dataBaseFilename)
   _, err = os.Create(dataBaseFilename)
   if err != nil {
     Printf("Cant Create database - reason '%v'\n", err)
@@ -201,7 +202,7 @@ func runOneDatabase(ctx context.Context, gopts GlobalOptions) error {
   // wait for sqlite3 execution to finish
   out, err := sqlCmd.CombinedOutput()
   if err != nil {
-    Printf("CombinedOutput failed   - reason '%v'\n", err)
+    Printf("CombinedOutput failed - reason '%v'\n", err)
     Printf("%s\n", out)
     return err
   }
@@ -373,6 +374,7 @@ func step_03_04_ix_files(tx *Driver, repositoryData *RepositoryData,
   count := 0
   for _, pack_index := range packSlice {
     pack_ID := repositoryData.IndexToBlob[IntID(pack_index)]
+    //line := fmt.Sprintf("INSERT INTO packfiles(id,packfile_id,blob_count,type,packfile_size) VALUES(%d,X'%s',%d,'%s',%d);\n",
     line := fmt.Sprintf("INSERT INTO packfiles VALUES(%d,X'%s',%d,'%s',%d);\n",
       pack_index,
       hex.EncodeToString(pack_ID[:]),
@@ -550,23 +552,23 @@ func step_06_meta_data_storage(ctx context.Context, repo *repository.Repository,
       // end NULL processing
 
       line := fmt.Sprintf(
-        "INSERT INTO meta_data_store VALUES(%d,%d,%d,%d,'%s',%d,'%s',%d,%d,"+
-          "%s,%s,%s,%s,%s);\n",
-        high_id,
-        meta_blob,
-        position,
-        namesMap[node.name],
-        node.Type,
-        node.Mode,
-        node.mtime.Format(time.DateTime),
-        node.inode,
-        node.DeviceID,
+        //                                   1  2  3  4   5   6   7   8  9 10 11 12 13 14
+        "INSERT INTO meta_data_store VALUES(%d,%d,%d,%d,'%s',%d,'%s',%d,%d,%s,%s,%s,%s,%s);\n",
+        high_id,                            //  1
+        meta_blob,                          //  2
+        position,                           //  3
+        namesMap[node.name],                //  4
+        node.Type,                          //  5
+        node.Mode,                          //  6
+        node.mtime.Format(time.DateTime),   //  7
+        node.inode,                         //  8
+        node.DeviceID,                      //  9
         // possible NULL values
-        sha256,
-        size,
-        links,
-        subtree__id,
-        linkTarget)
+        sha256,                             // 10
+        size,                               // 11
+        links,                              // 12
+        subtree__id,                        // 13
+        linkTarget)                         // 14
       io.WriteString(tx.stdin, line)
       if (tx.Debug & DBG_METADATA) == DBG_METADATA {
         Printf("%s", line)
@@ -944,7 +946,6 @@ func processAllIndexRepoFile(repositoryData *RepositoryData) error {
 
   // loop over all databases
   for _, filename := range fileList {
-    //Printf("select %s\n", filepath.Base(filename))
     out, err := exec.Command("/usr/bin/sqlite3", "-noheader", filename,
       "SELECT last_index_time FROM config WHERE id=1").CombinedOutput()
     if err != nil { // ignore
@@ -968,9 +969,10 @@ func processAllIndexRepoFile(repositoryData *RepositoryData) error {
   }
 
   if maxTime.After(indexRepoStat.ModTime()) {
-    Printf("WARNING: %s is older than the yongest of the database file!\n", path)
+    Printf("WARN: %s is older than the youngest of the database file!\n", path)
     Printf("Youngest database file %s is from %s\n", youngestDatabase,
       maxTime.Format(time.DateTime))
+    Printf("index_file %s\n", indexRepoStat.ModTime().Format(time.DateTime))
   }
 
   if handle != nil {
@@ -1000,7 +1002,6 @@ func checkDatabaseDates(dataBaseFilename string, repo *repository.Repository,
     return false, err
   }
 
-  //Printf("checking db %s\n", dataBaseFilename)
   out, err := exec.Command("/usr/bin/sqlite3", "-noheader", dataBaseFilename,
     "SELECT last_index_time FROM config WHERE id=1").Output()
   if err != nil { // ignore
@@ -1033,7 +1034,7 @@ func checkDatabaseDates(dataBaseFilename string, repo *repository.Repository,
   }
 
   // it is the nanoseconds which can play havoc here, so we have to revert
-  // to compare string trepresentations
+  // to compare string representations
   youngIndexRecordStr := changeTimes.youngIndexRecord.Format(time.DateTime)
   youngIndexDBStr := youngIndexTimeDB.Format(time.DateTime)
   if youngIndexRecordStr == youngIndexDBStr {

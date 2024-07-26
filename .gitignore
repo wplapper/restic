@@ -3,3 +3,6 @@
 /restic.exe
 /.vagrant
 /.vscode
+spec_restic
+xx*
+yy*

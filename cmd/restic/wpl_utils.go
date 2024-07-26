@@ -12,7 +12,6 @@ import (
   // restic library
   "github.com/wplapper/restic/library/repository"
   "github.com/wplapper/restic/library/restic"
-  "github.com/wplapper/restic/library/repository/index"
 
   // sets
   "github.com/deckarep/golang-set/v2"
@@ -104,53 +103,9 @@ func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
   } else {
     pos = IntID(len(repositoryData.IndexToBlob))
   }
-  //Printf("gather indices: start pos %2d EMPTY %s\n", pos, EMPTY_NODE_ID.String()[:12])
 
   // loop over all indices
-  index.ForAllIndexes(ctx, repo, repo, func(_ restic.ID, idx *index.Index, _ bool, err error) error {
-    if err != nil {
-      return err
-    }
-
-    idx.Each(ctx, func(blob restic.PackedBlob) {
-      //Printf("blob ID %s type %s\n", blob.ID.String()[:12], blob.Type.String())
-      if blob.Type == restic.TreeBlob {
-        if _, ok := repositoryData.BlobToIndex[blob.ID]; !ok {
-          repositoryData.BlobToIndex[blob.ID] = pos
-          repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.ID)
-          pos++
-        }
-      } else if blob.Type == restic.DataBlob {
-        if _, ok := repositoryData.BlobToIndex[blob.ID]; !ok {
-          repositoryData.BlobToIndex[blob.ID] = pos
-          repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blob.ID)
-          pos++
-        }
-      }
-      blPack := blob.PackID
-      if _, ok := repositoryData.BlobToIndex[blPack]; !ok {
-        repositoryData.BlobToIndex[blPack] = pos
-        repositoryData.IndexToBlob = append(repositoryData.IndexToBlob, blPack)
-        pos++
-      }
-
-      // build our index_handle from 'blob' records
-      lastPackIndex = repositoryData.BlobToIndex[blPack]
-      repositoryData.IndexHandle[blob.ID] = Index_Handle{Type: blob.Type,
-        size:               int(blob.Length),
-        pack_index:         lastPackIndex,
-        blob_index:         repositoryData.BlobToIndex[blob.ID],
-        UncompressedLength: int(blob.UncompressedLength),
-      }
-    })
-    return nil
-  })
-
-  // loop over each index record by calling unnamed func for every entry
-  // 'blob' is set by 'Each'
-  // tree
-  /*
-  repo.Index().Each(ctx, func(blob restic.PackedBlob) {
+  err := repo.ListBlobs(ctx, func(blob restic.PackedBlob) {
     if blob.Type == restic.TreeBlob {
       if _, ok := repositoryData.BlobToIndex[blob.ID]; !ok {
         repositoryData.BlobToIndex[blob.ID] = pos
@@ -159,8 +114,12 @@ func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
       }
     }
   })
-  // data
-  repo.Index().Each(ctx, func(blob restic.PackedBlob) {
+  if err != nil {
+    Printf("repo.ListBlobs failed with %v\n", err)
+    return
+  }
+
+  repo.ListBlobs(ctx, func(blob restic.PackedBlob) {
     if blob.Type == restic.DataBlob {
       if _, ok := repositoryData.BlobToIndex[blob.ID]; !ok {
         repositoryData.BlobToIndex[blob.ID] = pos
@@ -170,10 +129,7 @@ func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
     }
   })
 
-  // packfiles
-  var lastPackIndex IntID
-  repo.Index().Each(ctx, func(blob restic.PackedBlob) {
-    // add packID from packfiles to 'blob_to_index' and 'index_to_blob',
+  repo.ListBlobs(ctx, func(blob restic.PackedBlob) {
     blPack := blob.PackID
     if _, ok := repositoryData.BlobToIndex[blPack]; !ok {
       repositoryData.BlobToIndex[blPack] = pos
@@ -190,7 +146,6 @@ func ConvertToIntSet(ctx context.Context, repo *repository.Repository,
       UncompressedLength: int(blob.UncompressedLength),
     }
   })
-  */
 
   // add the restic.IDs from the snapshots list to these list / maps
   for _, sn := range repositoryData.Snaps {
@@ -258,7 +213,6 @@ func FindChildren(repositoryData *RepositoryData) (children map[IntID]mapset.Set
         repositoryData.FullPath[child] = repositoryData.FullPath[meta_blob] + "/" +
           subdirectoryNames[child]
       }
-      //Printf("%7d %s\n", child, repositoryData.FullPath[child])
     }
   }
   return children
@@ -312,8 +266,7 @@ func GatherAllRepoData(ctx context.Context, repo *repository.Repository,
 
 // auxiliary function to deliver meta blobs from the index to ForAllMyTrees
 // for parallel processing
-func DeliverTreeBlobs(ctx context.Context, repo *repository.Repository,
-  repositoryData *RepositoryData, fn func(id restic.ID) error) error {
+func DeliverTreeBlobs(repositoryData *RepositoryData, fn func(restic.ID) error) error {
 
   for blob_ID, data := range repositoryData.IndexHandle {
     if data.Type == restic.TreeBlob {
@@ -326,8 +279,7 @@ func DeliverTreeBlobs(ctx context.Context, repo *repository.Repository,
 // home built parallel call to restic.LoadTree. All trees are accessed by the
 // method 'DeliverTreeBlobs' which accesses 'repositoryData.IndexHandle'
 // which has been built beforehand
-func ForAllMyTrees(ctx context.Context,
-  repo *repository.Repository, repositoryData *RepositoryData) error {
+func ForAllMyTrees(ctx context.Context, repo *repository.Repository, repositoryData *RepositoryData) error {
 
   var m sync.Mutex
   wg, ctx := errgroup.WithContext(ctx)
@@ -337,7 +289,7 @@ func ForAllMyTrees(ctx context.Context,
     defer close(chan_tree_blob)
 
     // this callback function get fed the 'id'
-    return DeliverTreeBlobs(ctx, repo, repositoryData, func(id restic.ID) error {
+    return DeliverTreeBlobs(repositoryData, func(id restic.ID) error {
       select {
       case <-ctx.Done():
         return nil
@@ -415,10 +367,8 @@ func PrintMemUsage() {
   runtime.ReadMemStats(&m2)
   // For info on each, see: https://golang.org/pkg/runtime/#MemStats
   Printf("Alloc = %4d MiB", bToMb(m2.Alloc))
-  //Printf("\tTotalAlloc = %4d MiB", bToMb(m2.TotalAlloc))
   Printf("\tSys = %4d MiB", bToMb(m2.Sys))
   Printf("\tHeap = %4d MiB\n", bToMb(m2.HeapInuse))
-  //Printf("\tNumGC = %4d\n", m2.NumGC)
 }
 
 func bToMb(b uint64) uint64 {
@@ -479,7 +429,7 @@ type IntIDSlice []IntID
 
 // create a topological sort of all the tree nodes, starting at all tree roots
 func dfs2(childrenMap map[IntID]mapset.Set[IntID],
-initials mapset.Set[IntID]) (results IntIDSlice) {
+  initials mapset.Set[IntID]) (results IntIDSlice) {
 
   // local containers
   results = IntIDSlice{}
@@ -498,7 +448,7 @@ initials mapset.Set[IntID]) (results IntIDSlice) {
 // calls are cumulative.
 // During performance testing 'bfs' to be the fastest of the algorithms
 func bfs(root IntID, results *IntIDSlice, childrenMap map[IntID]mapset.Set[IntID],
-visited mapset.Set[IntID]) {
+  visited mapset.Set[IntID]) {
 
   // local container
   bQueue := queue.New()

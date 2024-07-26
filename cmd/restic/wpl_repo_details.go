@@ -14,7 +14,6 @@ import (
   "github.com/spf13/cobra"
 
   // restic library
-  //"github.com/wplapper/restic/library/pack"
   "github.com/wplapper/restic/library/repository/pack"
   "github.com/wplapper/restic/library/restic"
 
@@ -73,8 +72,7 @@ func runRepoDetails(ctx context.Context, cmd *cobra.Command, gopts GlobalOptions
   if err != nil {
     return err
   }
-  Verboseff("Repository is %s type is %T\n", globalOptions.Repo, repo)
-  Printf("repo is %+v\n", *repo)
+  Verboseff("Repository is %s\n", globalOptions.Repo)
 
   // step 2: gather the base information
   err = gather_base_data_repo(repo, gopts, ctx, &repositoryData,
@@ -430,25 +428,3 @@ func CheckPrune(repositoryData *RepositoryData, meta_diff mapset.Set[IntID],
     Print_some_detail(repositoryData, unused_blobs, Detail, options.Lost, data_map)
   }
 }
-
-/*
-// serialize 'content' step by step into sha256 by Write-ing() to it
-func ConvertContent(content []IntID) (result restic.ID) {
-  sha256sum := sha256.New()
-  temp := make([]byte, 4)
-  for _, data_blob_int := range content {
-    //binary.LittleEndian.PutUint32(temp, data_blob_int): serialize uint32
-    temp[0] = byte(data_blob_int)
-    temp[1] = byte(data_blob_int >> 8)
-    temp[2] = byte(data_blob_int >> 16)
-    temp[3] = byte(data_blob_int >> 24)
-    sha256sum.Write(temp)
-  }
-
-  // copy final target to [sha256.Size]byte,
-  // type 'sha256sum.Sum(nil)' is []byte
-  // 'copy' can copy between different types
-  copy(result[:], sha256sum.Sum(nil))
-  return result
-}
-*/

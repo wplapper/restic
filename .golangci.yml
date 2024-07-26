@@ -65,5 +65,5 @@ issues:
 linters-settings:
   importas:
     alias:
-      - pkg: github.com/restic/restic/internal/test
+      - pkg: github.com/wplapper/restic/library/test
         alias: rtest

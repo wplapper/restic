@@ -111,9 +111,12 @@ func step_backup(ctx context.Context, gopts GlobalOptions) error {
       panic("no reference to BACKUP_BASEDIRS")
     }
 
-
     repo_basepath := json_config["BASE_CONFIG"]["Mint21-nvme"]
     target_repo   := json_config["PATH_TO_REPO"][logical_backup]
+    Printf("hostname       '%s'\n", hostname)
+    Printf("logical_backup '%s'\n", logical_backup)
+    Printf("repo_basepath  '%s'\n", repo_basepath)
+    Printf("target_repo    '%s'\n", target_repo)
     var command_args = []string{"backup", backup_basedirs[logical_backup][0],
      "--one-file-system", "--verbose",
      "--repo", repo_basepath[0] + target_repo[0],
