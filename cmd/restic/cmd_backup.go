@@ -77,6 +77,7 @@ type BackupOptions struct {
 	ExcludeIfPresent  []string
 	ExcludeCaches     bool
 	ExcludeLargerThan string
+	ExcludeCloudFiles bool
 	Stdin             bool
 	StdinFilename     string
 	StdinCommand      bool
@@ -140,6 +141,7 @@ func init() {
 	f.BoolVar(&backupOptions.NoScan, "no-scan", false, "do not run scanner to estimate size of backup")
 	if runtime.GOOS == "windows" {
 		f.BoolVar(&backupOptions.UseFsSnapshot, "use-fs-snapshot", false, "use filesystem snapshot where possible (currently only Windows VSS)")
+		f.BoolVar(&backupOptions.ExcludeCloudFiles, "exclude-cloud-files", false, "excludes online-only cloud files (such as OneDrive Files On-Demand)")
 	}
 	f.BoolVar(&backupOptions.SkipIfUnchanged, "skip-if-unchanged", false, "skip snapshot creation if identical to parent snapshot")
 
@@ -302,7 +304,7 @@ func (opts BackupOptions) Check(gopts GlobalOptions, args []string) error {
 // from being saved in a snapshot based on path only
 func collectRejectByNameFuncs(opts BackupOptions, repo *repository.Repository) (fs []archiver.RejectByNameFunc, err error) {
 	// exclude restic cache
-	if repo.Cache != nil {
+	if repo.Cache() != nil {
 		f, err := rejectResticCache(repo)
 		if err != nil {
 			return nil, err
@@ -341,6 +343,17 @@ func collectRejectFuncs(opts BackupOptions, targets []string, fs fs.FS) (funcs [
 		}
 
 		f, err := archiver.RejectBySize(maxSize)
+		if err != nil {
+			return nil, err
+		}
+		funcs = append(funcs, f)
+	}
+
+	if opts.ExcludeCloudFiles && !opts.Stdin && !opts.StdinCommand {
+		if runtime.GOOS != "windows" {
+			return nil, errors.Fatalf("exclude-cloud-files is only supported on Windows")
+		}
+		f, err := archiver.RejectCloudFiles(Warnf)
 		if err != nil {
 			return nil, err
 		}

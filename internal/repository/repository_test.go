@@ -21,7 +21,6 @@ import (
 	"github.com/restic/restic/internal/repository"
 	"github.com/restic/restic/internal/repository/index"
 	"github.com/restic/restic/internal/restic"
-	"github.com/restic/restic/internal/test"
 	rtest "github.com/restic/restic/internal/test"
 	"golang.org/x/sync/errgroup"
 )
@@ -44,7 +43,7 @@ func testSaveCalculateID(t *testing.T, version uint) {
 }
 
 func testSave(t *testing.T, version uint, calculateID bool) {
-	repo, _ := repository.TestRepositoryWithVersion(t, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(t, version)
 
 	for _, size := range testSizes {
 		data := make([]byte, size)
@@ -87,7 +86,7 @@ func BenchmarkSaveAndEncrypt(t *testing.B) {
 }
 
 func benchmarkSaveAndEncrypt(t *testing.B, version uint) {
-	repo, _ := repository.TestRepositoryWithVersion(t, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(t, version)
 	size := 4 << 20 // 4MiB
 
 	data := make([]byte, size)
@@ -113,7 +112,7 @@ func TestLoadBlob(t *testing.T) {
 }
 
 func testLoadBlob(t *testing.T, version uint) {
-	repo, _ := repository.TestRepositoryWithVersion(t, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(t, version)
 	length := 1000000
 	buf := crypto.NewBlobBuffer(length)
 	_, err := io.ReadFull(rnd, buf)
@@ -145,7 +144,7 @@ func testLoadBlob(t *testing.T, version uint) {
 func TestLoadBlobBroken(t *testing.T) {
 	be := mem.New()
 	repo, _ := repository.TestRepositoryWithBackend(t, &damageOnceBackend{Backend: be}, restic.StableRepoVersion, repository.Options{})
-	buf := test.Random(42, 1000)
+	buf := rtest.Random(42, 1000)
 
 	var wg errgroup.Group
 	repo.StartPackUploader(context.TODO(), &wg)
@@ -169,7 +168,7 @@ func BenchmarkLoadBlob(b *testing.B) {
 }
 
 func benchmarkLoadBlob(b *testing.B, version uint) {
-	repo, _ := repository.TestRepositoryWithVersion(b, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(b, version)
 	length := 1000000
 	buf := crypto.NewBlobBuffer(length)
 	_, err := io.ReadFull(rnd, buf)
@@ -210,7 +209,7 @@ func BenchmarkLoadUnpacked(b *testing.B) {
 }
 
 func benchmarkLoadUnpacked(b *testing.B, version uint) {
-	repo, _ := repository.TestRepositoryWithVersion(b, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(b, version)
 	length := 1000000
 	buf := crypto.NewBlobBuffer(length)
 	_, err := io.ReadFull(rnd, buf)
@@ -218,7 +217,7 @@ func benchmarkLoadUnpacked(b *testing.B, version uint) {
 
 	dataID := restic.Hash(buf)
 
-	storageID, err := repo.SaveUnpacked(context.TODO(), restic.PackFile, buf)
+	storageID, err := repo.SaveUnpacked(context.TODO(), restic.WriteableSnapshotFile, buf)
 	rtest.OK(b, err)
 	// rtest.OK(b, repo.Flush())
 
@@ -226,7 +225,7 @@ func benchmarkLoadUnpacked(b *testing.B, version uint) {
 	b.SetBytes(int64(length))
 
 	for i := 0; i < b.N; i++ {
-		data, err := repo.LoadUnpacked(context.TODO(), restic.PackFile, storageID)
+		data, err := repo.LoadUnpacked(context.TODO(), restic.SnapshotFile, storageID)
 		rtest.OK(b, err)
 
 		// See comment in BenchmarkLoadBlob.
@@ -263,7 +262,7 @@ func loadIndex(ctx context.Context, repo restic.LoaderUnpacked, id restic.ID) (*
 }
 
 func TestRepositoryLoadUnpackedBroken(t *testing.T) {
-	repo, be := repository.TestRepositoryWithVersion(t, 0)
+	repo, _, be := repository.TestRepositoryWithVersion(t, 0)
 
 	data := rtest.Random(23, 12345)
 	id := restic.Hash(data)
@@ -310,43 +309,6 @@ func TestRepositoryLoadUnpackedRetryBroken(t *testing.T) {
 	rtest.OK(t, repo.LoadIndex(context.TODO(), nil))
 }
 
-func BenchmarkLoadIndex(b *testing.B) {
-	repository.BenchmarkAllVersions(b, benchmarkLoadIndex)
-}
-
-func benchmarkLoadIndex(b *testing.B, version uint) {
-	repository.TestUseLowSecurityKDFParameters(b)
-
-	repo, be := repository.TestRepositoryWithVersion(b, version)
-	idx := index.NewIndex()
-
-	for i := 0; i < 5000; i++ {
-		idx.StorePack(restic.NewRandomID(), []restic.Blob{
-			{
-				BlobHandle: restic.NewRandomBlobHandle(),
-				Length:     1234,
-				Offset:     1235,
-			},
-		})
-	}
-	idx.Finalize()
-
-	id, err := idx.SaveIndex(context.TODO(), repo)
-	rtest.OK(b, err)
-
-	b.Logf("index saved as %v", id.Str())
-	fi, err := be.Stat(context.TODO(), backend.Handle{Type: restic.IndexFile, Name: id.String()})
-	rtest.OK(b, err)
-	b.Logf("filesize is %v", fi.Size)
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		_, err := loadIndex(context.TODO(), repo, id)
-		rtest.OK(b, err)
-	}
-}
-
 // saveRandomDataBlobs generates random data blobs and saves them to the repository.
 func saveRandomDataBlobs(t testing.TB, repo restic.Repository, num int, sizeMax int) {
 	var wg errgroup.Group
@@ -369,7 +331,7 @@ func TestRepositoryIncrementalIndex(t *testing.T) {
 }
 
 func testRepositoryIncrementalIndex(t *testing.T, version uint) {
-	repo, _ := repository.TestRepositoryWithVersion(t, version)
+	repo, _, _ := repository.TestRepositoryWithVersion(t, version)
 
 	index.IndexFull = func(*index.Index) bool { return true }
 
@@ -421,7 +383,7 @@ func TestInvalidCompression(t *testing.T) {
 func TestListPack(t *testing.T) {
 	be := mem.New()
 	repo, _ := repository.TestRepositoryWithBackend(t, &damageOnceBackend{Backend: be}, restic.StableRepoVersion, repository.Options{})
-	buf := test.Random(42, 1000)
+	buf := rtest.Random(42, 1000)
 
 	var wg errgroup.Group
 	repo.StartPackUploader(context.TODO(), &wg)
@@ -454,18 +416,18 @@ func TestListPack(t *testing.T) {
 }
 
 func TestNoDoubleInit(t *testing.T) {
-	r, be := repository.TestRepositoryWithVersion(t, restic.StableRepoVersion)
+	r, _, be := repository.TestRepositoryWithVersion(t, restic.StableRepoVersion)
 
 	repo, err := repository.New(be, repository.Options{})
 	rtest.OK(t, err)
 
 	pol := r.Config().ChunkerPolynomial
-	err = repo.Init(context.TODO(), r.Config().Version, test.TestPassword, &pol)
+	err = repo.Init(context.TODO(), r.Config().Version, rtest.TestPassword, &pol)
 	rtest.Assert(t, strings.Contains(err.Error(), "repository master key and config already initialized"), "expected config exist error, got %q", err)
 
 	// must also prevent init if only keys exist
 	rtest.OK(t, be.Remove(context.TODO(), backend.Handle{Type: backend.ConfigFile}))
-	err = repo.Init(context.TODO(), r.Config().Version, test.TestPassword, &pol)
+	err = repo.Init(context.TODO(), r.Config().Version, rtest.TestPassword, &pol)
 	rtest.Assert(t, strings.Contains(err.Error(), "repository already contains keys"), "expected already contains keys error, got %q", err)
 
 	// must also prevent init if a snapshot exists and keys were deleted
@@ -475,6 +437,6 @@ func TestNoDoubleInit(t *testing.T) {
 	rtest.OK(t, be.List(context.TODO(), restic.KeyFile, func(fi backend.FileInfo) error {
 		return be.Remove(context.TODO(), backend.Handle{Type: restic.KeyFile, Name: fi.Name})
 	}))
-	err = repo.Init(context.TODO(), r.Config().Version, test.TestPassword, &pol)
+	err = repo.Init(context.TODO(), r.Config().Version, rtest.TestPassword, &pol)
 	rtest.Assert(t, strings.Contains(err.Error(), "repository already contains snapshots"), "expected already contains snapshots error, got %q", err)
 }
