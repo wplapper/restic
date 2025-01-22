@@ -58,6 +58,7 @@ type CheckOptions struct {
 	ReadDataSubset string
 	CheckUnused    bool
 	WithCache      bool
+	restic.SnapshotFilter
 }
 
 var checkOptions CheckOptions
@@ -76,6 +77,7 @@ func init() {
 		panic(err)
 	}
 	f.BoolVar(&checkOptions.WithCache, "with-cache", false, "use existing cache, only read uncached data from repository")
+	initMultiSnapshotFilter(f, &checkOptions.SnapshotFilter, true)
 }
 
 func checkFlags(opts CheckOptions) error {
@@ -211,9 +213,6 @@ func prepareCheckCache(opts CheckOptions, gopts *GlobalOptions, printer progress
 }
 
 func runCheck(ctx context.Context, opts CheckOptions, gopts GlobalOptions, args []string, term *termstatus.Terminal) error {
-	if len(args) != 0 {
-		return errors.Fatal("the check command expects no arguments, only options - please see `restic help check` for usage and flags")
-	}
 
 	printer := newTerminalProgressPrinter(gopts.verbosity, term)
 
@@ -240,6 +239,21 @@ func runCheck(ctx context.Context, opts CheckOptions, gopts GlobalOptions, args 
 	hints, errs := chkr.LoadIndex(ctx, bar)
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+
+	if len(args) > 0 {
+		snapshotLister, err := restic.MemorizeList(ctx, repo, restic.SnapshotFile)
+		if err != nil {
+			return err
+		}
+
+		// run down the tree, take note of the data packfiles involved
+		for sn := range FindFilteredSnapshots(ctx, snapshotLister, repo, &opts.SnapshotFilter, args) {
+			err := chkr.FindDataPackfiles(ctx, repo, sn)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	errorsFound := false
