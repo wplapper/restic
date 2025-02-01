@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"time"
-	"strings"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -254,17 +254,22 @@ func filterAndReplaceSnapshot(ctx context.Context, repo restic.Repository, sn *r
 		return false, err
 	}
 
+	// I think this is a bug! filteredTree refers to the new tree
+	// sn.ID() should not be deleted!
 	if filteredTree.IsNull() {
+		/*
 		if dryRun {
 			Verbosef("would delete empty snapshot\n")
 		} else {
+			// TODO: it removes the existing snapshot NOT the new one!!!
 			if err = repo.RemoveUnpacked(ctx, restic.WriteableSnapshotFile, *sn.ID()); err != nil {
 				return false, err
 			}
 			debug.Log("removed empty snapshot %v", sn.ID())
 			Verbosef("removed empty snapshot %v\n", sn.ID().Str())
 		}
-		return true, nil
+		*/
+		return false, nil
 	}
 
 	if filteredTree == *sn.Tree && newMetadata == nil && summary == nil {
@@ -335,6 +340,10 @@ func runRewrite(ctx context.Context, opts RewriteOptions, gopts GlobalOptions, a
 
 	if hasExcludes && hasIncludes {
 		return errors.Fatal("You cannot specify include and exclude options simultaneously!")
+	}
+	_, errx := opts.Metadata.convert()
+	if errx != nil {
+		return errx
 	}
 
 	var (

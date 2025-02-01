@@ -10,7 +10,7 @@ import (
 )
 
 type NodeRewriteFunc func(node *restic.Node, path string) *restic.Node
-type FailedTreeRewriteFunc func(nodeID restic.ID, path string, err error) (restic.ID, *restic.SnapshotSummary,error)
+type FailedTreeRewriteFunc func(nodeID restic.ID, path string, err error) (restic.ID, *restic.SnapshotSummary, error)
 type QueryRewrittenSizeFunc func() SnapshotSize
 
 type SnapshotSize struct {
@@ -146,6 +146,11 @@ func (t *TreeRewriter) RewriteTree(ctx context.Context, repo BlobLoadSaver, node
 		if err != nil {
 			return restic.ID{}, nil, err
 		}
+		// don't insert empty subtrees into node lists
+		if !t.opts.KeepEmtpyDirectory && newID == (restic.ID{}) {
+			continue
+		}
+
 		node.Subtree = &newID
 		err = tb.AddNode(node)
 		if err != nil {
@@ -156,6 +161,11 @@ func (t *TreeRewriter) RewriteTree(ctx context.Context, repo BlobLoadSaver, node
 	tree, err := tb.Finalize()
 	if err != nil {
 		return restic.ID{}, nil, err
+	}
+
+	// skip saving empty subtrees
+	if !t.opts.KeepEmtpyDirectory && string(tree) == EmptyNodeID {
+		return restic.ID{}, nil, nil
 	}
 
 	// Save new tree
