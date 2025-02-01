@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"time"
+	"strings"
+	"regexp"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -19,9 +21,11 @@ var cmdRewrite = &cobra.Command{
 	Use:   "rewrite [flags] [snapshotID ...]",
 	Short: "Rewrite snapshots to exclude unwanted files",
 	Long: `
-The "rewrite" command excludes files from existing snapshots. It creates new
-snapshots containing the same data as the original ones, but without the files
-you specify to exclude. All metadata (time, host, tags) will be preserved.
+The "rewrite" command excludes files from existing snapshots. Alternatively
+you can use rewrite command to include only wanted files and directories.
+It creates new snapshots containing the same data as the original ones,
+	but only you specify to include,
+	without the files you specify to exclude.
 
 The snapshots to rewrite are specified using the --host, --tag and --path options,
 or by providing a list of snapshot IDs. Please note that specifying neither any of
@@ -62,7 +66,7 @@ type snapshotMetadataArgs struct {
 }
 
 func (sma snapshotMetadataArgs) empty() bool {
-	return sma.Hostname == "" && sma.Time == ""
+	return strings.Trim(sma.Hostname, " ") == "" && strings.Trim(sma.Time, " ") == ""
 }
 
 func (sma snapshotMetadataArgs) convert() (*snapshotMetadata, error) {
@@ -78,16 +82,25 @@ func (sma snapshotMetadataArgs) convert() (*snapshotMetadata, error) {
 		}
 		timeStamp = &t
 	}
+
+	// hostname validation
+	re := regexp.MustCompile("^([A-Za-z0-9][[A-Za-z0-9-]*)$")
+	result := re.FindString(sma.Hostname)
+	if result == "" {
+		return &snapshotMetadata{}, errors.Fatalf("hostname '%s' is not valid!", sma.Hostname)
+	}
 	return &snapshotMetadata{Hostname: sma.Hostname, Time: timeStamp}, nil
 }
 
 // RewriteOptions collects all options for the rewrite command.
 type RewriteOptions struct {
-	Forget bool
-	DryRun bool
+	Forget          bool
+	DryRun          bool
+	SnapshotSummary bool
 
 	Metadata snapshotMetadataArgs
 	restic.SnapshotFilter
+	filter.IncludePatternOptions
 	filter.ExcludePatternOptions
 }
 
@@ -101,12 +114,14 @@ func init() {
 	f.BoolVarP(&rewriteOptions.DryRun, "dry-run", "n", false, "do not do anything, just print what would be done")
 	f.StringVar(&rewriteOptions.Metadata.Hostname, "new-host", "", "replace hostname")
 	f.StringVar(&rewriteOptions.Metadata.Time, "new-time", "", "replace time of the backup")
+	f.BoolVarP(&rewriteOptions.SnapshotSummary, "snapshot-summary", "s", false, "create snapshot summary record if it does not exist")
 
 	initMultiSnapshotFilter(f, &rewriteOptions.SnapshotFilter, true)
 	rewriteOptions.ExcludePatternOptions.Add(f)
+	rewriteOptions.IncludePatternOptions.Add(f)
 }
 
-type rewriteFilterFunc func(ctx context.Context, sn *restic.Snapshot) (restic.ID, error)
+type rewriteFilterFunc func(ctx context.Context, sn *restic.Snapshot) (restic.ID, *restic.SnapshotSummary, error)
 
 func rewriteSnapshot(ctx context.Context, repo *repository.Repository, sn *restic.Snapshot, opts RewriteOptions) (bool, error) {
 	if sn.Tree == nil {
@@ -118,50 +133,97 @@ func rewriteSnapshot(ctx context.Context, repo *repository.Repository, sn *resti
 		return false, err
 	}
 
-	metadata, err := opts.Metadata.convert()
+	includeByNameFuncs, err := opts.IncludePatternOptions.CollectPatterns(Warnf)
+	if err != nil {
+		return false, err
+	}
 
+	metadata, err := opts.Metadata.convert()
 	if err != nil {
 		return false, err
 	}
 
 	var filter rewriteFilterFunc
+	var rewriteNode walker.NodeRewriteFunc
+	var rewriter *walker.TreeRewriter
+	var querySize walker.QueryRewrittenSizeFunc
 
-	if len(rejectByNameFuncs) > 0 {
-		selectByName := func(nodepath string) bool {
-			for _, reject := range rejectByNameFuncs {
-				if reject(nodepath) {
-					return false
+	if len(rejectByNameFuncs) > 0 || len(includeByNameFuncs) > 0 || opts.SnapshotSummary {
+		if len(rejectByNameFuncs) > 0 {
+			selectByName := func(nodepath string) bool {
+				for _, reject := range rejectByNameFuncs {
+					if reject(nodepath) {
+						return false
+					}
 				}
+				return true
 			}
-			return true
-		}
 
-		rewriteNode := func(node *restic.Node, path string) *restic.Node {
-			if selectByName(path) {
+			rewriteNode = func(node *restic.Node, path string) *restic.Node {
+				if selectByName(path) {
+					return node
+				}
+				Verbosef("excluding %s\n", path)
+				return nil
+			}
+
+		} else if len(includeByNameFuncs) > 0 {
+			selectByName := func(nodepath string, node *restic.Node) bool {
+				for _, include := range includeByNameFuncs {
+					if node.Type == restic.NodeTypeDir {
+						// always include directories
+						return true
+					} else if node.Type == restic.NodeTypeFile {
+						ifun, childMayMatch := include(nodepath)
+						return ifun && childMayMatch
+					} else if node.Type == restic.NodeTypeSymlink {
+						includeLink, _ := followSymlink(nodepath, node, include)
+						return includeLink
+					} else {
+						//exclude all device files, fifo, socket, ...
+						return false
+					}
+				}
+				return false
+			}
+
+			rewriteNode = func(node *restic.Node, path string) *restic.Node {
+				if selectByName(path, node) {
+					if node.Type != restic.NodeTypeDir {
+						Verboseff("including %s\n", path)
+					}
+					return node
+				}
+				return nil
+			}
+
+		} else if opts.SnapshotSummary {
+			if sn.Summary != nil {
+				return false, nil
+			}
+
+			rewriteNode = func(node *restic.Node, path string) *restic.Node {
 				return node
 			}
-			Verbosef("excluding %s\n", path)
-			return nil
 		}
 
-		rewriter, querySize := walker.NewSnapshotSizeRewriter(rewriteNode)
+		//common
+		keepDirectories := len(includeByNameFuncs) == 0
+		rewriter, querySize = walker.NewSnapshotSizeRewriter(rewriteNode, keepDirectories)
 
-		filter = func(ctx context.Context, sn *restic.Snapshot) (restic.ID, error) {
-			id, err := rewriter.RewriteTree(ctx, repo, "/", *sn.Tree)
+		filter = func(ctx context.Context, sn *restic.Snapshot) (restic.ID, *restic.SnapshotSummary, error) {
+			id, _, err := rewriter.RewriteTree(ctx, repo, "/", *sn.Tree)
 			if err != nil {
-				return restic.ID{}, err
+				return restic.ID{}, nil, err
 			}
 			ss := querySize()
-			if sn.Summary != nil {
-				sn.Summary.TotalFilesProcessed = ss.FileCount
-				sn.Summary.TotalBytesProcessed = ss.FileSize
-			}
-			return id, err
+			summary := &restic.SnapshotSummary{TotalFilesProcessed: ss.FileCount,
+				TotalBytesProcessed: ss.FileSize}
+			return id, summary, err
 		}
-
 	} else {
-		filter = func(_ context.Context, sn *restic.Snapshot) (restic.ID, error) {
-			return *sn.Tree, nil
+		filter = func(_ context.Context, sn *restic.Snapshot) (restic.ID, *restic.SnapshotSummary, error) {
+			return *sn.Tree, nil, nil
 		}
 	}
 
@@ -176,13 +238,15 @@ func filterAndReplaceSnapshot(ctx context.Context, repo restic.Repository, sn *r
 	repo.StartPackUploader(wgCtx, wg)
 
 	var filteredTree restic.ID
+	var summary *restic.SnapshotSummary
 	wg.Go(func() error {
 		var err error
-		filteredTree, err = filter(ctx, sn)
+		filteredTree, summary, err = filter(ctx, sn)
 		if err != nil {
 			return err
 		}
 
+		sn.Summary = summary
 		return repo.Flush(wgCtx)
 	})
 	err := wg.Wait()
@@ -203,7 +267,7 @@ func filterAndReplaceSnapshot(ctx context.Context, repo restic.Repository, sn *r
 		return true, nil
 	}
 
-	if filteredTree == *sn.Tree && newMetadata == nil {
+	if filteredTree == *sn.Tree && newMetadata == nil && summary == nil {
 		debug.Log("Snapshot %v not modified", sn)
 		return false, nil
 	}
@@ -263,8 +327,14 @@ func filterAndReplaceSnapshot(ctx context.Context, repo restic.Repository, sn *r
 }
 
 func runRewrite(ctx context.Context, opts RewriteOptions, gopts GlobalOptions, args []string) error {
-	if opts.ExcludePatternOptions.Empty() && opts.Metadata.empty() {
-		return errors.Fatal("Nothing to do: no excludes provided and no new metadata provided")
+	hasExcludes := !opts.ExcludePatternOptions.Empty()
+	hasIncludes := !opts.IncludePatternOptions.Empty()
+	if !opts.SnapshotSummary && !hasExcludes && !hasIncludes && opts.Metadata.empty() {
+		return errors.Fatal("Nothing to do: no includes/excludes provided and no new metadata provided")
+	}
+
+	if hasExcludes && hasIncludes {
+		return errors.Fatal("You cannot specify include and exclude options simultaneously!")
 	}
 
 	var (
@@ -296,7 +366,11 @@ func runRewrite(ctx context.Context, opts RewriteOptions, gopts GlobalOptions, a
 
 	changedCount := 0
 	for sn := range FindFilteredSnapshots(ctx, snapshotLister, repo, &opts.SnapshotFilter, args) {
+		if opts.SnapshotSummary && !hasExcludes && !hasIncludes && opts.Metadata.empty() && sn.Summary != nil {
+			continue
+		}
 		Verbosef("\n%v\n", sn)
+
 		changed, err := rewriteSnapshot(ctx, repo, sn, opts)
 		if err != nil {
 			return errors.Fatalf("unable to rewrite snapshot ID %q: %v", sn.ID().Str(), err)
@@ -325,4 +399,9 @@ func runRewrite(ctx context.Context, opts RewriteOptions, gopts GlobalOptions, a
 	}
 
 	return nil
+}
+
+func followSymlink(nodepath string, node *restic.Node, include filter.IncludeByNameFunc) (bool, error) {
+	ifun, childMayMatch := include(node.LinkTarget)
+	return ifun && childMayMatch, nil
 }
