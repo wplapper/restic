@@ -105,25 +105,17 @@ func TestRepairSnapshotsWithLostRootTree(t *testing.T) {
 
 	createRandomFile(t, env, "foo/bar/file", 12345)
 	testRunBackup(t, "", []string{env.testdata}, BackupOptions{}, env.gopts)
-	snap1 := testListSnapshots(t, env.gopts, 1)[0]
-	t.Logf("=== snap1 = %s", snap1.Str())
+	testListSnapshots(t, env.gopts, 1)
 	oldPacks := testRunList(t, "packs", env.gopts)
 
 	// remove all trees
 	removePacks(env.gopts, t, restic.NewIDSet(oldPacks...))
-	t.Log("=== packs removed")
 	testRunCheckMustFail(t, env.gopts)
-	t.Log("=== testRunCheckMustFail")
 
 	// repair
 	testRunRebuildIndex(t, env.gopts)
-	t.Log("=== testRunRebuildIndex")
 	testRunRepairSnapshot(t, env.gopts, true)
-	t.Log("=== testRunRepairSnapshot")
-	//testListSnapshots(t, env.gopts, 0) // << fails here
-	t.Helper()
-	snapshotIDs := testRunList(t, "snapshots", env.gopts)
-	t.Logf("=== snapshotIDs %+v", snapshotIDs)
+	testListSnapshots(t, env.gopts, 0)
 	_, err := testRunCheckOutput(env.gopts, false)
 	rtest.OK(t, err)
 }
