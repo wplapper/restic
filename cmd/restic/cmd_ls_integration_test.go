@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -47,5 +48,56 @@ func TestRunLsNcdu(t *testing.T) {
 	} {
 		ncdu := testRunLsWithOpts(t, env.gopts, LsOptions{Ncdu: true}, paths)
 		assertIsValidJSON(t, ncdu)
+	}
+}
+
+func TestRunLsSort(t *testing.T) {
+	rtest.Equals(t, SortMode(0), SortModeName, "unexpected default sort mode")
+
+	env, cleanup := withTestEnvironment(t)
+	defer cleanup()
+
+	testSetupBackupData(t, env)
+	opts := BackupOptions{}
+	testRunBackup(t, env.testdata+"/0", []string{"for_cmd_ls"}, opts, env.gopts)
+
+	for _, test := range []struct {
+		mode     SortMode
+		expected []string
+	}{
+		{
+			SortModeSize,
+			[]string{
+				"/for_cmd_ls",
+				"/for_cmd_ls/file2.txt",
+				"/for_cmd_ls/file1.txt",
+				"/for_cmd_ls/python.py",
+				"",
+			},
+		},
+		{
+			SortModeExt,
+			[]string{
+				"/for_cmd_ls",
+				"/for_cmd_ls/python.py",
+				"/for_cmd_ls/file1.txt",
+				"/for_cmd_ls/file2.txt",
+				"",
+			},
+		},
+		{
+			SortModeName,
+			[]string{
+				"/for_cmd_ls",
+				"/for_cmd_ls/file1.txt",
+				"/for_cmd_ls/file2.txt",
+				"/for_cmd_ls/python.py",
+				"", // last empty line
+			},
+		},
+	} {
+		out := testRunLsWithOpts(t, env.gopts, LsOptions{Sort: test.mode}, []string{"latest"})
+		fileList := strings.Split(string(out), "\n")
+		rtest.Equals(t, test.expected, fileList, fmt.Sprintf("mismatch for mode %v", test.mode))
 	}
 }

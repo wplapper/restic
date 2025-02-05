@@ -478,7 +478,8 @@ func decidePackAction(ctx context.Context, opts PruneOptions, repo *Repository, 
 	maxUnusedSizeAfter := opts.MaxUnusedBytes(stats.Size.Used)
 
 	for _, p := range repackCandidates {
-		reachedUnusedSizeAfter := (stats.Size.Unused-stats.Size.Remove-stats.Size.Repackrm < maxUnusedSizeAfter)
+		remainingUnusedSize := stats.Size.Duplicate + stats.Size.Unused - stats.Size.Remove - stats.Size.Repackrm
+		reachedUnusedSizeAfter := remainingUnusedSize < maxUnusedSizeAfter
 		reachedRepackSize := stats.Size.Repack+p.unusedSize+p.usedSize >= opts.MaxRepackBytes
 		packIsLargeEnough := p.unusedSize+p.usedSize >= uint64(targetPackSize)
 
@@ -556,7 +557,7 @@ func (plan *PrunePlan) Execute(ctx context.Context, printer progress.Printer) er
 		printer.P("repacking packs\n")
 		bar := printer.NewCounter("packs repacked")
 		bar.SetMax(uint64(len(plan.repackPacks)))
-		_, err := Repack(ctx, repo, repo, plan.repackPacks, plan.keepBlobs, bar)
+		_, err := Repack(ctx, repo, repo, plan.repackPacks, plan.keepBlobs, bar, printer.P)
 		bar.Done()
 		if err != nil {
 			return errors.Fatal(err.Error())
