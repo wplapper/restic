@@ -199,7 +199,6 @@ func TestRewriteInclude(t *testing.T) {
 	}
 	rtest.Assert(t, count == 2, "there should be 2 txt files in the snapshot, but there are %d files", count)
 
-
 	// get snapshot summary and find these 2 files
 	_, repo, unlock, err := openWithExclusiveLock(context.TODO(), env.gopts, false)
 	rtest.OK(t, err)
@@ -208,7 +207,7 @@ func TestRewriteInclude(t *testing.T) {
 	rtest.OK(t, err)
 
 	rtest.Assert(t, sn.Summary != nil, "snapshot should have a summary attached")
-	rtest.Assert(t, sn.Summary.TotalFilesProcessed  == 2,
+	rtest.Assert(t, sn.Summary.TotalFilesProcessed == 2,
 		"there should be 2 files in the snapshot, but there are %d files", sn.Summary.TotalFilesProcessed)
 	unlock()
 }
