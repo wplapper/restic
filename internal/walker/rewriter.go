@@ -41,6 +41,7 @@ func NewTreeRewriter(opts RewriteOpts) *TreeRewriter {
 	rw := &TreeRewriter{
 		opts: opts,
 	}
+	rw.opts.KeepEmptyDirecoryGlobal = true
 	if !opts.DisableNodeCache {
 		rw.replaces = make(idMap)
 	}
