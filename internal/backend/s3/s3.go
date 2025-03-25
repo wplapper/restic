@@ -131,14 +131,11 @@ func getCredentials(cfg Config, tr http.RoundTripper) (*credentials.Credentials,
 		&credentials.EnvMinio{},
 		&credentials.FileAWSCredentials{},
 		&credentials.FileMinioClient{},
-		&credentials.IAM{
-			Client: &http.Client{
-				Transport: tr,
-			},
-		},
+		&credentials.IAM{},
 	})
+	client := &http.Client{Transport: tr}
 
-	c, err := creds.Get()
+	c, err := creds.GetWithContext(&credentials.CredContext{Client: client})
 	if err != nil {
 		return nil, errors.Wrap(err, "creds.Get")
 	}
@@ -261,18 +258,16 @@ func (be *Backend) IsPermanentError(err error) bool {
 	return false
 }
 
-func (be *Backend) Connections() uint {
-	return be.cfg.Connections
+func (be *Backend) Properties() backend.Properties {
+	return backend.Properties{
+		Connections:      be.cfg.Connections,
+		HasAtomicReplace: true,
+	}
 }
 
 // Hasher may return a hash function for calculating a content hash for the backend
 func (be *Backend) Hasher() hash.Hash {
 	return nil
-}
-
-// HasAtomicReplace returns whether Save() can atomically replace files
-func (be *Backend) HasAtomicReplace() bool {
-	return true
 }
 
 // Path returns the path in the bucket that is used for this backend.
@@ -304,7 +299,7 @@ func (be *Backend) Save(ctx context.Context, h backend.Handle, rd backend.Rewind
 		opts.StorageClass = be.cfg.StorageClass
 	}
 
-	info, err := be.client.PutObject(ctx, be.cfg.Bucket, objName, io.NopCloser(rd), int64(rd.Length()), opts)
+	info, err := be.client.PutObject(ctx, be.cfg.Bucket, objName, io.NopCloser(rd), rd.Length(), opts)
 
 	// sanity check
 	if err == nil && info.Size != rd.Length() {

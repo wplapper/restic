@@ -183,7 +183,7 @@ func newBackend(ctx context.Context, cfg Config, lim limiter.Limiter) (*Backend,
 	dialCount := 0
 	tr := &http2.Transport{
 		AllowHTTP: true, // this is not really HTTP, just stdin/stdout
-		DialTLS: func(network, address string, _ *tls.Config) (net.Conn, error) {
+		DialTLSContext: func(_ context.Context, network, address string, _ *tls.Config) (net.Conn, error) {
 			debug.Log("new connection requested, %v %v", network, address)
 			if dialCount > 0 {
 				// the connection to the child process is already closed
@@ -341,8 +341,8 @@ func (be *Backend) Close() error {
 	return be.waitResult
 }
 
-// Warmup not implemented
-func (be *Backend) Warmup(_ context.Context, _ []backend.Handle) ([]backend.Handle, error) {
-	return []backend.Handle{}, nil
+func (be *Backend) Properties() backend.Properties {
+	properties := be.Backend.Properties()
+	properties.HasFlakyErrors = true
+	return properties
 }
-func (be *Backend) WarmupWait(_ context.Context, _ []backend.Handle) error { return nil }

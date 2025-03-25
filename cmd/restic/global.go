@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -38,12 +39,10 @@ import (
 
 	"github.com/restic/restic/internal/errors"
 
-	"os/exec"
-
 	"golang.org/x/term"
 )
 
-// ErrNoRepository is used to report if opening a repsitory failed due
+// ErrNoRepository is used to report if opening a repository failed due
 // to a missing backend storage location or config file
 var ErrNoRepository = errors.New("repository does not exist")
 
@@ -303,7 +302,7 @@ func resolvePassword(opts *GlobalOptions, envStr string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return (strings.TrimSpace(string(output))), nil
+		return strings.TrimSpace(string(output)), nil
 	}
 	if opts.PasswordFile != "" {
 		return loadPasswordFromFile(opts.PasswordFile)

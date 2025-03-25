@@ -42,10 +42,11 @@ type Repository struct {
 
 	opts Options
 
-	packerWg *errgroup.Group
-	uploader *packerUploader
-	treePM   *packerManager
-	dataPM   *packerManager
+	packerWg    *errgroup.Group
+	uploader    *packerUploader
+	treePM      *packerManager
+	dataPM      *packerManager
+	packerCount int
 
 	allocEnc sync.Once
 	allocDec sync.Once
@@ -125,9 +126,10 @@ func New(be backend.Backend, opts Options) (*Repository, error) {
 	}
 
 	repo := &Repository{
-		be:   be,
-		opts: opts,
-		idx:  index.NewMasterIndex(),
+		be:          be,
+		opts:        opts,
+		idx:         index.NewMasterIndex(),
+		packerCount: defaultPackerCount,
 	}
 
 	return repo, nil
@@ -272,7 +274,7 @@ func (r *Repository) loadBlob(ctx context.Context, blobs []restic.PackedBlob, bu
 			continue
 		}
 
-		it := newPackBlobIterator(blob.PackID, newByteReader(buf), uint(blob.Offset), []restic.Blob{blob.Blob}, r.key, r.getZstdDecoder())
+		it := newPackBlobIterator(blob.PackID, newByteReader(buf), blob.Offset, []restic.Blob{blob.Blob}, r.key, r.getZstdDecoder())
 		pbv, err := it.Next()
 
 		if err == nil {
@@ -542,7 +544,7 @@ func (r *Repository) Flush(ctx context.Context) error {
 		return err
 	}
 
-	return r.idx.SaveIndex(ctx, &internalRepository{r})
+	return r.idx.Flush(ctx, &internalRepository{r})
 }
 
 func (r *Repository) StartPackUploader(ctx context.Context, wg *errgroup.Group) {
@@ -552,9 +554,9 @@ func (r *Repository) StartPackUploader(ctx context.Context, wg *errgroup.Group) 
 
 	innerWg, ctx := errgroup.WithContext(ctx)
 	r.packerWg = innerWg
-	r.uploader = newPackerUploader(ctx, innerWg, r, r.be.Connections())
-	r.treePM = newPackerManager(r.key, restic.TreeBlob, r.packSize(), r.uploader.QueuePacker)
-	r.dataPM = newPackerManager(r.key, restic.DataBlob, r.packSize(), r.uploader.QueuePacker)
+	r.uploader = newPackerUploader(ctx, innerWg, r, r.Connections())
+	r.treePM = newPackerManager(r.key, restic.TreeBlob, r.packSize(), r.packerCount, r.uploader.QueuePacker)
+	r.dataPM = newPackerManager(r.key, restic.DataBlob, r.packSize(), r.packerCount, r.uploader.QueuePacker)
 
 	wg.Go(func() error {
 		return innerWg.Wait()
@@ -587,7 +589,7 @@ func (r *Repository) flushPacks(ctx context.Context) error {
 }
 
 func (r *Repository) Connections() uint {
-	return r.be.Connections()
+	return r.be.Properties().Connections
 }
 
 func (r *Repository) LookupBlob(tpe restic.BlobType, id restic.ID) []restic.PackedBlob {
@@ -701,7 +703,9 @@ func (r *Repository) createIndexFromPacks(ctx context.Context, packsize map[rest
 				invalid = append(invalid, fi.ID)
 				m.Unlock()
 			}
-			r.idx.StorePack(fi.ID, entries)
+			if err := r.idx.StorePack(ctx, fi.ID, entries, &internalRepository{r}); err != nil {
+				return err
+			}
 			p.Add(1)
 		}
 

@@ -359,7 +359,7 @@ func (r *fileRestorer) downloadBlobs(ctx context.Context, packID restic.ID,
 			}
 			for file, offsets := range blob.files {
 				for _, offset := range offsets {
-					// avoid long cancelation delays for frequently used blobs
+					// avoid long cancellation delays for frequently used blobs
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
@@ -399,5 +399,5 @@ func (r *fileRestorer) reportBlobProgress(file *fileInfo, blobSize uint64) {
 	if file.state == nil {
 		action = restore.ActionFileRestored
 	}
-	r.progress.AddProgress(file.location, action, uint64(blobSize), uint64(file.size))
+	r.progress.AddProgress(file.location, action, blobSize, uint64(file.size))
 }

@@ -217,18 +217,16 @@ func (be *Backend) IsPermanentError(err error) bool {
 	return false
 }
 
-func (be *Backend) Connections() uint {
-	return be.connections
+func (be *Backend) Properties() backend.Properties {
+	return backend.Properties{
+		Connections:      be.connections,
+		HasAtomicReplace: true,
+	}
 }
 
 // Hasher may return a hash function for calculating a content hash for the backend
 func (be *Backend) Hasher() hash.Hash {
 	return md5.New()
-}
-
-// HasAtomicReplace returns whether Save() can atomically replace files
-func (be *Backend) HasAtomicReplace() bool {
-	return true
 }
 
 // Path returns the path in the bucket that is used for this backend.
@@ -421,10 +419,10 @@ func (be *Backend) List(ctx context.Context, t backend.FileType, fn func(backend
 		prefix += "/"
 	}
 
-	max := int32(be.listMaxItems)
+	maxI := int32(be.listMaxItems)
 
 	opts := &azContainer.ListBlobsFlatOptions{
-		MaxResults: &max,
+		MaxResults: &maxI,
 		Prefix:     &prefix,
 	}
 	lister := be.container.NewListBlobsFlatPager(opts)

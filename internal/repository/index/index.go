@@ -11,6 +11,7 @@ import (
 
 	"github.com/restic/restic/internal/crypto"
 	"github.com/restic/restic/internal/errors"
+	"github.com/restic/restic/internal/repository/pack"
 	"github.com/restic/restic/internal/restic"
 
 	"github.com/restic/restic/internal/debug"
@@ -92,8 +93,8 @@ const (
 	indexMaxAge   = 10 * time.Minute
 )
 
-// IndexFull returns true iff the index is "full enough" to be saved as a preliminary index.
-var IndexFull = func(idx *Index) bool {
+// Full returns true iff the index is "full enough" to be saved as a preliminary index.
+var Full = func(idx *Index) bool {
 	idx.m.RLock()
 	defer idx.m.RUnlock()
 
@@ -116,7 +117,18 @@ var IndexFull = func(idx *Index) bool {
 
 	debug.Log("index %p only has %d blobs and is too young (%v)", idx, blobs, age)
 	return false
+}
 
+var Oversized = func(idx *Index) bool {
+	idx.m.RLock()
+	defer idx.m.RUnlock()
+
+	var blobs uint
+	for typ := range idx.byType {
+		blobs += idx.byType[typ].len()
+	}
+
+	return blobs >= indexMaxBlobs+pack.MaxHeaderEntries
 }
 
 // StorePack remembers the ids of all blobs of a given pack
@@ -246,8 +258,8 @@ func (idx *Index) EachByPack(ctx context.Context, packBlacklist restic.IDSet) <-
 		for packID, packByType := range byPack {
 			var result EachByPackResult
 			result.PackID = packID
-			for typ, pack := range packByType {
-				for _, e := range pack {
+			for typ, p := range packByType {
+				for _, e := range p {
 					result.Blobs = append(result.Blobs, idx.toPackedBlob(e, restic.BlobType(typ)).Blob)
 				}
 			}
@@ -499,10 +511,10 @@ func DecodeIndex(buf []byte, id restic.ID) (idx *Index, err error) {
 	}
 
 	idx = NewIndex()
-	for _, pack := range idxJSON.Packs {
-		packID := idx.addToPacks(pack.ID)
+	for _, p := range idxJSON.Packs {
+		packID := idx.addToPacks(p.ID)
 
-		for _, blob := range pack.Blobs {
+		for _, blob := range p.Blobs {
 			idx.store(packID, restic.Blob{
 				BlobHandle: restic.BlobHandle{
 					Type: blob.Type,
