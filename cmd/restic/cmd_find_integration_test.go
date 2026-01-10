@@ -136,7 +136,7 @@ func TestFindSorting(t *testing.T) {
 }
 
 // JsonOutput is the struct `restic find --json` produces
-type JsonOutput struct {
+type JSONOutput struct {
 	ObjectType string    `json:"object_type"`
 	ID         string    `json:"id"`
 	Path       string    `json:"path"`
@@ -181,7 +181,7 @@ func TestFindPackfile(t *testing.T) {
 		results := testRunFind(t, true, findOptions, env.gopts, packID.String())
 
 		// get the json records
-		jsonResult := []JsonOutput{}
+		jsonResult := []JSONOutput{}
 		rtest.OK(t, json.Unmarshal(results, &jsonResult))
 		rtest.Assert(t, len(jsonResult) > 0, "expected at least one tree record in the packfile")
 
@@ -191,6 +191,8 @@ func TestFindPackfile(t *testing.T) {
 		rtest.Assert(t, record.ObjectType == "tree" && record.SnapshotID == sn1.String(),
 			"expexted a tree record with known snapshot id, but got type=%s and snapID=%s instead of %s",
 			record.ObjectType, record.SnapshotID, sn1.String())
+		// for windows only: convert \\ to /
+		backupPath = strings.ReplaceAll(backupPath, `\\`, "/")
 		rtest.Assert(t, strings.Contains(record.Path, backupPath), "expected %q as part of %q", backupPath, record.Path)
 
 		return nil
