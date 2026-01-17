@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -227,12 +228,16 @@ func TestFindBlobID(t *testing.T) {
 	rtest.Assert(t,
 		result.ObjectType == "blob" &&
 			blobID == result.ID &&
-			sn[0].String() == result.SnapshotID &&
+			sn[0].String() == result.SnapshotID,
 		"\nexpected ObjectType %s <=> %s\nexpected ID %s <=> %s\n expected snapshotID %s <=> %s",
 		"blob", result.ObjectType,
 		blobID, result.ID,
 		sn[0].String(), result.SnapshotID,
 	)
+	if runtime.GOOS != "windows" {
+		// windows pathnames are different / => \
+		rtest.Assert(t, pathName == result.Path, "expected pathname %q in result, got %q", pathName, result.Path)
+	}
 }
 
 func TestFindPackID(t *testing.T) {
