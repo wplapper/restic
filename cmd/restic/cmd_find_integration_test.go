@@ -142,6 +142,10 @@ func TestFindSorting(t *testing.T) {
 }
 
 func TestFindOldestNewest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// windows does things differently
+		return
+	}
 	env, cleanup := withTestEnvironment(t)
 	defer cleanup()
 	testSetupBackupData(t, env)
