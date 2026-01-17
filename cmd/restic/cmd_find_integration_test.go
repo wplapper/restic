@@ -239,7 +239,7 @@ func TestFindBlobID(t *testing.T) {
 		sn[0].String(), result.SnapshotID,
 	)
 	if runtime.GOOS != "windows" {
-		// windows pathnames are different / => \
+		// windows pathnames are different
 		rtest.Assert(t, pathName == result.Path, "expected pathname %q in result, got %q", pathName, result.Path)
 	}
 }
