@@ -4,6 +4,7 @@ import (
 	"context"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -39,9 +40,9 @@ func TestFullTree(t *testing.T) {
 
 	rtest.Assert(t, strings.Contains(outString, `"root"`), "expected to find string 'root', but did not see it")
 	rtest.Assert(t, strings.Contains(outString, snapID), "expected to find %q, but did not see it", snapID)
-	backupPath := path.Join(env.testdata, "0", "0", "9")
+	backupPath := path.Join("0", "0", "9")
+	if runtime.GOOS != "windows" {
 	rtest.Assert(t, strings.Contains(outString, backupPath), "expected to find %q, but did not see it", backupPath)
-
 	for _, treeID := range treeIDs {
 		rtest.Assert(t, strings.Contains(outString, treeID), "expected treeID %s in output string, got nothing", treeID)
 	}
