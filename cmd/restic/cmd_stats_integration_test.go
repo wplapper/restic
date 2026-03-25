@@ -53,9 +53,13 @@ func TestStatsModeInfo(t *testing.T) {
 
 	rtest.Equals(t, 2, info.General.SnapshotsCount)
 	rtest.Equals(t, 2, info.General.TreeCount)
-	// windows counts harlinks differently
+
+	// windows is of the opinion that it has 75 unique files
 	//rtest.Equals(t, 69+5, info.UniqueFiles.UniqueFilesByContents)
-	//rtest.Equals(t, 73, info.Blobs.DataBlobs)
+	// windows is of the opinion that it has 74 data blobs, whereas the rest has 73
+	//rtest.Equals(t, 69+4, info.Blobs.DataBlobs)
+	// windows obviously must have found one more distinct file
+	// so I give up again - windows is a mystery to me
 
 	rtest.Equals(t, 0, info.Blobs.UnusedBlobs)
 	rtest.Equals(t, 0, info.Blobs.DuplicateBlobRefs)
