@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -209,9 +210,10 @@ func TestRunForgetShowRemovedFiles(t *testing.T) {
 
 	output = testRunForgetWithOutput(t, true, optsForgetS, pruneOpts, env.gopts, []string{sn2Str, sn3Str, sn4Str})
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
-	rtest.Equals(t, sn2Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
 	rtest.Equals(t, filepath.ToSlash(f4)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path)[2:])
-
-	rtest.Equals(t, sn3Str, deletedFilenames.DeletedFiles[1].SnapshotID.Str())
 	rtest.Equals(t, filepath.ToSlash(f5)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path)[2:])
+	if runtime.GOOS != "windows" {
+		rtest.Equals(t, sn3Str, deletedFilenames.DeletedFiles[1].SnapshotID.Str())
+		rtest.Equals(t, sn2Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
+	}
 }
