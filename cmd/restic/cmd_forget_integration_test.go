@@ -174,12 +174,16 @@ func TestRunForgetShowRemovedFiles(t *testing.T) {
 		MaxUnused: "unlimited",
 	}
 
+	// the xxx[2:] is to get rid of the difference of windows paths in and out
+	// "C:/Users/RUNNER~1/AppData/Local/Temp/restic-test-2058676641/testdata/0/0/9/1" versus
+	// "/C/Users/RUNNER~1/AppData/Local/Temp/restic-test-2058676641/testdata/0/0/9/1"
+
 	output := testRunForgetWithOutput(t, true, optsForget, pruneOpts, env.gopts, []string{sn1Str})
 	deletedFilenames := DeletedFilenamesJSON{}
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
 	rtest.Equals(t, 1, len(deletedFilenames.DeletedFiles))
 	rtest.Equals(t, sn1Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f1), filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path))
+	rtest.Equals(t, filepath.ToSlash(f1)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path)[2:])
 
 	output = testRunForgetWithOutput(t, true, optsForget, pruneOpts, env.gopts, []string{sn2Str})
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
@@ -189,25 +193,25 @@ func TestRunForgetShowRemovedFiles(t *testing.T) {
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
 	rtest.Equals(t, 2, len(deletedFilenames.DeletedFiles))
 	rtest.Equals(t, sn1Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f1), filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path))
+	rtest.Equals(t, filepath.ToSlash(f1)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path)[2:])
 
 	rtest.Equals(t, sn1Str, deletedFilenames.DeletedFiles[1].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f2), filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path))
+	rtest.Equals(t, filepath.ToSlash(f2)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path)[2:])
 
 	output = testRunForgetWithOutput(t, true, optsForget, pruneOpts, env.gopts, []string{sn2Str, sn3Str, sn4Str})
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
 
 	rtest.Equals(t, 4, len(deletedFilenames.DeletedFiles))
 	rtest.Equals(t, sn3Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f1), filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path))
+	rtest.Equals(t, filepath.ToSlash(f1)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path)[2:])
 	rtest.Equals(t, sn4Str, deletedFilenames.DeletedFiles[1].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f2), filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path))
+	rtest.Equals(t, filepath.ToSlash(f2)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path)[2:])
 
 	output = testRunForgetWithOutput(t, true, optsForgetS, pruneOpts, env.gopts, []string{sn2Str, sn3Str, sn4Str})
 	rtest.OK(t, json.Unmarshal(output, &deletedFilenames))
 	rtest.Equals(t, sn2Str, deletedFilenames.DeletedFiles[0].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f4), filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path))
+	rtest.Equals(t, filepath.ToSlash(f4)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[0].Path)[2:])
 
 	rtest.Equals(t, sn3Str, deletedFilenames.DeletedFiles[1].SnapshotID.Str())
-	rtest.Equals(t, filepath.ToSlash(f5), filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path))
+	rtest.Equals(t, filepath.ToSlash(f5)[2:], filepath.ToSlash(deletedFilenames.DeletedFiles[1].Path)[2:])
 }
