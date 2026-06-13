@@ -129,6 +129,9 @@ type Archiver struct {
 
 	// Flags controlling change detection. See doc/040_backup.rst for details.
 	ChangeIgnoreFlags uint
+
+	// for excluded items
+	ExcludedItem func(path string, fileType string)
 }
 
 // Flags for the ChangeIgnoreFlags bitfield.
@@ -183,6 +186,7 @@ func New(repo archiverRepo, filesystem fs.FS, opts Options) *Archiver {
 		CompleteItem: func(string, *data.Node, *data.Node, ItemStats, time.Duration) {},
 		StartFile:    func(string) {},
 		CompleteBlob: func(uint64) {},
+		ExcludedItem: func(string, string) {},
 	}
 
 	return arch
@@ -348,6 +352,7 @@ func (arch *Archiver) saveDir(ctx context.Context, snPath string, dir string, me
 		}
 
 		if excluded {
+			arch.ExcludedItem(pathname, "file")
 			continue
 		}
 
@@ -710,6 +715,8 @@ func (arch *Archiver) saveTree(ctx context.Context, snPath string, atree *tree, 
 
 			if !excluded {
 				nodes = append(nodes, fn)
+			} else {
+				arch.ExcludedItem(pathname, "tree")
 			}
 			continue
 		}
