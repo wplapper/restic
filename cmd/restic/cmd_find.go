@@ -949,7 +949,6 @@ func runFind(ctx context.Context, opts FindOptions, gopts global.Options, args [
 		}
 	}
 
-
 	// action 3 - always check for patterns
 	err = f.printPatterns(ctx, treeRoots, directoryNames, opts)
 	if err != nil {
