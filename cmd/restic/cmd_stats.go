@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -230,20 +229,6 @@ func runStats(ctx context.Context, opts StatsOptions, gopts global.Options, args
 	if stats.TotalFileCount > 0 {
 		printer.S("        Total File Count:  %d", stats.TotalFileCount)
 	}
-	if stats.TotalUncompressedSize > 0 {
-		printer.S(" Total Uncompressed Size:  %-5s", ui.FormatBytes(stats.TotalUncompressedSize))
-	}
-	printer.S("              Total Size:  %-5s", ui.FormatBytes(stats.TotalSize))
-	if stats.CompressionProgress > 0 {
-		printer.S("    Compression Progress:  %.2f%%", stats.CompressionProgress)
-	}
-	if stats.CompressionRatio > 0 {
-		printer.S("       Compression Ratio:  %.2fx", stats.CompressionRatio)
-	}
-	if stats.CompressionSpaceSaving > 0 {
-		printer.S("Compression Space Saving:  %.2f%%", stats.CompressionSpaceSaving)
-	}
-
 	return nil
 }
 
@@ -465,18 +450,6 @@ type infoStats struct {
 		SizeFullPartial       uint64 `json:"size_partial_packfiles,omitempty"` // size of partial packfile, all blobs
 	} `json:"packfiles"`
 
-	// compression
-	Compression struct {
-		TotalUncompressedSize  uint64  `json:"total_uncompressed_size,omitempty"`
-		UsedUncompressedSize   uint64  `json:"used_uncompressed_size,omitempty"`
-		CompressionRatio       float64 `json:"compression_ratio,omitempty"`
-		CompressionProgress    float64 `json:"compression_progress,omitempty"`
-		CompressionSpaceSaving float64 `json:"compression_space_saving,omitempty"`
-	} `json:"compression"`
-
-	compressedStoredSize uint64
-	uncompressedSize     uint64
-
 	// storage items
 	uniqueFiles    map[fileID]uint64
 	packsFromIndex map[restic.ID]int64
@@ -646,22 +619,6 @@ func (out *infoStats) printStats(printer restic.Printer) {
 
 	printer.S("%-28s %8d  %12s", "all packfiles",
 		out.Packfiles.TotalPackFiles, ui.FormatBytes(out.Packfiles.SizeTreePackfiles+out.Packfiles.SizeDataPackfiles))
-
-	if out.Compression.TotalUncompressedSize > 0 {
-		printer.S("")
-		printer.S("Compression (repository v2)")
-		printer.S("%-28s %8s  %12s %12s", "Total uncompressed", "", "",
-			ui.FormatBytes(out.Compression.TotalUncompressedSize))
-		printer.S("%-28s %8s  %12s %12s", "Used uncompressed", "", "",
-			ui.FormatBytes(out.Compression.UsedUncompressedSize))
-		if out.Compression.CompressionProgress > 0 {
-			printer.S("%-28s %7.1f%%", "Compression progress", out.Compression.CompressionProgress)
-			if out.Compression.CompressionRatio >= 1 {
-				printer.S("%-28s %7.1fx", "Compression ratio", out.Compression.CompressionRatio)
-			}
-			printer.S("%-28s %7.1f%%", "Compression space saved", out.Compression.CompressionSpaceSaving)
-		}
-	}
 }
 
 // copied from intermal/repository/prune.go
@@ -688,7 +645,6 @@ func (out *infoStats) processIndexRecords(ctx context.Context, repo restic.Repos
 	err := repo.ListBlobs(ctx, func(pb restic.PackBlob) {
 		out.Blobs.TotalIndexedBlobs++
 		stored := uint64(pb.CiphertextLength())
-		uncompLen := uint64(pb.UncompressedCiphertextLength())
 		out.Blobs.TotalSize += stored
 
 		switch pb.Handle().Type {
@@ -723,7 +679,6 @@ func (out *infoStats) processIndexRecords(ctx context.Context, repo restic.Repos
 			out.Blobs.UsedSize += stored
 			ip.usedBlobs++
 			ip.usedSize += stored
-			out.Compression.UsedUncompressedSize += uncompLen
 		} else {
 			out.Blobs.UnusedBlobs++
 			out.Blobs.UnusedSize += stored
@@ -734,14 +689,6 @@ func (out *infoStats) processIndexRecords(ctx context.Context, repo restic.Repos
 
 		// update stats
 		indexPack[pb.PackID()] = ip
-
-		if repo.Config().Version >= 2 {
-			out.Compression.TotalUncompressedSize += uncompLen
-			if pb.IsCompressed() {
-				out.compressedStoredSize += stored
-				out.uncompressedSize += uncompLen
-			}
-		}
 	})
 	if err != nil {
 		return err
@@ -809,17 +756,6 @@ func (out *infoStats) runStatsInfo(ctx context.Context, repo restic.Repository,
 
 	if err = out.processIndexRecords(ctx, repo, stats); err != nil {
 		return err
-	}
-
-	if out.compressedStoredSize > 0 {
-		out.Compression.CompressionRatio = math.Round(100*float64(out.uncompressedSize)/
-			float64(out.compressedStoredSize)) / 100
-	}
-	if out.Compression.TotalUncompressedSize > 0 {
-		out.Compression.CompressionProgress = math.Round(1000*float64(out.uncompressedSize)/
-			float64(out.Compression.TotalUncompressedSize)) / 10
-		out.Compression.CompressionSpaceSaving = math.Round(1000-float64(1000*out.Blobs.TotalSize)/
-			float64(out.Compression.TotalUncompressedSize)) / 10
 	}
 
 	if gopts.JSON {
