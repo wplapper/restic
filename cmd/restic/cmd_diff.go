@@ -98,14 +98,10 @@ func loadSnapshot(ctx context.Context, be restic.Lister, repo restic.LoaderUnpac
 
 // Comparer collects all things needed to compare two snapshots.
 type Comparer struct {
-	repo        restic.BlobLoader
-	opts        DiffOptions
-	printChange func(change *Change)
-	printError  func(string, ...any)
 	repo         restic.BlobLoader
 	opts         DiffOptions
 	printChange  func(change *Change)
-	printError   func(string, ...interface{})
+	printError   func(string, ...any)
 	contentDiffs []ContentDiff
 }
 
