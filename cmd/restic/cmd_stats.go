@@ -134,10 +134,10 @@ func runStats(ctx context.Context, opts StatsOptions, gopts global.Options, args
 	}
 
 	var snapshots data.Snapshots
-	// info mode: collect all snapshot roots, then do one data.StreamTrees
 	if opts.countMode == countModeInfo {
+		// info mode: collect all snapshot roots, then do one data.StreamTrees
 		var roots restic.IDs
-		err := opts.SnapshotFilter.FindAll(ctx, snapshotLister, repo, args, func(_ string, sn *data.Snapshot, err error) error {
+		err := opts.SnapshotFilter.FindAll(ctx, snapshotLister, repo, nil, func(_ string, sn *data.Snapshot, err error) error {
 			if err != nil {
 				return err
 			}
@@ -633,7 +633,7 @@ type packInfoStats struct {
 
 // processIndexRecords walks the Master Index and separates blobs into
 // used / unused / duplicate
-// countBlobsAndSizes walks the Master Index count tree and data blobs/sizes
+// countBlobsAndSizes walks the Master Index to count tree and data blobs/sizes
 // also make note of the encompassing packfile, counting duplicates as well
 func (out *infoStats) processIndexRecords(ctx context.Context, repo restic.Repository,
 	stats *statsContainer,
