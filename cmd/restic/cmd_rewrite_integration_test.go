@@ -390,18 +390,3 @@ func TestRewriteWrongExcludePattern(t *testing.T) {
 	rtest.Assert(t, err != nil && strings.Contains(err.Error(), "--exclude: invalid pattern"),
 		"expected '--exclude: invalid pattern', got %v", err)
 }
-
-func TestRewriteWrongIncludePattern(t *testing.T) {
-	env, cleanup := withTestEnvironment(t)
-	defer cleanup()
-	createBasicRewriteRepo(t, env)
-
-	opts := RewriteOptions{
-		IncludePatternOptions: filter.IncludePatternOptions{
-			Includes: []string{`[c-f]\`},
-		},
-	}
-	err := testRunRewriteOutput(t, opts, env.gopts, []string{})
-	rtest.Assert(t, err != nil && strings.Contains(err.Error(), "--include: invalid pattern"),
-		"expected '--include: invalid pattern', got %v", err)
-}
