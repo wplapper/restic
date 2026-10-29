@@ -22,6 +22,14 @@ func testRunList(t testing.TB, gopts global.Options, params ...string) restic.ID
 	return parseIDsFromReader(t, buf)
 }
 
+func testRunListMayFail(t testing.TB, gopts global.Options, params []string) error {
+	t.Helper()
+	_, err := withCaptureStdout(t, gopts, func(ctx context.Context, gopts global.Options) error {
+		return runList(ctx, gopts, params, gopts.Term, "")
+	})
+	return err
+}
+
 func parseIDsFromReader(t testing.TB, rd io.Reader) restic.IDs {
 	t.Helper()
 	IDs := restic.IDs{}
@@ -122,4 +130,56 @@ func TestPackfileListWithSnapshot(t *testing.T) {
 
 	packfiles = testRunList(t, env.gopts, "packs", "latest")
 	rtest.Assert(t, len(packfiles) == 2, "expected 2 packfiles in snapshot, got %d", len(packfiles))
+}
+
+func TestListModes(t *testing.T) {
+	env, cleanup := withTestEnvironment(t)
+	defer cleanup()
+
+	testSetupBackupData(t, env)
+	opts := BackupOptions{}
+
+	// first backup
+	testRunBackup(t, "", []string{filepath.Join(env.testdata, "0", "0", "9")}, opts, env.gopts)
+	testListSnapshots(t, env.gopts, 1)
+
+	tests := []struct {
+		name    string
+		action  []string
+		wantErr string // substring of expected error, "" for no error
+	}{
+		{
+			name:   "index",
+			action: []string{"index"},
+		},
+		{
+			name:   "locks",
+			action: []string{"locks"},
+		},
+		{
+			name:    "wrong list option",
+			action:  []string{"quark"},
+			wantErr: "invalid type",
+		},
+		{
+			name:    "too many parameters",
+			action:  []string{"index", "invalid"},
+			wantErr: "too many parameters",
+		},
+		{
+			name:    "unknown pack",
+			action:  []string{"packs", "deadbeef"},
+			wantErr: "failed to find snapshot",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := testRunListMayFail(t, env.gopts, tc.action)
+			if err != nil {
+				rtest.Assert(t, strings.Contains(err.Error(), tc.wantErr),
+					"expected %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
 }
