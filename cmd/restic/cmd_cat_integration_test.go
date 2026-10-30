@@ -90,11 +90,8 @@ type packJSON struct {
 }
 
 type blobJSON struct {
-	ID                 restic.ID       `json:"id"`
-	Type               restic.BlobType `json:"type"`
-	Offset             uint            `json:"offset"`
-	Length             uint            `json:"length"`
-	UncompressedLength uint            `json:"uncompressed_length,omitempty"`
+	ID   restic.ID       `json:"id"`
+	Type restic.BlobType `json:"type"`
 }
 
 func TestCatIndex(t *testing.T) {
@@ -115,7 +112,7 @@ func TestCatIndex(t *testing.T) {
 	indexInfo := &indexPack{}
 	rtest.OK(t, json.Unmarshal(stdout, indexInfo))
 
-	// convert IDs into a blobSet
+	// convert ID+Type into a blobSet
 	blobHandles := restic.NewBlobSet()
 	for _, pack := range indexInfo.Packs {
 		for _, item := range pack.Blobs {
@@ -123,45 +120,26 @@ func TestCatIndex(t *testing.T) {
 			blobHandles.Insert(handle)
 		}
 	}
-	rtest.Assert(t, len(blobHandles) > 0, "expected a few blobs in the repo")
+	rtest.Assert(t, len(blobHandles) > 0, "expected a few blobs in the test repo")
 
 	err = withTermStatus(t, env.gopts, func(ctx context.Context, gopts global.Options) error {
 		printer := progress.NewTerminalPrinter(gopts.JSON, gopts.Verbosity, gopts.Term)
-		ctx, repo, unlock, err := openWithReadLock(ctx, gopts, false, printer)
+		_, repo, unlock, err := openWithReadLock(ctx, gopts, false, printer)
 		rtest.OK(t, err)
 		defer unlock()
-
-		// don't forget to load the master index!'
 		rtest.OK(t, repo.LoadIndex(ctx, printer))
 
 		for handle := range blobHandles {
 			_, found := repo.LookupBlobSize(handle)
-			rtest.Assert(t, found, "expected to find blob in index, but did not find %v", handle)
+			rtest.Assert(t, found, "expected to find blob in index, but could not find %v", handle)
 		}
-
 		return nil
 	})
-
 	rtest.OK(t, err)
-}
-
-func TestCatSnapshot(t *testing.T) {
-	env, cleanup := withTestEnvironment(t)
-	defer cleanup()
-
-	testSetupBackupData(t, env)
-	testRunBackup(t, "", []string{filepath.Join(env.testdata, "0", "0", "9")}, BackupOptions{}, env.gopts)
-	snapIDs := testListSnapshots(t, env.gopts, 1)
-
-	_, err := testRunCatMayFail(t, env.gopts, []string{"snapshot", snapIDs[0].String()})
-	rtest.OK(t, err)
-
-	_, err = testRunCatMayFail(t, env.gopts, []string{"snapshot", "caffee01"})
-	rtest.Assert(t, err != nil && strings.Contains(err.Error(), "could not find snapshot"),
-		"expected no snapshot, but got %v", err)
 }
 
 func TestCatIDs(t *testing.T) {
+	const wrongID = "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00"
 	env, cleanup := withTestEnvironment(t)
 	defer cleanup()
 
@@ -172,19 +150,19 @@ func TestCatIDs(t *testing.T) {
 	tests := []struct {
 		action  string
 		ID      string
-		wantErr string // substring of expected error, "" for no error
+		wantErr string
 	}{
 		{
 			action: "pack",
 		},
 		{
 			action:  "pack",
-			ID:      "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00",
+			ID:      wrongID,
 			wantErr: "no such file or directory",
 		},
 		{
 			action:  "pack",
-			ID:      "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbafhh",
+			ID:      "QQ76fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbafMM",
 			wantErr: "unable to parse ID",
 		},
 		{
@@ -192,7 +170,7 @@ func TestCatIDs(t *testing.T) {
 		},
 		{
 			action:  "blob",
-			ID:      "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00",
+			ID:      wrongID,
 			wantErr: "blob not found",
 		},
 		{
@@ -200,71 +178,68 @@ func TestCatIDs(t *testing.T) {
 		},
 		{
 			action:  "key",
-			ID:      "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00",
+			ID:      wrongID,
 			wantErr: "no such file or directory",
 		},
 		{
 			action: "lock",
 		},
 		{
+			action: "snapshot",
+		},
+		{
 			action:  "snapshot",
-			ID:      "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00",
+			ID:      wrongID,
 			wantErr: "could not find snapshot",
 		},
 	}
 
-	err := withTermStatus(t, env.gopts, func(ctx context.Context, gopts global.Options) error {
-		printer := progress.NewTerminalPrinter(gopts.JSON, gopts.Verbosity, gopts.Term)
-		_, repo, unlock, err := openWithReadLock(ctx, gopts, false, printer)
-		rtest.OK(t, err)
-		defer unlock()
-
-		// don't forget to load the master index!'
-		rtest.OK(t, repo.LoadIndex(ctx, printer))
-
-		gopts.BackendTestHook = nil
-		for _, tc := range tests {
-			name := fmt.Sprintf("cat-%s", tc.action)
-			if tc.ID != "" {
-				name = fmt.Sprintf("cat-%s-%s", tc.action, tc.ID)
-			}
-			t.Run(name, func(t *testing.T) {
-				IDs := testRunList(t, gopts, tc.action+"s")
-				if len(IDs) == 0 && tc.action == "lock" {
-					return
-				}
-				rtest.Assert(t, len(IDs) > 0,
-					"expected at least one ID for 'list %s', got none", tc.action)
-
-				var err error
-				expectedError := tc.wantErr
-				if expectedError == "no such file or directory" && runtime.GOOS == "windows" {
-					expectedError = "The system cannot find the file specified."
-				}
-				if tc.ID == "" {
-					_, err = testRunCatMayFail(t, gopts, []string{tc.action, IDs[0].String()})
-				} else {
-					_, err = testRunCatMayFail(t, gopts, []string{tc.action, tc.ID})
-				}
-				if expectedError == "" {
-					rtest.OK(t, err)
-				} else {
-					rtest.Assert(t, strings.Contains(err.Error(), expectedError),
-						"unexpected error: %v", err)
-				}
-			})
+	env.gopts.BackendTestHook = nil
+	for _, tc := range tests {
+		runName := fmt.Sprintf("cat-%s", tc.action)
+		if tc.ID != "" {
+			runName = fmt.Sprintf("cat-%s-%s", tc.action, tc.ID)
 		}
-		return nil
-	})
 
-	rtest.OK(t, err)
+		t.Run(runName, func(t *testing.T) {
+			IDs := testRunList(t, env.gopts, tc.action+"s")
+			if len(IDs) == 0 && tc.action == "lock" {
+				return
+			}
+			rtest.Assert(t, len(IDs) > 0, "expected at least one ID for 'list %ss', got none", tc.action)
+
+			expectedError := tc.wantErr
+			// correct error string for windows in case of 'file not found'
+			if expectedError == "no such file or directory" && runtime.GOOS == "windows" {
+				expectedError = "The system cannot find the file specified"
+			}
+
+			var err error
+			if tc.ID != "" {
+				_, err = testRunCatMayFail(t, env.gopts, []string{tc.action, tc.ID})
+			} else {
+				_, err = testRunCatMayFail(t, env.gopts, []string{tc.action, IDs[0].String()})
+			}
+
+			if expectedError == "" {
+				rtest.OK(t, err)
+			} else {
+				rtest.Assert(t, strings.Contains(err.Error(), expectedError),
+					"expected error '%v', but got: '%v'", expectedError, err)
+			}
+		})
+	}
 }
 
 func TestCatTree(t *testing.T) {
+	// I have no idea how to construct the windows version of
+	// restic cat tree <snapshot-ID>:/subfolder.
+	// The drive letter is getting in the way and filepath.ToSlash() does not fix it properly
 	if runtime.GOOS == "windows" {
 		return
 	}
 
+	const wrongID = "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00"
 	env, cleanup := withTestEnvironment(t)
 	defer cleanup()
 
@@ -275,13 +250,12 @@ func TestCatTree(t *testing.T) {
 	out, err := testRunCatMayFail(t, env.gopts, []string{"tree", fmt.Sprintf("%s:%s/0/0", snapID, env.testdata)})
 	rtest.OK(t, err)
 	rtest.Assert(t, strings.Contains(string(out), `"name":"9","type":"dir"`),
-		`expected "name":"9","type":"dir" got %v`, string(out))
+		`expected '"name":"9","type":"dir"' got %v`, string(out))
 
 	_, err = testRunCatMayFail(t, env.gopts, []string{"tree",
-		fmt.Sprintf("%s:%s/0/0", "0076fb13c7b340e8455aca6620d50592b0088858c8f18b8b4cc7fbc8abbbaf00", env.testdata)})
+		fmt.Sprintf("%s:%s/0/0", wrongID, env.testdata)})
 	rtest.Assert(t, err != nil && strings.Contains(err.Error(), "could not find snapshot"),
 		"expected 'could not find snapshot', but found %v", err)
-	//could not find snapshot
 }
 
 func TestCatBlob(t *testing.T) {
@@ -297,17 +271,18 @@ func TestCatBlob(t *testing.T) {
 		_, repo, unlock, err := openWithReadLock(ctx, gopts, false, printer)
 		rtest.OK(t, err)
 		defer unlock()
-
-		// don't forget to load the master index!'
 		rtest.OK(t, repo.LoadIndex(ctx, printer))
 
 		var dataBlob, treeBlob restic.ID
 		rtest.OK(t, repo.ListBlobs(ctx, func(pb restic.PackBlob) {
-			switch pb.Handle().Type {
+			hand := pb.Handle()
+			switch hand.Type {
 			case restic.TreeBlob:
-				treeBlob = pb.Handle().ID
+				treeBlob = hand.ID
 			case restic.DataBlob:
-				dataBlob = pb.Handle().ID
+				dataBlob = hand.ID
+			default:
+				t.Fatalf("\033[31munexpected Type %v for blob %v\033[39m\n", hand.Type, hand.ID)
 			}
 		}))
 
