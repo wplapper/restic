@@ -203,17 +203,14 @@ var timeFormats = []string{
 
 // ParseTime tries to transform given time string "str" into a time.Time,
 // according to a variety of allowed formats
-// this regular expression settles the substring timezone offset
-var tzRe = regexp.MustCompile(`\s*([+\-])([0-5][0-9]):?([0-5][0-9])`)
 var dtRe = regexp.MustCompile(`^(\d+)[/.\-](\d+)[/.z-](\d+)(?: (\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?`)
-
 
 func ParseTime(str string) (time.Time, error) {
 	// dtRe matches a date with a possible time modifier
 	// at the end a standard string is created with all 6 date / time
 	// components set. Missing elements are set to "0".
 	dateTimeIndex := dtRe.FindStringSubmatchIndex(str)
-	if len(dateTimeIndex) > 0 {
+	if len(dateTimeIndex) > 1 {
 		r := make([]string, 7)
 		for i := 1; i < 7; i++ {
 			if dateTimeIndex[2*i] >= 0 {
