@@ -199,12 +199,6 @@ var timeFormats = []string{
 	"2-1-2006 15:4:5",
 	"2-1-2006 15:4:5 -0700",
 	"2-1-2006 15:4:5 MST",
-
-	// default *nix date/time
-	"Mon Jan 2 15:4:5 -0700 MST 2006",
-	"Mon 2 Jan 15:4:5 -0700 MST 2006",
-	"2 Jan 15:4:5 -0700 MST 2006",
-	"Jan 2 15:4:5 -0700 MST 2006",
 }
 
 // ParseTime tries to transform given time string "str" into a time.Time,
@@ -213,15 +207,8 @@ var timeFormats = []string{
 var tzRe = regexp.MustCompile(`\s*([+\-])([0-5][0-9]):?([0-5][0-9])`)
 var dtRe = regexp.MustCompile(`^(\d+)[/.\-](\d+)[/.z-](\d+)(?: (\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?`)
 
-// func normalizeTZ converts a few possible timezone specifications into a
-// standard one: " -0700"
-func normalizeTZ(s string) string {
-	return tzRe.ReplaceAllString(s, " ${1}${2}${3}")
-}
 
 func ParseTime(str string) (time.Time, error) {
-	str = normalizeTZ(str)
-
 	// dtRe matches a date with a possible time modifier
 	// at the end a standard string is created with all 6 date / time
 	// components set. Missing elements are set to "0".
